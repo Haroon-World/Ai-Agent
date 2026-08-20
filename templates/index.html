@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}AI Business Agent SaaS - Phase 1 Prototype{% endblock %}
+
+{% block content %}
+<div class="hero-section">
+    <div class="hero-badge">Phase 1 Prototype Live</div>
+    <h1 class="hero-title">Autonomous AI Business Agent for Healthcare & Clinics</h1>
+    <p class="hero-subtitle">
+        Not just a chatbot. A complete business workflow agent that understands patient intent, checks real doctor availability, prevents double booking, confirms appointments in the database, schedules automated reminders, and supports live human handoffs.
+    </p>
+
+    <div class="hero-actions">
+        <a href="/chat" class="btn btn-primary btn-lg">
+            <span>💬 Launch Customer Chat</span>
+        </a>
+        <a href="/admin" class="btn btn-secondary btn-lg">
+            <span>📊 Open Admin Dashboard</span>
+        </a>
+    </div>
+</div>
+
+<div class="features-grid">
+    <div class="feature-card">
+        <div class="feature-icon">🧠</div>
+        <h3>Centralized AI Brain</h3>
+        <p>Dynamic clinic knowledge injection with provider abstraction supporting Gemini, Groq, and Mock adapters.</p>
+    </div>
+
+    <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3>Validated Tool Dispatcher</h3>
+        <p>The LLM never directly executes SQL. Every operation passes through backend business validation services.</p>
+    </div>
+
+    <div class="feature-card">
+        <div class="feature-icon">🛡️</div>
+        <h3>Double-Booking Protection</h3>
+        <p>Atomic transactions with database-level uniqueness constraints prevent race conditions and concurrent overlaps.</p>
+    </div>
+
+    <div class="feature-card">
+        <div class="feature-icon">⏰</div>
+        <h3>Automated Reminders</h3>
+        <p>Proactive reminder records automatically scheduled 24 hours prior to appointment time upon booking confirmation.</p>
+    </div>
+
+    <div class="feature-card">
+        <div class="feature-icon">👥</div>
+        <h3>Live Human Takeover</h3>
+        <p>Seamless two-way human handoff. Clinic staff can take over chats in real-time and release them back to AI.</p>
+    </div>
+
+    <div class="feature-card">
+        <div class="feature-icon">🏢</div>
+        <h3>Multi-Tenant Foundation</h3>
+        <p>All database models and business workflows enforce tenant isolation with <code>business_id</code> from the ground up.</p>
+    </div>
+</div>
+
+<div class="demo-clinic-card">
+    <div class="demo-clinic-header">
+        <h2>🏥 Active Demo Business: {{ business.name if business else "SmileCare Dental Clinic" }}</h2>
+        <span class="badge badge-success">Tenant ID: #{{ business.id if business else 1 }}</span>
+    </div>
+    <div class="demo-clinic-details">
+        <div class="detail-item"><strong>📍 Address:</strong> {{ business.address if business else "Gulberg III, Lahore" }}</div>
+        <div class="detail-item"><strong>📞 Phone:</strong> {{ business.phone if business else "+92 42 35789000" }}</div>
+        <div class="detail-item"><strong>⏰ Hours:</strong> {{ business.opening_hours if business else "Mon-Sat: 9 AM - 5 PM" }}</div>
+        <div class="detail-item"><strong>🌐 Timezone:</strong> {{ business.timezone if business else "Asia/Karachi" }}</div>
+    </div>
+</div>
+{% endblock %}

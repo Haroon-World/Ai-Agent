@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Live Conversations & Human Handoff - {{ business.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <div>
+        <h1 class="page-title">Live Conversations & Human Handoff</h1>
+        <p class="page-subtitle">Monitor customer chats in real-time, inspect AI tool logs, take over conversations, and release them back to AI.</p>
+    </div>
+</div>
+
+<div class="conversations-layout">
+    <!-- Left Column: Conversations List -->
+    <div class="conv-sidebar">
+        <div class="conv-sidebar-header">
+            <h3>Active Conversations ({{ conversations|length }})</h3>
+        </div>
+        <div class="conv-list">
+            {% for c in conversations %}
+            <div class="conv-list-item {% if c.status == 'HUMAN' %}conv-item-handoff{% endif %}" onclick="selectConversation({{ c.id }})" id="conv-tab-{{ c.id }}">
+                <div class="conv-item-top">
+                    <span class="conv-customer-name">{{ c.customer.name if c.customer else "Visitor #" ~ c.id }}</span>
+                    {% if c.status == 'HUMAN' %}
+                        <span class="badge badge-warning">👨‍💼 HUMAN</span>
+                    {% else %}
+                        <span class="badge badge-success">🤖 AI</span>
+                    {% endif %}
+                </div>
+                <div class="conv-item-meta">
+                    <span>{{ c.messages|length }} messages</span>
+                    <span>State: <code>{{ c.workflow_state }}</code></span>
+                </div>
+                {% if c.handoff_reason %}
+                    <div class="conv-item-reason">⚠️ {{ c.handoff_reason }}</div>
+                {% endif %}
+            </div>
+            {% else %}
+            <div class="empty-state">No conversations yet.</div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Right Column: Conversation Viewer -->
+    <div class="conv-main">
+        <div id="convEmptyNotice" class="conv-empty-view">
+            <p>👈 Select a conversation from the sidebar to inspect messages and manage handoffs.</p>
+        </div>
+
+        <div id="convActiveView" style="display: none;" class="conv-detail-card">
+            <!-- Header -->
+            <div class="conv-detail-header">
+                <div>
+                    <h2 id="activeConvTitle">Conversation #</h2>
+                    <div class="conv-tags">
+                        <span id="activeConvStatusBadge" class="badge"></span>
+                        <span id="activeConvStateBadge" class="tag tag-blue"></span>
+                        <span id="activeConvIntent" class="tag tag-purple"></span>
+                    </div>
+                </div>
+                <div class="conv-header-controls">
+                    <button id="btnTakeover" class="btn btn-warning btn-sm" onclick="takeoverActiveConv()">👨‍💼 Take Over Chat</button>
+                    <button id="btnRelease" class="btn btn-success btn-sm" onclick="releaseActiveConv()">🤖 Release to AI</button>
+                </div>
+            </div>
+
+            <!-- Messages Stream -->
+            <div class="conv-messages-stream" id="convMessagesStream">
+                <!-- Injected via JavaScript -->
+            </div>
+
+            <!-- Staff Reply Form -->
+            <div class="conv-reply-footer">
+                <form id="staffReplyForm" onsubmit="sendStaffReply(event)">
+                    <input type="text" id="staffReplyInput" class="chat-input" placeholder="Type response as clinic staff..." required>
+                    <button type="submit" class="btn btn-primary">Send Staff Reply</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+<script>
+    // Auto-select conversation from query param if provided
+    const urlParams = new URLSearchParams(window.location.search);
+    const cid = urlParams.get('cid');
+    if (cid) {
+        selectConversation(cid);
+    }
+</script>
+{% endblock %}

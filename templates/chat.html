@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Customer Web Chat - SmileCare Dental Clinic{% endblock %}
+
+{% block content %}
+<div class="chat-wrapper">
+    <div class="chat-card">
+        <!-- Chat Header -->
+        <div class="chat-header">
+            <div class="chat-header-info">
+                <div class="avatar">🦷</div>
+                <div>
+                    <h2 class="chat-title">{{ business.name if business else "SmileCare Dental Clinic" }}</h2>
+                    <div class="chat-status" id="chatStatusText">
+                        <span class="status-indicator online" id="statusDot"></span>
+                        <span id="agentModeLabel">AI Receptionist • Active</span>
+                    </div>
+                </div>
+            </div>
+            <div class="chat-header-actions">
+                <button class="btn btn-sm btn-outline" id="btnResetChat" title="Start New Conversation">🔄 New Chat</button>
+            </div>
+        </div>
+
+        <!-- Handoff Banner (hidden by default) -->
+        <div class="handoff-banner" id="handoffBanner" style="display: none;">
+            <span class="handoff-icon">👨‍💼</span>
+            <div class="handoff-text">
+                <strong>Human Staff Mode Active:</strong> A clinic receptionist has taken over this conversation. AI responses are currently paused.
+            </div>
+        </div>
+
+        <!-- Messages Body -->
+        <div class="chat-body" id="chatMessages">
+            <div class="chat-loading" id="chatLoading">Connecting to AI receptionist...</div>
+        </div>
+
+        <!-- Quick Prompts Chips -->
+        <div class="quick-chips" id="quickChips">
+            <button class="chip" onclick="sendQuickPrompt('Hi, I need to book a dental cleaning appointment.')">🦷 Book Dental Cleaning</button>
+            <button class="chip" onclick="sendQuickPrompt('What services do you offer and what are the prices?')">📋 Services & Prices</button>
+            <button class="chip" onclick="sendQuickPrompt('Can I check Dr. Ahmed\'s available slots for tomorrow?')">📅 Check Availability</button>
+            <button class="chip" onclick="sendQuickPrompt('I want to speak to a human receptionist.')">👨‍💼 Human Handoff</button>
+        </div>
+
+        <!-- Chat Input Footer -->
+        <div class="chat-footer">
+            <form id="chatForm" class="chat-input-form">
+                <input 
+                    type="text" 
+                    id="chatInput" 
+                    class="chat-input" 
+                    placeholder="Type your message here (e.g., 'Book a cleaning tomorrow at 10 AM')..." 
+                    autocomplete="off" 
+                    required
+                >
+                <button type="submit" class="btn btn-send" id="btnSend">
+                    <span>Send</span>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+{% endblock %}

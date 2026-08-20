@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Appointments Management - {{ business.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <div>
+        <h1 class="page-title">Appointments Directory</h1>
+        <p class="page-subtitle">Track, filter, reschedule, or cancel patient appointments.</p>
+    </div>
+    <div class="header-actions">
+        <a href="/chat" target="_blank" class="btn btn-primary">➕ Book New via AI Chat</a>
+    </div>
+</div>
+
+<div class="section-card">
+    {% if appointments %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Date & Time</th>
+                    <th>Patient Name</th>
+                    <th>Phone</th>
+                    <th>Doctor</th>
+                    <th>Service</th>
+                    <th>Price</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for appt in appointments %}
+                <tr>
+                    <td><strong>#{{ appt.id }}</strong></td>
+                    <td><strong>{{ appt.appointment_date }}</strong> at {{ appt.appointment_time }}</td>
+                    <td>{{ appt.customer.name if appt.customer else "N/A" }}</td>
+                    <td>{{ appt.customer.phone if appt.customer else "N/A" }}</td>
+                    <td>{{ appt.doctor.name if appt.doctor else "N/A" }}</td>
+                    <td>{{ appt.service.name if appt.service else "N/A" }}</td>
+                    <td>PKR {{ "{:,.0f}".format(appt.service.price) if appt.service else "0" }}</td>
+                    <td>
+                        {% if appt.status == 'CONFIRMED' %}
+                            <span class="badge badge-success">CONFIRMED</span>
+                        {% elif appt.status == 'CANCELLED' %}
+                            <span class="badge badge-danger">CANCELLED</span>
+                        {% else %}
+                            <span class="badge badge-secondary">{{ appt.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if appt.status == 'CONFIRMED' %}
+                            <button class="btn btn-sm btn-danger" onclick="cancelAppointment({{ appt.id }})">Cancel</button>
+                        {% else %}
+                            <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No appointments found in the database.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function cancelAppointment(appointmentId) {
+    if (!confirm(`Are you sure you want to cancel appointment #${appointmentId}?`)) return;
+    try {
+        const res = await fetch('/api/appointments/cancel', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ appointment_id: appointmentId, reason: 'Cancelled by Admin Staff' })
+        });
+        const data = await res.json();
+        if (data.success) {
+            alert(data.message);
+            window.location.reload();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    }
+}
+</script>
+{% endblock %}

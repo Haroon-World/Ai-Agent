@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - {{ business.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <div>
+        <h1 class="page-title">Clinic Operations Dashboard</h1>
+        <p class="page-subtitle">Real-time AI Business Agent metrics, appointments schedule, and conversation control.</p>
+    </div>
+    <div class="header-actions">
+        <a href="/admin/appointments" class="btn btn-outline">📅 Manage Appointments</a>
+        <a href="/admin/conversations" class="btn btn-outline">💬 View Live Chats</a>
+    </div>
+</div>
+
+<!-- KPI Cards Grid -->
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-icon icon-blue">📅</div>
+        <div class="kpi-content">
+            <span class="kpi-value">{{ today_count }}</span>
+            <span class="kpi-label">Today's Appointments</span>
+        </div>
+    </div>
+
+    <div class="kpi-card">
+        <div class="kpi-icon icon-purple">💬</div>
+        <div class="kpi-content">
+            <span class="kpi-value">{{ total_conversations }}</span>
+            <span class="kpi-label">Total AI Conversations</span>
+        </div>
+    </div>
+
+    <div class="kpi-card {% if human_handoff_count > 0 %}kpi-card-alert{% endif %}">
+        <div class="kpi-icon icon-orange">👨‍💼</div>
+        <div class="kpi-content">
+            <span class="kpi-value">{{ human_handoff_count }}</span>
+            <span class="kpi-label">Human Handoff Requests</span>
+        </div>
+    </div>
+
+    <div class="kpi-card">
+        <div class="kpi-icon icon-green">⏰</div>
+        <div class="kpi-content">
+            <span class="kpi-value">{{ reminder_count }}</span>
+            <span class="kpi-label">Scheduled Reminders</span>
+        </div>
+    </div>
+</div>
+
+<!-- Human Handoff Alerts -->
+{% if human_handoff_count > 0 %}
+<div class="section-card alert-section">
+    <div class="section-header">
+        <div class="alert-title-wrap">
+            <span class="pulse-dot"></span>
+            <h2>⚠️ Immediate Staff Attention Required ({{ human_handoff_count }})</h2>
+        </div>
+        <a href="/admin/conversations" class="btn btn-sm btn-primary">Open Chat Manager</a>
+    </div>
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Conv ID</th>
+                    <th>Customer</th>
+                    <th>Reason / Trigger</th>
+                    <th>Workflow State</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for conv in human_handoffs %}
+                <tr>
+                    <td><strong>#{{ conv.id }}</strong></td>
+                    <td>{{ conv.customer.name if conv.customer else "Visitor" }} ({{ conv.customer.phone if conv.customer else "No phone" }})</td>
+                    <td><span class="tag tag-orange">{{ conv.handoff_reason or "Customer requested staff" }}</span></td>
+                    <td><code>{{ conv.workflow_state }}</code></td>
+                    <td>
+                        <a href="/admin/conversations?cid={{ conv.id }}" class="btn btn-sm btn-primary">Take Over Chat</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Upcoming Appointments Section -->
+<div class="section-card">
+    <div class="section-header">
+        <h2>Upcoming Confirmed Appointments</h2>
+        <a href="/admin/appointments" class="view-all-link">View Full Calendar →</a>
+    </div>
+
+    {% if upcoming_appointments %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Date & Time</th>
+                    <th>Patient</th>
+                    <th>Doctor</th>
+                    <th>Treatment / Service</th>
+                    <th>Duration</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for appt in upcoming_appointments %}
+                <tr>
+                    <td>#{{ appt.id }}</td>
+                    <td><strong>{{ appt.appointment_date }}</strong> at {{ appt.appointment_time }}</td>
+                    <td>
+                        <strong>{{ appt.customer.name if appt.customer else "N/A" }}</strong>
+                        <div class="text-muted">{{ appt.customer.phone if appt.customer else "" }}</div>
+                    </td>
+                    <td>{{ appt.doctor.name if appt.doctor else "Doctor" }}</td>
+                    <td>{{ appt.service.name if appt.service else "Dental Treatment" }}</td>
+                    <td>{{ appt.service.duration if appt.service else 30 }} mins</td>
+                    <td>
+                        <span class="badge badge-success">{{ appt.status }}</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No upcoming appointments scheduled yet. Try booking one through the customer chat!</p>
+        <a href="/chat" class="btn btn-sm btn-primary" target="_blank">Book in Customer Chat</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

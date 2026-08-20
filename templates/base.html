@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}AI Business Agent{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="/" class="nav-brand">
+                <span class="brand-logo">🦷</span>
+                <span class="brand-name">SmileCare <strong>AI Agent</strong></span>
+            </a>
+            <div class="nav-links">
+                <a href="/" class="nav-item">Overview</a>
+                <a href="/chat" class="nav-item nav-badge-item">
+                    <span>Customer Chat</span>
+                    <span class="live-dot"></span>
+                </a>
+                <a href="/admin" class="nav-item">Admin Dashboard</a>
+                {% if session.get('admin_logged_in') %}
+                    <a href="/admin/appointments" class="nav-item">Appointments</a>
+                    <a href="/admin/conversations" class="nav-item">Conversations</a>
+                    <a href="/admin/reminders" class="nav-item">Reminders</a>
+                    <a href="/admin/logout" class="nav-item nav-btn-logout">Logout</a>
+                {% else %}
+                    <a href="/admin/login" class="nav-item nav-btn">Admin Login</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-container">
+                    {% for category, message in messages %}
+                        <div class="flash-alert flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer">
+        <div class="footer-container">
+            <p>© 2026 SmileCare Dental Clinic • Powered by <strong>AI Business Agent Platform (Phase 1)</strong></p>
+            <p class="footer-sub">Multi-tenant Architecture • Centralized Agent Core • Controlled Tool Dispatcher</p>
+        </div>
+    </footer>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

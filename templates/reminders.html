@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Automated Reminders Queue - {{ business.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <div>
+        <h1 class="page-title">Proactive Reminders & Automation Log</h1>
+        <p class="page-subtitle">Scheduled automated customer reminders for upcoming appointments (Phase 1 prototype log).</p>
+    </div>
+</div>
+
+<div class="section-card">
+    <div class="section-header">
+        <h2>Scheduled Automation Queue ({{ reminders|length }})</h2>
+        <span class="badge badge-primary">Timezone: {{ business.timezone }}</span>
+    </div>
+
+    {% if reminders %}
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Appt ID</th>
+                    <th>Patient Name</th>
+                    <th>Phone</th>
+                    <th>Appointment Slot</th>
+                    <th>Scheduled For</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in reminders %}
+                <tr>
+                    <td><strong>#{{ r.id }}</strong></td>
+                    <td>#{{ r.appointment_id }}</td>
+                    <td>{{ r.appointment.customer.name if r.appointment and r.appointment.customer else "N/A" }}</td>
+                    <td>{{ r.appointment.customer.phone if r.appointment and r.appointment.customer else "N/A" }}</td>
+                    <td>
+                        {{ r.appointment.appointment_date if r.appointment else "" }} at {{ r.appointment.appointment_time if r.appointment else "" }}
+                    </td>
+                    <td><strong>{{ r.scheduled_for.strftime('%Y-%m-%d %I:%M %p') }}</strong></td>
+                    <td><span class="tag tag-blue">{{ r.reminder_type }}</span></td>
+                    <td>
+                        {% if r.status == 'SCHEDULED' %}
+                            <span class="badge badge-warning">⏰ SCHEDULED</span>
+                        {% elif r.status == 'SENT' %}
+                            <span class="badge badge-success">✅ SENT</span>
+                        {% elif r.status == 'CANCELLED' %}
+                            <span class="badge badge-danger">CANCELLED</span>
+                        {% else %}
+                            <span class="badge badge-secondary">{{ r.status }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No reminders currently scheduled. Reminders are created automatically whenever an appointment is confirmed.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
