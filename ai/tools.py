@@ -1,0 +1,215 @@
+import json
+from typing import Dict, Any, List, Callable
+from services.booking_service import BookingService
+from services.handoff_service import HandoffService
+
+# Canonical Tool Schemas
+CANONICAL_TOOLS = [
+    {
+        "name": "get_clinic_info",
+        "description": "Get general information about the dental clinic including address, phone number, operating hours, and policies.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "get_services",
+        "description": "Get the complete list of available dental treatments, descriptions, durations, and pricing.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "check_availability",
+        "description": "Check real-time available appointment slots for a specific date and optional doctor or service.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "date": {
+                    "type": "string",
+                    "description": "Date in YYYY-MM-DD format for checking availability"
+                },
+                "doctor_id": {
+                    "type": "integer",
+                    "description": "Optional ID of the preferred doctor"
+                },
+                "service_id": {
+                    "type": "integer",
+                    "description": "Optional ID of the dental service"
+                }
+            },
+            "required": ["date"]
+        }
+    },
+    {
+        "name": "book_appointment",
+        "description": "Book a confirmed dental appointment after validating slot availability and collecting patient details.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "customer_name": {
+                    "type": "string",
+                    "description": "Full name of the patient/customer"
+                },
+                "customer_phone": {
+                    "type": "string",
+                    "description": "Contact phone number of the patient"
+                },
+                "doctor_id": {
+                    "type": "integer",
+                    "description": "ID of the doctor"
+                },
+                "service_id": {
+                    "type": "integer",
+                    "description": "ID of the dental service"
+                },
+                "appointment_date": {
+                    "type": "string",
+                    "description": "Appointment date in YYYY-MM-DD format"
+                },
+                "appointment_time": {
+                    "type": "string",
+                    "description": "Appointment time slot in HH:MM format (e.g. 10:00, 14:30)"
+                },
+                "notes": {
+                    "type": "string",
+                    "description": "Optional additional patient notes or concerns"
+                }
+            },
+            "required": ["customer_name", "customer_phone", "doctor_id", "service_id", "appointment_date", "appointment_time"]
+        }
+    },
+    {
+        "name": "cancel_appointment",
+        "description": "Cancel an existing booked appointment.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "appointment_id": {
+                    "type": "integer",
+                    "description": "ID of the appointment to cancel"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional reason for cancellation"
+                }
+            },
+            "required": ["appointment_id"]
+        }
+    },
+    {
+        "name": "reschedule_appointment",
+        "description": "Reschedule an existing appointment to a new date and time slot.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "appointment_id": {
+                    "type": "integer",
+                    "description": "ID of the existing appointment"
+                },
+                "new_date": {
+                    "type": "string",
+                    "description": "New appointment date in YYYY-MM-DD format"
+                },
+                "new_time": {
+                    "type": "string",
+                    "description": "New appointment time in HH:MM format"
+                }
+            },
+            "required": ["appointment_id", "new_date", "new_time"]
+        }
+    },
+    {
+        "name": "human_handoff",
+        "description": "Transfer the conversation to a human clinic receptionist when requested by the customer or when encountering unknown/unsupported queries or medical advice.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Detailed reason for transferring to human staff"
+                }
+            },
+            "required": ["reason"]
+        }
+    }
+]
+
+class ToolDispatcher:
+    def __init__(self, business_id: int, conversation_id: int):
+        self.business_id = business_id
+        self.conversation_id = conversation_id
+
+    def execute(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Dispatch tool call to corresponding backend business service."""
+        try:
+            if tool_name == "get_clinic_info":
+                return BookingService.get_clinic_info(self.business_id)
+
+            elif tool_name == "get_services":
+                return {"services": BookingService.get_services(self.business_id)}
+
+            elif tool_name == "check_availability":
+                date_str = arguments.get("date")
+                doctor_id = arguments.get("doctor_id")
+                service_id = arguments.get("service_id")
+                if doctor_id:
+                    try:
+                        doctor_id = int(doctor_id)
+                    except (ValueError, TypeError):
+                        doctor_id = None
+                if service_id:
+                    try:
+                        service_id = int(service_id)
+                    except (ValueError, TypeError):
+                        service_id = None
+                return BookingService.check_availability(
+                    business_id=self.business_id,
+                    doctor_id=doctor_id,
+                    service_id=service_id,
+                    date_str=date_str
+                )
+
+            elif tool_name == "book_appointment":
+                return BookingService.book_appointment(
+                    business_id=self.business_id,
+                    customer_name=arguments.get("customer_name", ""),
+                    customer_phone=arguments.get("customer_phone", ""),
+                    doctor_id=int(arguments.get("doctor_id")),
+                    service_id=int(arguments.get("service_id")),
+                    appointment_date=arguments.get("appointment_date", ""),
+                    appointment_time=arguments.get("appointment_time", ""),
+                    notes=arguments.get("notes"),
+                    idempotency_key=arguments.get("idempotency_key")
+                )
+
+            elif tool_name == "cancel_appointment":
+                return BookingService.cancel_appointment(
+                    business_id=self.business_id,
+                    appointment_id=int(arguments.get("appointment_id")),
+                    reason=arguments.get("reason")
+                )
+
+            elif tool_name == "reschedule_appointment":
+                return BookingService.reschedule_appointment(
+                    business_id=self.business_id,
+                    appointment_id=int(arguments.get("appointment_id")),
+                    new_date=arguments.get("new_date", ""),
+                    new_time=arguments.get("new_time", "")
+                )
+
+            elif tool_name == "human_handoff":
+                return HandoffService.trigger_handoff(
+                    conversation_id=self.conversation_id,
+                    reason=arguments.get("reason", "Customer requested human assistance")
+                )
+
+            else:
+                return {"error": f"Unknown tool: {tool_name}"}
+
+        except Exception as e:
+            return {"error": f"Failed executing tool '{tool_name}': {str(e)}"}
