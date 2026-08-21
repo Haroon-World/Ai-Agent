@@ -78,12 +78,21 @@ class TestEndToEndSuite(unittest.TestCase):
             appointment_time=chosen_slot
         )
         self.assertFalse(res2["success"])
-        self.assertIn("booked", res2["error"].lower())
+        error_lower = res2["error"].lower()
+        self.assertTrue(
+            "overlap" in error_lower or "booked" in error_lower or "already" in error_lower,
+            f"Expected overlap/conflict error message, got: {res2['error']}"
+        )
 
     def test_idempotency_duplicate_protection(self):
         """Test that identical idempotency_key returns existing appointment."""
         biz_id = Config.DEFAULT_BUSINESS_ID
-        target_date = (date.today() + timedelta(days=2)).strftime("%Y-%m-%d")
+        # Use next Monday — Dr. Ahmed works Mon-Sat, Sunday is the only day off
+        today = date.today()
+        days_ahead = (0 - today.weekday()) % 7  # Monday = 0
+        if days_ahead == 0:
+            days_ahead = 7
+        target_date = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
         key = "req-unique-id-998877"
         res1 = BookingService.book_appointment(

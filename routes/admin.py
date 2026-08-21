@@ -109,24 +109,35 @@ def takeover_conversation():
     data = request.get_json() or {}
     conversation_id = data.get("conversation_id")
     reason = data.get("reason", "Admin manually took over the conversation")
+    business_id = Config.DEFAULT_BUSINESS_ID
 
     if not conversation_id:
         return jsonify({"success": False, "error": "conversation_id is required"}), 400
 
-    result = HandoffService.trigger_handoff(conversation_id=int(conversation_id), reason=reason)
-    return jsonify(result)
+    result = HandoffService.trigger_handoff(
+        conversation_id=int(conversation_id),
+        reason=reason,
+        business_id=business_id
+    )
+    status_code = 403 if result.get("code") == 403 else 200
+    return jsonify(result), status_code
 
 @admin_bp.route("/api/admin/release", methods=["POST"])
 @login_required
 def release_to_ai():
     data = request.get_json() or {}
     conversation_id = data.get("conversation_id")
+    business_id = Config.DEFAULT_BUSINESS_ID
 
     if not conversation_id:
         return jsonify({"success": False, "error": "conversation_id is required"}), 400
 
-    result = HandoffService.release_to_ai(conversation_id=int(conversation_id))
-    return jsonify(result)
+    result = HandoffService.release_to_ai(
+        conversation_id=int(conversation_id),
+        business_id=business_id
+    )
+    status_code = 403 if result.get("code") == 403 else 200
+    return jsonify(result), status_code
 
 @admin_bp.route("/api/admin/reply", methods=["POST"])
 @login_required
@@ -134,9 +145,15 @@ def staff_reply():
     data = request.get_json() or {}
     conversation_id = data.get("conversation_id")
     message = data.get("message", "").strip()
+    business_id = Config.DEFAULT_BUSINESS_ID
 
     if not conversation_id or not message:
         return jsonify({"success": False, "error": "conversation_id and message are required"}), 400
 
-    result = HandoffService.admin_reply(conversation_id=int(conversation_id), message_content=message)
-    return jsonify(result)
+    result = HandoffService.admin_reply(
+        conversation_id=int(conversation_id),
+        message_content=message,
+        business_id=business_id
+    )
+    status_code = 403 if result.get("code") == 403 else 200
+    return jsonify(result), status_code

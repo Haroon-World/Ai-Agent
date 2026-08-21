@@ -334,17 +334,42 @@ class GroqAdapter(BaseLLMAdapter):
             client = Groq(api_key=self.api_key)
 
             formatted_messages = [{"role": "system", "content": system_prompt}]
-            for m in messages:
-                if m["role"] == "tool":
+            for i, m in enumerate(messages):
+                role = m.get("role")
+                if role == "assistant" and m.get("tool_calls"):
+                    # Replay the assistant turn that requested tool calls — required by
+                    # OpenAI/Groq protocol so subsequent tool messages are correctly associated.
+                    groq_tool_calls = []
+                    for tc in m["tool_calls"]:
+                        groq_tool_calls.append({
+                            "id": tc.get("id", f"call_{i}"),
+                            "type": "function",
+                            "function": {
+                                "name": tc.get("name", ""),
+                                "arguments": json.dumps(tc.get("arguments", {}))
+                            }
+                        })
+                    formatted_messages.append({
+                        "role": "assistant",
+                        "content": m.get("content") or "",
+                        "tool_calls": groq_tool_calls
+                    })
+                elif role == "tool":
+                    # Echo the real tool_call_id from history — never hardcode "call_1"
+                    tool_call_id = m.get("tool_call_id") or f"call_{i}"
                     formatted_messages.append({
                         "role": "tool",
-                        "content": json.dumps(m["content"]) if isinstance(m["content"], dict) else str(m["content"]),
-                        "tool_call_id": m.get("tool_call_id", "call_1")
+                        "content": (
+                            json.dumps(m["content"])
+                            if isinstance(m["content"], dict)
+                            else str(m["content"])
+                        ),
+                        "tool_call_id": tool_call_id
                     })
                 else:
                     formatted_messages.append({
-                        "role": m["role"],
-                        "content": m["content"]
+                        "role": role,
+                        "content": m.get("content", "")
                     })
 
             groq_tools = self._translate_tools_to_groq(tools)
@@ -366,7 +391,7 @@ class GroqAdapter(BaseLLMAdapter):
                     except Exception:
                         pass
                     tool_calls.append({
-                        "id": tc.id,
+                        "id": tc.id,         # preserve real Groq-assigned ID
                         "name": tc.function.name,
                         "arguments": args
                     })
@@ -379,6 +404,8 @@ class GroqAdapter(BaseLLMAdapter):
             print(f"[GroqAdapter Error]: {e}")
             mock = MockAdapter()
             return mock.chat_completion(system_prompt, messages, tools)
+
+
 
 
 class LLMClient:

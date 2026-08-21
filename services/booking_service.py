@@ -1,8 +1,23 @@
 from datetime import datetime, timedelta, time
+from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional, Tuple, Any
 from sqlalchemy.exc import IntegrityError
 from models import db, Business, Doctor, Service, Customer, Appointment
 from services.reminder_service import ReminderService
+
+# Fallback timezone used only when no business record is found
+_DEFAULT_TZ = "Asia/Karachi"
+
+
+def _get_business_tz(business_id: int) -> ZoneInfo:
+    """Return the ZoneInfo for the given business, falling back to Asia/Karachi."""
+    try:
+        biz = db.session.get(Business, business_id)
+        tz_name = (biz.timezone if biz and biz.timezone else _DEFAULT_TZ)
+    except Exception:
+        tz_name = _DEFAULT_TZ
+    return ZoneInfo(tz_name)
+
 
 class BookingService:
     @staticmethod
@@ -26,9 +41,16 @@ class BookingService:
         return [d.to_dict() for d in doctors]
 
     @staticmethod
-    def check_availability(business_id: int, doctor_id: Optional[int] = None, service_id: Optional[int] = None, date_str: Optional[str] = None) -> Dict[str, Any]:
+    def check_availability(
+        business_id: int,
+        doctor_id: Optional[int] = None,
+        service_id: Optional[int] = None,
+        date_str: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Calculate available time slots for a given doctor (or all doctors) on a specific date.
+        Past-date check uses the clinic's configured timezone so that server-UTC and
+        clinic-local date disagreements are correctly handled.
         Format of date_str: 'YYYY-MM-DD'
         """
         if not date_str:
@@ -39,8 +61,9 @@ class BookingService:
         except ValueError:
             return {"error": "Invalid date format. Please use YYYY-MM-DD"}
 
-        # Validate date is not in the past
-        today = datetime.now().date()
+        # Validate date is not in the past — compare against clinic's local date, not server UTC
+        tz = _get_business_tz(business_id)
+        today = datetime.now(tz).date()
         if target_date < today:
             return {"error": f"The date {date_str} is in the past. Please select a future date."}
 
@@ -84,24 +107,38 @@ class BookingService:
             except Exception:
                 start_h, start_m, end_h, end_m = 9, 0, 17, 0
 
-            # Get booked appointments for this doctor on target_date
+            # Get all confirmed appointments for this doctor on target_date (with service info)
             booked_appts = Appointment.query.filter_by(
                 business_id=business_id,
                 doctor_id=doc.id,
                 appointment_date=date_str,
                 status="CONFIRMED"
             ).all()
-            booked_times = {a.appointment_time for a in booked_appts}
 
-            # Generate slots (using 30-minute intervals)
+            # Build blocked-time ranges: list of (start_min, end_min) for each booked appt
+            blocked_ranges: List[Tuple[int, int]] = []
+            for a in booked_appts:
+                try:
+                    ah, am = map(int, a.appointment_time.split(":"))
+                    a_start = ah * 60 + am
+                    svc_dur = a.service.duration if a.service else 30
+                    blocked_ranges.append((a_start, a_start + svc_dur))
+                except Exception:
+                    pass
+
+            # Generate slots using requested service duration as step — skip any slot that overlaps a blocked range
             slots = []
             curr = datetime.combine(target_date, time(start_h, start_m))
             end_time_dt = datetime.combine(target_date, time(end_h, end_m))
 
             while curr + timedelta(minutes=duration) <= end_time_dt:
-                slot_time_str = curr.strftime("%H:%M")
-                if slot_time_str not in booked_times:
-                    slots.append(slot_time_str)
+                slot_str = curr.strftime("%H:%M")
+                s_min = curr.hour * 60 + curr.minute
+                e_min = s_min + duration
+                # Check overlap with every blocked range
+                overlaps = any(s_min < blk_end and e_min > blk_start for blk_start, blk_end in blocked_ranges)
+                if not overlaps:
+                    slots.append(slot_str)
                 curr += timedelta(minutes=30)
 
             results.append({
@@ -133,10 +170,15 @@ class BookingService:
         idempotency_key: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Atomic appointment booking transaction with customer deduplication,
-        double-booking conflict checks, database constraints, and automatic reminder scheduling.
+        Atomic appointment booking transaction with:
+        - Customer deduplication
+        - Idempotency check
+        - Schedule revalidation (working day + working hours)
+        - Duration-aware overlap conflict detection
+        - DB-level unique constraint as final safety net
+        - Automatic reminder scheduling
         """
-        # Validate inputs
+        # --- Basic input validation ---
         if not customer_name or not customer_name.strip():
             return {"success": False, "error": "Customer name is required."}
         if not customer_phone or not customer_phone.strip():
@@ -144,7 +186,7 @@ class BookingService:
         if not doctor_id or not service_id or not appointment_date or not appointment_time:
             return {"success": False, "error": "Doctor, service, date, and time are required."}
 
-        # Check idempotency
+        # --- Idempotency guard ---
         if idempotency_key:
             existing = Appointment.query.filter_by(idempotency_key=idempotency_key).first()
             if existing:
@@ -155,19 +197,81 @@ class BookingService:
                     "message": "Appointment already processed successfully."
                 }
 
-        # Validate Doctor
+        # --- Validate Doctor ---
         doctor = Doctor.query.filter_by(id=doctor_id, business_id=business_id).first()
         if not doctor:
             return {"success": False, "error": f"Doctor with ID {doctor_id} not found."}
 
-        # Validate Service
+        # --- Validate Service ---
         service = Service.query.filter_by(id=service_id, business_id=business_id).first()
         if not service:
             return {"success": False, "error": f"Service with ID {service_id} not found."}
 
+        # --- Schedule revalidation: working day ---
         try:
-            # Check if customer exists or create new
-            customer = Customer.query.filter_by(business_id=business_id, phone=customer_phone.strip()).first()
+            day_name = datetime.strptime(appointment_date, "%Y-%m-%d").strftime("%A")
+        except ValueError:
+            return {"success": False, "error": "Invalid appointment_date format. Use YYYY-MM-DD."}
+
+        working_days = [d.strip() for d in (doctor.working_days or "").split(",")]
+        if day_name not in working_days:
+            return {
+                "success": False,
+                "error": f"Dr. {doctor.name} does not work on {day_name}s. "
+                         f"Available days: {', '.join(working_days)}."
+            }
+
+        # --- Schedule revalidation: working hours ---
+        try:
+            req_time = datetime.strptime(appointment_time, "%H:%M").time()
+            start_time = datetime.strptime(doctor.start_time, "%H:%M").time()
+            end_time = datetime.strptime(doctor.end_time, "%H:%M").time()
+        except (ValueError, TypeError):
+            return {"success": False, "error": "Invalid time format. Use HH:MM."}
+
+        if not (start_time <= req_time < end_time):
+            return {
+                "success": False,
+                "error": (
+                    f"Requested time {appointment_time} is outside Dr. {doctor.name}'s "
+                    f"working hours ({doctor.start_time}–{doctor.end_time})."
+                )
+            }
+
+        # --- Duration-aware overlap conflict check ---
+        req_start_m = req_time.hour * 60 + req_time.minute
+        req_end_m = req_start_m + service.duration
+
+        booked_appts = Appointment.query.filter_by(
+            business_id=business_id,
+            doctor_id=doctor_id,
+            appointment_date=appointment_date,
+            status="CONFIRMED"
+        ).all()
+
+        for existing_appt in booked_appts:
+            try:
+                ex_h, ex_m = map(int, existing_appt.appointment_time.split(":"))
+                ex_start_m = ex_h * 60 + ex_m
+                ex_svc_dur = existing_appt.service.duration if existing_appt.service else 30
+                ex_end_m = ex_start_m + ex_svc_dur
+                if req_start_m < ex_end_m and req_end_m > ex_start_m:
+                    return {
+                        "success": False,
+                        "error": (
+                            f"The requested slot at {appointment_time} overlaps an existing "
+                            f"{ex_svc_dur}-minute appointment at {existing_appt.appointment_time}. "
+                            "Please choose a different time."
+                        )
+                    }
+            except Exception:
+                pass
+
+        try:
+            # --- Customer deduplication ---
+            customer = Customer.query.filter_by(
+                business_id=business_id, phone=customer_phone.strip()
+            ).first()
             if not customer:
                 customer = Customer(
                     business_id=business_id,
@@ -177,27 +281,12 @@ class BookingService:
                 db.session.add(customer)
                 db.session.flush()
             else:
-                # Update name if provided and not empty
+                # Update name if it has changed
                 if customer_name.strip() and customer.name != customer_name.strip():
                     customer.name = customer_name.strip()
                     db.session.flush()
 
-            # Pre-check slot availability in current transaction
-            conflict = Appointment.query.filter_by(
-                business_id=business_id,
-                doctor_id=doctor_id,
-                appointment_date=appointment_date,
-                appointment_time=appointment_time,
-                status="CONFIRMED"
-            ).first()
-
-            if conflict:
-                return {
-                    "success": False,
-                    "error": f"The slot at {appointment_time} on {appointment_date} with {doctor.name} was just booked. Please select another time."
-                }
-
-            # Create appointment
+            # --- Create appointment ---
             appointment = Appointment(
                 business_id=business_id,
                 customer_id=customer.id,
@@ -212,7 +301,7 @@ class BookingService:
             db.session.add(appointment)
             db.session.flush()
 
-            # Schedule automated reminder
+            # --- Schedule automated reminder ---
             ReminderService.schedule_for_appointment(appointment)
 
             db.session.commit()
@@ -221,14 +310,20 @@ class BookingService:
                 "success": True,
                 "appointment_id": appointment.id,
                 "appointment": appointment.to_dict(),
-                "message": f"Appointment successfully confirmed for {customer.name} on {appointment_date} at {appointment_time} with {doctor.name}."
+                "message": (
+                    f"Appointment successfully confirmed for {customer.name} on "
+                    f"{appointment_date} at {appointment_time} with {doctor.name}."
+                )
             }
 
         except IntegrityError:
             db.session.rollback()
             return {
                 "success": False,
-                "error": f"The slot at {appointment_time} on {appointment_date} with {doctor.name} is already booked. Please choose a different slot."
+                "error": (
+                    f"The slot at {appointment_time} on {appointment_date} with {doctor.name} "
+                    "is already booked. Please choose a different slot."
+                )
             }
         except Exception as e:
             db.session.rollback()
@@ -238,7 +333,11 @@ class BookingService:
             }
 
     @staticmethod
-    def cancel_appointment(business_id: int, appointment_id: int, reason: Optional[str] = None) -> Dict[str, Any]:
+    def cancel_appointment(
+        business_id: int,
+        appointment_id: int,
+        reason: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Cancel an existing appointment and update its reminders."""
         appt = Appointment.query.filter_by(id=appointment_id, business_id=business_id).first()
         if not appt:
@@ -258,7 +357,10 @@ class BookingService:
         return {
             "success": True,
             "appointment_id": appt.id,
-            "message": f"Appointment #{appt.id} for {appt.customer.name} on {appt.appointment_date} at {appt.appointment_time} has been cancelled."
+            "message": (
+                f"Appointment #{appt.id} for {appt.customer.name} on "
+                f"{appt.appointment_date} at {appt.appointment_time} has been cancelled."
+            )
         }
 
     @staticmethod
@@ -273,20 +375,40 @@ class BookingService:
         if not appt:
             return {"success": False, "error": f"Appointment #{appointment_id} not found."}
 
-        # Check if new slot is available
-        conflict = Appointment.query.filter_by(
+        # Duration-aware overlap check for the new slot (excluding the appointment being rescheduled)
+        service = appt.service
+        duration = service.duration if service else 30
+        try:
+            new_h, new_m = map(int, new_time.split(":"))
+        except (ValueError, TypeError):
+            return {"success": False, "error": "Invalid new_time format. Use HH:MM."}
+
+        new_start_m = new_h * 60 + new_m
+        new_end_m = new_start_m + duration
+
+        conflicts = Appointment.query.filter_by(
             business_id=business_id,
             doctor_id=appt.doctor_id,
             appointment_date=new_date,
-            appointment_time=new_time,
             status="CONFIRMED"
-        ).filter(Appointment.id != appointment_id).first()
+        ).filter(Appointment.id != appointment_id).all()
 
-        if conflict:
-            return {
-                "success": False,
-                "error": f"The slot at {new_time} on {new_date} is already occupied. Please select another slot."
-            }
+        for c in conflicts:
+            try:
+                ch, cm = map(int, c.appointment_time.split(":"))
+                c_start_m = ch * 60 + cm
+                c_dur = c.service.duration if c.service else 30
+                c_end_m = c_start_m + c_dur
+                if new_start_m < c_end_m and new_end_m > c_start_m:
+                    return {
+                        "success": False,
+                        "error": (
+                            f"The slot at {new_time} on {new_date} overlaps an existing appointment. "
+                            "Please select another slot."
+                        )
+                    }
+            except Exception:
+                pass
 
         try:
             appt.appointment_date = new_date
@@ -302,7 +424,10 @@ class BookingService:
                 "success": True,
                 "appointment_id": appt.id,
                 "appointment": appt.to_dict(),
-                "message": f"Appointment #{appt.id} successfully rescheduled to {new_date} at {new_time} with {appt.doctor.name}."
+                "message": (
+                    f"Appointment #{appt.id} successfully rescheduled to "
+                    f"{new_date} at {new_time} with {appt.doctor.name}."
+                )
             }
         except IntegrityError:
             db.session.rollback()
