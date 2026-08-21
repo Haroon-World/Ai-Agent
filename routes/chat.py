@@ -41,7 +41,7 @@ def get_or_create_conversation(
         conversation_id=conv.id,
         role="assistant",
         content=(
-            "Hello! 👋 Welcome to SmileCare Dental Clinic. "
+            "Hello! Welcome to SmileCare Dental Clinic. "
             "I am your AI receptionist. How can I help you today? "
             "You can ask about our dental services, doctor schedules, "
             "or book/reschedule an appointment."

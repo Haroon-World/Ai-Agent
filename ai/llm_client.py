@@ -84,6 +84,13 @@ class MockAdapter(BaseLLMAdapter):
                     "tool_calls": []
                 }
 
+            elif "doctors" in tool_data:
+                doc_list = [f"• **{d['name']}** - {d.get('specialization', 'Dentist')} (Working Days: {d.get('working_days', 'Mon-Sat')}, Hours: {d.get('start_time', '09:00')} - {d.get('end_time', '17:00')})" for d in tool_data.get("doctors", [])]
+                return {
+                    "content": "Here are our practicing dentists at SmileCare:\n\n" + "\n\n".join(doc_list) + "\n\nWould you like to check available appointment slots with any doctor?",
+                    "tool_calls": []
+                }
+
             elif "services" in tool_data:
                 svc_list = [f"• **{s['name']}** ({s['duration']} mins) - PKR {s['price']:,.0f}: {s['description']}" for s in tool_data.get("services", [])]
                 return {
@@ -118,14 +125,21 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": [{"name": "human_handoff", "arguments": {"reason": f"Out-of-scope / medical query: {user_text}"}}]
             }
 
-        # 2. Services inquiry
+        # 2. Doctors inquiry
+        if any(w in user_text for w in ["which doctor", "who is the doctor", "who are the doctors", "list doctor", "available doctor", "dentist name", "doctors at"]):
+            return {
+                "content": "Let me retrieve our list of doctors for you.",
+                "tool_calls": [{"name": "get_doctors", "arguments": {}}]
+            }
+
+        # 3. Services inquiry
         if any(w in user_text for w in ["service", "price", "cost", "treatment", "charges", "what do you offer"]):
             return {
                 "content": "Let me fetch our dental services and pricing for you.",
                 "tool_calls": [{"name": "get_services", "arguments": {}}]
             }
 
-        # 3. Clinic Info inquiry
+        # 4. Clinic Info inquiry
         if any(w in user_text for w in ["address", "location", "timing", "hours", "where are you", "contact", "phone number"]):
             return {
                 "content": "Checking clinic details...",
