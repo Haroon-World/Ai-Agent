@@ -6,26 +6,46 @@ from config.config import Config
 from ai.tools import CANONICAL_TOOLS
 
 
+def _is_question_query(text: str) -> bool:
+    """Check if the text is phrased as a question/inquiry rather than a direct statement or slot selection."""
+    if not text:
+        return False
+    if "?" in text:
+        return True
+    lower = text.lower().strip()
+    question_prefixes = [
+        "is there", "are there", "any other", "what about", "do you have",
+        "can i", "could i", "when", "which", "how about", "available after",
+        "slots after", "available before", "slots before", "what time",
+        "is anything", "are any", "what are", "who is", "show me", "tell me"
+    ]
+    return any(qp in lower for qp in question_prefixes)
+
+
 def _extract_time_str(text: str) -> Optional[str]:
-    """Extract standard HH:MM time string from user text."""
+    """Extract standard HH:MM time string from user text supporting both ':' and '.' as separators."""
     if not text:
         return None
-    # Match standard HH:MM (e.g. 9:30, 09:30, 14:00)
-    m = re.search(r'\b(\d{1,2}):(\d{2})\b', text)
+    # Match standard HH:MM or HH.MM with optional am/pm (e.g. 9:30, 09:30, 12.00, 12.00pm, 14:00)
+    m = re.search(r'\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b', text, re.IGNORECASE)
     if m:
         h, mn = int(m.group(1)), int(m.group(2))
-        return f"{h:02d}:{mn:02d}"
-    # Match spoken forms like 10 am, 2 pm, 9:30 am
-    m = re.search(r'\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b', text, re.IGNORECASE)
-    if m:
-        h = int(m.group(1))
-        mn = int(m.group(2)) if m.group(2) else 0
-        ampm = m.group(3).lower()
+        ampm = m.group(3).lower() if m.group(3) else None
         if ampm == "pm" and h < 12:
             h += 12
         elif ampm == "am" and h == 12:
             h = 0
         return f"{h:02d}:{mn:02d}"
+    # Match H am / H pm (e.g. 10 am, 2 pm, 12 pm)
+    m = re.search(r'\b(\d{1,2})\s*(am|pm)\b', text, re.IGNORECASE)
+    if m:
+        h = int(m.group(1))
+        ampm = m.group(2).lower()
+        if ampm == "pm" and h < 12:
+            h += 12
+        elif ampm == "am" and h == 12:
+            h = 0
+        return f"{h:02d}:00"
     return None
 
 
@@ -42,7 +62,6 @@ def _extract_name(text: str) -> str:
         if clean and clean.lower() not in ["hi", "hello", "my", "name", "is", "please", "book", "at", "on", "for", "pm", "am", "phone", "slot", "the", "take", "ill", "i", "will"]:
             return clean.capitalize()
     return "Patient"
-
 
 
 class BaseLLMAdapter:
@@ -166,11 +185,14 @@ class MockAdapter(BaseLLMAdapter):
         doc_name = conv_state.get("selected_doctor_name") or ("Dr. Ahmed Khan" if doc_id == 1 else "Dr. Sara Malik")
         svc_id = conv_state.get("selected_service_id") or 2
         svc_name = conv_state.get("selected_service_name") or "Dental Cleaning & Scaling"
+        last_offered_slots = conv_state.get("last_offered_slots", {})
+        all_offered_slots = conv_state.get("all_offered_slots", [])
 
         # Token extractions
         time_token = _extract_time_str(user_text)
         phone_match = re.search(r'(\+?\d[\d\s\-]{8,14}\d)', user_text)
         date_match = re.search(r'(\d{4}-\d{2}-\d{2})', user_text)
+        is_question = _is_question_query(user_text)
 
         from datetime import date, timedelta
         if date_match:
@@ -236,19 +258,75 @@ class MockAdapter(BaseLLMAdapter):
             }
 
         # 4. State-Aware Slot/Time Selection & Booking
-        # Case A: User provides a bare time token while in booking/availability context without a phone number yet
-        if time_token and not phone_match:
-            effective_date = req_date or target_date_str
+        effective_date = req_date or target_date_str
+        doc_slots = last_offered_slots.get(str(doc_id)) or all_offered_slots
+
+        # Case A: User is asking an availability question (e.g. "is there any other slots after 12:00pm", "what about 2pm?")
+        if is_question and (time_token or any(w in user_text for w in ["slot", "other", "after", "before", "time", "available", "availability", "when"])):
+            if time_token and "after" in user_text and doc_slots:
+                matching_slots = [s for s in doc_slots if s > time_token]
+                if matching_slots:
+                    slots_preview = ", ".join(matching_slots[:4])
+                    return {
+                        "content": f"Yes, for {doc_name} on {effective_date}, the available slots after {time_token} are: {slots_preview}. Please let me know which time works best for you, along with your full name and phone number to confirm!",
+                        "tool_calls": []
+                    }
+                else:
+                    return {
+                        "content": f"I checked our schedule for {effective_date}, but there are no available slots for {doc_name} after {time_token}. The available slots on that day are: {', '.join(doc_slots[:4])}. Would you like one of these or another date?",
+                        "tool_calls": []
+                    }
+            elif time_token and "before" in user_text and doc_slots:
+                matching_slots = [s for s in doc_slots if s < time_token]
+                if matching_slots:
+                    slots_preview = ", ".join(matching_slots[:4])
+                    return {
+                        "content": f"Yes, for {doc_name} on {effective_date}, the available slots before {time_token} are: {slots_preview}. Please let me know which time works best for you, along with your full name and phone number to confirm!",
+                        "tool_calls": []
+                    }
+                else:
+                    return {
+                        "content": f"I checked our schedule for {effective_date}, but there are no available slots for {doc_name} before {time_token}. The available slots on that day are: {', '.join(doc_slots[:4])}. Would you like one of these or another date?",
+                        "tool_calls": []
+                    }
+            elif doc_slots and any(w in user_text for w in ["any other", "other slot", "what other", "all slot"]):
+                slots_preview = ", ".join(doc_slots[:6])
+                return {
+                    "content": f"The available slots for {doc_name} on {effective_date} are: {slots_preview}. Please let me know which time slot works best for you!",
+                    "tool_calls": []
+                }
+            else:
+                return {
+                    "content": f"Checking open slots for {doc_name} on {effective_date}...",
+                    "tool_calls": [{
+                        "name": "check_availability",
+                        "arguments": {
+                            "date": effective_date,
+                            "doctor_id": doc_id,
+                            "service_id": svc_id
+                        }
+                    }]
+                }
+
+        # Case B: User provides a bare time token (NOT a question) while in booking context without a phone number yet
+        if not is_question and time_token and not phone_match:
+            # Validate whether the time_token was actually offered in available_slots
+            if doc_slots and time_token not in doc_slots:
+                slots_preview = ", ".join(doc_slots[:4]) if doc_slots else "no open slots"
+                return {
+                    "content": f"The {time_token} slot is not available for {doc_name} on {effective_date}. The available slots on that day are: {slots_preview}. Please choose one of the available times or let me know if you would like to check another date.",
+                    "tool_calls": []
+                }
+
             effective_time = time_token
             return {
                 "content": f"I have selected the {effective_time} slot on {effective_date} with {doc_name} for {svc_name}. To complete and confirm your booking, please provide your full name and contact phone number.",
                 "tool_calls": []
             }
 
-        # Case B: User provides phone number (and name) to complete booking
-        if phone_match and (time_token or req_time or "10:00" in user_text or "10 am" in user_text or "11:00" in user_text or "02:00" in user_text or "2 pm" in user_text or "9:30" in user_text):
-            chosen_time = time_token or req_time or ("10:00" if "10" in user_text else "09:30")
-            effective_date = req_date or target_date_str
+        # Case C: User provides phone number (and name) to complete booking
+        if phone_match and (time_token or req_time or "10:00" in user_text or "10 am" in user_text or "11:00" in user_text or "02:00" in user_text or "2 pm" in user_text or "9:30" in user_text or "9.30" in user_text):
+            chosen_time = time_token or req_time or ("10:00" if "10" in user_text else (doc_slots[0] if doc_slots else "09:00"))
             clean_phone = phone_match.group(1).replace(" ", "").replace("-", "")
             name = _extract_name(user_text)
             return {
@@ -303,7 +381,6 @@ class MockAdapter(BaseLLMAdapter):
             }
 
         # 9. Fallback handling:
-        # Check if this is the start of the conversation vs mid-conversation
         user_message_count = len([m for m in messages if m.get("role") == "user"])
         has_prior_assistant = any(m.get("role") == "assistant" for m in messages[:-1]) if len(messages) > 1 else False
 
@@ -442,8 +519,6 @@ class GroqAdapter(BaseLLMAdapter):
             for i, m in enumerate(messages):
                 role = m.get("role")
                 if role == "assistant" and m.get("tool_calls"):
-                    # Replay the assistant turn that requested tool calls — required by
-                    # OpenAI/Groq protocol so subsequent tool messages are correctly associated.
                     groq_tool_calls = []
                     for tc in m["tool_calls"]:
                         groq_tool_calls.append({
@@ -460,7 +535,6 @@ class GroqAdapter(BaseLLMAdapter):
                         "tool_calls": groq_tool_calls
                     })
                 elif role == "tool":
-                    # Echo the real tool_call_id from history — never hardcode "call_1"
                     tool_call_id = m.get("tool_call_id") or f"call_{i}"
                     formatted_messages.append({
                         "role": "tool",
@@ -496,7 +570,7 @@ class GroqAdapter(BaseLLMAdapter):
                     except Exception:
                         pass
                     tool_calls.append({
-                        "id": tc.id,         # preserve real Groq-assigned ID
+                        "id": tc.id,
                         "name": tc.function.name,
                         "arguments": args
                     })

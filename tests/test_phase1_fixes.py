@@ -220,6 +220,111 @@ class TestStateContextInjection(BaseFixTest):
         self.assertEqual(conv_db2.requested_date, target_date)
         self.assertEqual(conv_db2.selected_doctor_id, 1)
 
+    def test_question_with_time_does_not_select_slot(self):
+        """
+        Verify that a QUESTION containing a time token (e.g. 'is there any other slots after 12:00pm')
+        is treated as an inquiry and does NOT falsely claim slot selection.
+        """
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+        target_date = self._next_monday()
+
+        conv = Conversation(business_id=biz_id, status="AI", intent="UNKNOWN", workflow_state="START")
+        db.session.add(conv)
+        db.session.commit()
+
+        # Step 1: Check availability
+        resp1 = agent.process_message(
+            conv.id,
+            f"Please check availability for Dr. Ahmed on {target_date}"
+        )
+
+        # Step 2: Ask a question containing a time
+        resp2 = agent.process_message(
+            conv.id,
+            "is there any other slots after 12:00pm"
+        )
+        content2 = resp2.get("content", "")
+
+        # Assert: must NOT claim slot selection
+        self.assertNotIn("I have selected the 12:00", content2,
+                         "A question must not falsely trigger slot selection")
+        self.assertNotIn("I have selected the 12.00", content2,
+                         "A question must not falsely trigger slot selection")
+        self.assertNotIn("selected the 12", content2.lower(),
+                         "A question must not claim slot 12:00 was selected")
+
+        # Verify conv.requested_time was not set to 12:00
+        conv_db = db.session.get(Conversation, conv.id)
+        self.assertNotEqual(conv_db.requested_time, "12:00",
+                            "A question must not persist the queried time as requested_time")
+
+    def test_unoffered_time_statement_does_not_select_slot(self):
+        """
+        Verify that stating a time that was NOT in the offered slots list
+        does not falsely claim selection.
+        """
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+        target_date = self._next_monday()
+
+        conv = Conversation(business_id=biz_id, status="AI", intent="UNKNOWN", workflow_state="START")
+        db.session.add(conv)
+        db.session.commit()
+
+        # Step 1: Check availability
+        resp1 = agent.process_message(
+            conv.id,
+            f"Check availability for Dr. Ahmed on {target_date}"
+        )
+
+        # Step 2: State a time outside working hours (e.g. 20:00 / 8 PM)
+        resp2 = agent.process_message(
+            conv.id,
+            "20:00"
+        )
+        content2 = resp2.get("content", "")
+
+        # Assert: must NOT claim 20:00 was selected
+        self.assertNotIn("I have selected the 20:00", content2)
+        self.assertTrue(
+            "not available" in content2.lower() or "available slots" in content2.lower(),
+            f"Response should indicate the slot is not available: {content2}"
+        )
+
+    def test_extract_time_str_formats(self):
+        """
+        Unit test _extract_time_str on dot and colon separators, spoken forms, and am/pm.
+        """
+        from ai.llm_client import _extract_time_str
+
+        cases = {
+            "12.00pm": "12:00",
+            "12:00pm": "12:00",
+            "12 pm": "12:00",
+            "12.00": "12:00",
+            "12:00": "12:00",
+            "9.30": "09:30",
+            "9:30": "09:30",
+            "9.30am": "09:30",
+            "9:30 am": "09:30",
+            "2.30pm": "14:30",
+            "2:30 pm": "14:30",
+            "10 am": "10:00",
+            "2 pm": "14:00",
+            "is there any other slots after 12:00pm": "12:00",
+            "is there any neurosurgeon available": None,
+            "": None
+        }
+
+        for text, expected in cases.items():
+            result = _extract_time_str(text)
+            self.assertEqual(
+                result, expected,
+                f"Failed for text '{text}': expected {expected}, got {result}"
+            )
+
+
 
 class TestAdminTenantIsolation(BaseFixTest):
     """

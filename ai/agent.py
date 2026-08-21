@@ -8,34 +8,53 @@ from ai.prompts import build_system_prompt
 from ai.llm_client import LLMClient
 
 
+def _is_question_query(text: str) -> bool:
+    """Check if the text is phrased as a question/inquiry rather than a direct statement or slot selection."""
+    if not text:
+        return False
+    if "?" in text:
+        return True
+    lower = text.lower().strip()
+    question_prefixes = [
+        "is there", "are there", "any other", "what about", "do you have",
+        "can i", "could i", "when", "which", "how about", "available after",
+        "slots after", "available before", "slots before", "what time",
+        "is anything", "are any", "what are", "who is", "show me", "tell me"
+    ]
+    return any(qp in lower for qp in question_prefixes)
+
+
 def _extract_time_token(text: str) -> Optional[str]:
-    """Extract standard HH:MM time string from text."""
+    """Extract standard HH:MM time string from user text supporting both ':' and '.' as separators."""
     if not text:
         return None
-    # Match standard HH:MM
-    m = re.search(r'\b(\d{1,2}):(\d{2})\b', text)
+    # Match standard HH:MM or HH.MM (e.g. 9:30, 09:30, 12.00, 12.00pm, 14:00)
+    m = re.search(r'\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b', text, re.IGNORECASE)
     if m:
         h, mn = int(m.group(1)), int(m.group(2))
-        return f"{h:02d}:{mn:02d}"
-    # Match spoken forms like 10 am, 2 pm, 9:30 am
-    m = re.search(r'\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b', text, re.IGNORECASE)
-    if m:
-        h = int(m.group(1))
-        mn = int(m.group(2)) if m.group(2) else 0
-        ampm = m.group(3).lower()
+        ampm = m.group(3).lower() if m.group(3) else None
         if ampm == "pm" and h < 12:
             h += 12
         elif ampm == "am" and h == 12:
             h = 0
         return f"{h:02d}:{mn:02d}"
+    # Match spoken forms like 10 am, 2 pm, 12 pm
+    m = re.search(r'\b(\d{1,2})\s*(am|pm)\b', text, re.IGNORECASE)
+    if m:
+        h = int(m.group(1))
+        ampm = m.group(2).lower()
+        if ampm == "pm" and h < 12:
+            h += 12
+        elif ampm == "am" and h == 12:
+            h = 0
+        return f"{h:02d}:00"
     return None
 
 
 def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
     """
     Extract structured conversation state as a programmatic dictionary.
-    Passed directly to LLMClient and adapters so adapters (like MockAdapter)
-    can access state fields programmatically without parsing strings.
+    Includes last offered slot list parsed from previous tool messages.
     """
     doc_name = None
     if conv.selected_doctor_id:
@@ -55,6 +74,36 @@ def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # Extract last offered slots from most recent check_availability tool execution
+    last_offered_slots: Dict[str, List[str]] = {}
+    all_offered_slots: List[str] = []
+    try:
+        last_tool_msg = (
+            Message.query
+            .filter_by(conversation_id=conv.id, role="tool", tool_name="check_availability")
+            .order_by(Message.created_at.desc())
+            .first()
+        )
+        if not last_tool_msg:
+            last_tool_msg = (
+                Message.query
+                .filter_by(conversation_id=conv.id, role="tool")
+                .order_by(Message.created_at.desc())
+                .first()
+            )
+        if last_tool_msg and last_tool_msg.content:
+            data = json.loads(last_tool_msg.content)
+            if isinstance(data, dict) and "results" in data:
+                for r in data.get("results", []):
+                    d_id = str(r.get("doctor_id"))
+                    slots = r.get("available_slots", [])
+                    last_offered_slots[d_id] = slots
+                    for s in slots:
+                        if s not in all_offered_slots:
+                            all_offered_slots.append(s)
+    except Exception:
+        pass
+
     return {
         "workflow_state": conv.workflow_state or "START",
         "intent": conv.intent or "UNKNOWN",
@@ -66,7 +115,9 @@ def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
         "requested_time": conv.requested_time,
         "customer_id": conv.customer_id,
         "channel": conv.channel or "web_chat",
-        "business_id": conv.business_id
+        "business_id": conv.business_id,
+        "last_offered_slots": last_offered_slots,
+        "all_offered_slots": all_offered_slots
     }
 
 
@@ -132,8 +183,6 @@ class Agent:
         """
         Process incoming customer message through the central AI Agent.
         Validates backend tools, updates structured state, and returns responses.
-        Persisted conversation state is injected both into the system prompt (for real LLMs)
-        and passed as structured conversation_state dict (for programmatic adapters like MockAdapter).
         """
         conv = db.session.get(Conversation, conversation_id)
         if not conv:
@@ -155,12 +204,19 @@ class Agent:
                 "workflow_state": conv.workflow_state
             }
 
-        # If conversation is checking availability and user supplies a time, capture it
+        # Build structured conversation state dict
+        state_dict = _build_state_dict(conv)
+        all_offered = state_dict.get("all_offered_slots", [])
+
+        # If conversation is checking availability and user supplies a non-question time selection, capture it
         if conv.workflow_state == "CHECKING_AVAILABILITY" and user_content:
-            time_token = _extract_time_token(user_content)
-            if time_token:
-                conv.requested_time = time_token
-                db.session.flush()
+            if not _is_question_query(user_content):
+                time_token = _extract_time_token(user_content)
+                # Only set if time_token is an offered slot or if no offered list exists yet
+                if time_token and (not all_offered or time_token in all_offered):
+                    conv.requested_time = time_token
+                    db.session.flush()
+                    state_dict["requested_time"] = time_token
 
         # Build dynamic system prompt from business DB data
         system_prompt = build_system_prompt(self.business_id)
@@ -168,9 +224,6 @@ class Agent:
         # Inject persisted conversation state as structured text context (for Gemini/Groq)
         state_context = _build_state_context(conv)
         enriched_system_prompt = system_prompt + "\n\n" + state_context
-
-        # Build structured conversation state dict (for MockAdapter and adapters needing programmatic access)
-        state_dict = _build_state_dict(conv)
 
         # Retrieve last 12 messages for conversational history
         past_messages = (
