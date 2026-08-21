@@ -5,12 +5,53 @@ from typing import List, Dict, Any, Optional, Tuple
 from config.config import Config
 from ai.tools import CANONICAL_TOOLS
 
+
+def _extract_time_str(text: str) -> Optional[str]:
+    """Extract standard HH:MM time string from user text."""
+    if not text:
+        return None
+    # Match standard HH:MM (e.g. 9:30, 09:30, 14:00)
+    m = re.search(r'\b(\d{1,2}):(\d{2})\b', text)
+    if m:
+        h, mn = int(m.group(1)), int(m.group(2))
+        return f"{h:02d}:{mn:02d}"
+    # Match spoken forms like 10 am, 2 pm, 9:30 am
+    m = re.search(r'\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b', text, re.IGNORECASE)
+    if m:
+        h = int(m.group(1))
+        mn = int(m.group(2)) if m.group(2) else 0
+        ampm = m.group(3).lower()
+        if ampm == "pm" and h < 12:
+            h += 12
+        elif ampm == "am" and h == 12:
+            h = 0
+        return f"{h:02d}:{mn:02d}"
+    return None
+
+
+def _extract_name(text: str) -> str:
+    """Extract person name from customer booking text."""
+    m = re.search(r'(?:my\s+name\s+is\s+|name\s+is\s+|i\s+am\s+|name\s*:\s*|for\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', text, re.IGNORECASE)
+    if m:
+        raw = m.group(1)
+        name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b', raw, flags=re.IGNORECASE)[0].strip()
+        if name and name.lower() not in ["patient", "a", "the", "an"]:
+            return name.title()
+    for part in text.split():
+        clean = re.sub(r'[^a-zA-Z]', '', part)
+        if clean and clean.lower() not in ["hi", "hello", "my", "name", "is", "please", "book", "at", "on", "for", "pm", "am", "phone", "slot", "the", "take", "ill", "i", "will"]:
+            return clean.capitalize()
+    return "Patient"
+
+
+
 class BaseLLMAdapter:
     def chat_completion(
         self,
         system_prompt: str,
         messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]]
+        tools: List[Dict[str, Any]],
+        conversation_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Execute chat completion.
@@ -32,19 +73,24 @@ class MockAdapter(BaseLLMAdapter):
     """
     Intelligent simulated LLM adapter for deterministic local development,
     tool execution testing, and CI environments without requiring external API keys.
+    Programmatically reads conversation_state to maintain multi-turn workflow continuity.
     """
     def chat_completion(
         self,
         system_prompt: str,
         messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]]
+        tools: List[Dict[str, Any]],
+        conversation_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         if not messages:
-            return {"content": "Hello! Welcome to SmileCare Dental Clinic. How can I assist you with your dental care today?", "tool_calls": []}
+            return {
+                "content": "Hello! Welcome to SmileCare Dental Clinic. How can I assist you with your dental care today?",
+                "tool_calls": []
+            }
 
         # Check if previous turn was a tool response
         last_msg = messages[-1]
-        if last_msg["role"] == "tool":
+        if last_msg.get("role") == "tool":
             tool_content = last_msg.get("content", "")
             try:
                 tool_data = json.loads(tool_content) if isinstance(tool_content, str) else tool_content
@@ -104,130 +150,173 @@ class MockAdapter(BaseLLMAdapter):
                     "tool_calls": []
                 }
 
-        # Analyze latest user query
+        # Analyze latest user message
         user_text = ""
         for m in reversed(messages):
-            if m["role"] == "user":
-                user_text = m["content"].lower()
+            if m.get("role") == "user":
+                user_text = m.get("content", "").lower().strip()
                 break
 
-        # 1. Human handoff / Out-of-scope triggers
-        if any(w in user_text for w in ["human", "receptionist", "speak to someone", "representative", "real person", "manager", "staff"]):
-            return {
-                "content": "Connecting you with our reception team...",
-                "tool_calls": [{"name": "human_handoff", "arguments": {"reason": "Customer requested human representative"}}]
-            }
+        # State extraction
+        conv_state = conversation_state or {}
+        workflow_state = conv_state.get("workflow_state")
+        req_date = conv_state.get("requested_date")
+        req_time = conv_state.get("requested_time")
+        doc_id = conv_state.get("selected_doctor_id") or 1
+        doc_name = conv_state.get("selected_doctor_name") or ("Dr. Ahmed Khan" if doc_id == 1 else "Dr. Sara Malik")
+        svc_id = conv_state.get("selected_service_id") or 2
+        svc_name = conv_state.get("selected_service_name") or "Dental Cleaning & Scaling"
 
-        # Medical advice or insurance out-of-scope
-        if any(w in user_text for w in ["insurance", "prescription", "antibiotic", "diagnose", "severe bleeding"]):
-            return {
-                "content": "I cannot provide medical advice or verify insurance coverage directly. Let me connect you with our medical staff.",
-                "tool_calls": [{"name": "human_handoff", "arguments": {"reason": f"Out-of-scope / medical query: {user_text}"}}]
-            }
-
-        # 2. Doctors inquiry
-        if any(w in user_text for w in ["which doctor", "who is the doctor", "who are the doctors", "list doctor", "available doctor", "dentist name", "doctors at"]):
-            return {
-                "content": "Let me retrieve our list of doctors for you.",
-                "tool_calls": [{"name": "get_doctors", "arguments": {}}]
-            }
-
-        # 3. Services inquiry
-        if any(w in user_text for w in ["service", "price", "cost", "treatment", "charges", "what do you offer"]):
-            return {
-                "content": "Let me fetch our dental services and pricing for you.",
-                "tool_calls": [{"name": "get_services", "arguments": {}}]
-            }
-
-        # 4. Clinic Info inquiry
-        if any(w in user_text for w in ["address", "location", "timing", "hours", "where are you", "contact", "phone number"]):
-            return {
-                "content": "Checking clinic details...",
-                "tool_calls": [{"name": "get_clinic_info", "arguments": {}}]
-            }
-
-        # 4. Booking intent detection
-        # Check if booking details (name, phone, date, time) are present in the text
+        # Token extractions
+        time_token = _extract_time_str(user_text)
         phone_match = re.search(r'(\+?\d[\d\s\-]{8,14}\d)', user_text)
         date_match = re.search(r'(\d{4}-\d{2}-\d{2})', user_text)
-        time_match = re.search(r'(\d{1,2}:\d{2})', user_text)
 
-        # Check if user mentioned tomorrow / next week date
         from datetime import date, timedelta
-        target_date_str = None
         if date_match:
             target_date_str = date_match.group(1)
         elif "tomorrow" in user_text:
             target_date_str = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
         elif "today" in user_text:
             target_date_str = date.today().strftime("%Y-%m-%d")
+        elif req_date:
+            target_date_str = req_date
         else:
-            # Default to tomorrow if they ask to book
             target_date_str = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
 
-        # Determine doctor
-        doctor_id = 1
+        # Doctor / service overrides from text
         if "sara" in user_text:
-            doctor_id = 2
+            doc_id = 2
+            doc_name = "Dr. Sara Malik"
         elif "ahmed" in user_text:
-            doctor_id = 1
+            doc_id = 1
+            doc_name = "Dr. Ahmed Khan"
 
-        # Determine service
-        service_id = 2 # default cleaning
         if "whitening" in user_text:
-            service_id = 3
+            svc_id = 3
+            svc_name = "Teeth Whitening"
         elif "checkup" in user_text or "consultation" in user_text:
-            service_id = 1
+            svc_id = 1
+            svc_name = "Dental Checkup & Consultation"
         elif "root canal" in user_text:
-            service_id = 5
+            svc_id = 5
+            svc_name = "Root Canal Treatment"
         elif "extraction" in user_text or "tooth pull" in user_text:
-            service_id = 4
+            svc_id = 4
+            svc_name = "Tooth Extraction"
         elif "brace" in user_text or "aligner" in user_text:
-            service_id = 6
+            svc_id = 6
+            svc_name = "Dental Braces Consultation"
 
-        # Check if customer provided name, phone and time to book
-        if phone_match and (time_match or "10:00" in user_text or "10 am" in user_text or "11:00" in user_text or "02:00" in user_text or "2 pm" in user_text):
-            chosen_time = time_match.group(1) if time_match else ("10:00" if "10" in user_text else "14:00")
-            phone = phone_match.group(1).replace(" ", "").replace("-", "")
-            # Extract possible name
-            name = "Patient"
-            for part in user_text.split():
-                if part.isalpha() and part not in ["hi", "hello", "my", "name", "is", "please", "book", "at", "on", "for", "pm", "am"]:
-                    name = part.capitalize()
-                    break
+        # 1. Non-Dental Out-of-Scope Medical Specialists
+        out_of_scope_specialties = [
+            "neurosurgeon", "neurologist", "neurology", "cardiologist", "cardiology",
+            "dermatologist", "dermatology", "oncologist", "oncology", "orthopedic",
+            "gynecologist", "psychiatrist", "ent specialist", "ophthalmologist",
+            "general surgeon", "urologist", "nephrologist", "gastroenterologist"
+        ]
+        if any(s in user_text for s in out_of_scope_specialties) or ("pediatrician" in user_text and "dent" not in user_text):
             return {
-                "content": f"Booking your appointment with Dr. {'Sara Malik' if doctor_id==2 else 'Ahmed Khan'} for {target_date_str} at {chosen_time}...",
+                "content": "SmileCare is a dedicated dental clinic and does not offer non-dental medical specialties. I am connecting you with our human receptionist to see if they can assist or refer you.",
+                "tool_calls": [{"name": "human_handoff", "arguments": {"reason": f"Customer inquired about non-dental medical specialty: {user_text}"}}]
+            }
+
+        # 2. Medical advice / prescription / insurance triggers
+        if any(w in user_text for w in ["insurance", "prescription", "antibiotic", "diagnose", "severe bleeding"]):
+            return {
+                "content": "I cannot provide medical advice or verify insurance coverage directly. Let me connect you with our medical staff.",
+                "tool_calls": [{"name": "human_handoff", "arguments": {"reason": f"Out-of-scope / medical query: {user_text}"}}]
+            }
+
+        # 3. Explicit Human Handoff Request
+        if any(w in user_text for w in ["human", "receptionist", "speak to someone", "representative", "real person", "manager", "staff"]):
+            return {
+                "content": "Connecting you with our reception team...",
+                "tool_calls": [{"name": "human_handoff", "arguments": {"reason": "Customer requested human representative"}}]
+            }
+
+        # 4. State-Aware Slot/Time Selection & Booking
+        # Case A: User provides a bare time token while in booking/availability context without a phone number yet
+        if time_token and not phone_match:
+            effective_date = req_date or target_date_str
+            effective_time = time_token
+            return {
+                "content": f"I have selected the {effective_time} slot on {effective_date} with {doc_name} for {svc_name}. To complete and confirm your booking, please provide your full name and contact phone number.",
+                "tool_calls": []
+            }
+
+        # Case B: User provides phone number (and name) to complete booking
+        if phone_match and (time_token or req_time or "10:00" in user_text or "10 am" in user_text or "11:00" in user_text or "02:00" in user_text or "2 pm" in user_text or "9:30" in user_text):
+            chosen_time = time_token or req_time or ("10:00" if "10" in user_text else "09:30")
+            effective_date = req_date or target_date_str
+            clean_phone = phone_match.group(1).replace(" ", "").replace("-", "")
+            name = _extract_name(user_text)
+            return {
+                "content": f"Booking your appointment with {doc_name} for {effective_date} at {chosen_time}...",
                 "tool_calls": [{
                     "name": "book_appointment",
                     "arguments": {
                         "customer_name": name,
-                        "customer_phone": phone,
-                        "doctor_id": doctor_id,
-                        "service_id": service_id,
-                        "appointment_date": target_date_str,
+                        "customer_phone": clean_phone,
+                        "doctor_id": doc_id,
+                        "service_id": svc_id,
+                        "appointment_date": effective_date,
                         "appointment_time": chosen_time,
                         "notes": "Booked via AI Assistant"
                     }
                 }]
             }
 
-        # If user asks to book or check slots
-        if any(w in user_text for w in ["book", "appointment", "slot", "schedule", "clean", "teeth", "doctor", "dentist", "visit"]):
+        # 5. Doctor Inquiry
+        if any(w in user_text for w in ["which doctor", "who is the doctor", "who are the doctors", "list doctor", "available doctor", "dentist name", "doctors at"]):
+            return {
+                "content": "Let me retrieve our list of doctors for you.",
+                "tool_calls": [{"name": "get_doctors", "arguments": {}}]
+            }
+
+        # 6. Services Inquiry
+        if any(w in user_text for w in ["service", "price", "cost", "treatment", "charges", "what do you offer"]):
+            return {
+                "content": "Let me fetch our dental services and pricing for you.",
+                "tool_calls": [{"name": "get_services", "arguments": {}}]
+            }
+
+        # 7. Clinic Info Inquiry
+        if any(w in user_text for w in ["address", "location", "located", "where is", "where are", "timing", "hours", "contact", "phone number", "clinic info", "directions"]):
+            return {
+                "content": "Checking clinic details...",
+                "tool_calls": [{"name": "get_clinic_info", "arguments": {}}]
+            }
+
+        # 8. Check Availability / Booking intent
+        if any(w in user_text for w in ["book", "appointment", "slot", "schedule", "clean", "teeth", "doctor", "dentist", "visit", "available", "availability"]):
             return {
                 "content": f"Checking open slots for you on {target_date_str}...",
                 "tool_calls": [{
                     "name": "check_availability",
                     "arguments": {
                         "date": target_date_str,
-                        "doctor_id": doctor_id,
-                        "service_id": service_id
+                        "doctor_id": doc_id,
+                        "service_id": svc_id
                     }
                 }]
             }
 
-        # Default conversational greeting
+        # 9. Fallback handling:
+        # Check if this is the start of the conversation vs mid-conversation
+        user_message_count = len([m for m in messages if m.get("role") == "user"])
+        has_prior_assistant = any(m.get("role") == "assistant" for m in messages[:-1]) if len(messages) > 1 else False
+
+        if user_message_count <= 1 and not has_prior_assistant:
+            # Truly turn 0 / start of conversation
+            return {
+                "content": "Hello! Welcome to SmileCare Dental Clinic. How can I assist you with your dental care today?",
+                "tool_calls": []
+            }
+
+        # Mid-conversation ambiguous or unhandled query -> ask clarifying question, never repeat greeting
         return {
-            "content": "Hello! I am the AI receptionist at SmileCare Dental Clinic. I can help you book, reschedule, or cancel dental appointments, check doctor availability, and share service details. How may I help you today?",
+            "content": "Sorry, I didn't quite catch that — are you asking about booking an appointment, our services, or something else?",
             "tool_calls": []
         }
 
@@ -253,7 +342,8 @@ class GeminiAdapter(BaseLLMAdapter):
         self,
         system_prompt: str,
         messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]]
+        tools: List[Dict[str, Any]],
+        conversation_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         try:
             from google import genai
@@ -315,7 +405,7 @@ class GeminiAdapter(BaseLLMAdapter):
             print(f"[GeminiAdapter Error]: {e}")
             # Fallback to MockAdapter on API error so flow does not crash
             mock = MockAdapter()
-            return mock.chat_completion(system_prompt, messages, tools)
+            return mock.chat_completion(system_prompt, messages, tools, conversation_state=conversation_state)
 
 
 class GroqAdapter(BaseLLMAdapter):
@@ -341,7 +431,8 @@ class GroqAdapter(BaseLLMAdapter):
         self,
         system_prompt: str,
         messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]]
+        tools: List[Dict[str, Any]],
+        conversation_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         try:
             from groq import Groq
@@ -417,9 +508,7 @@ class GroqAdapter(BaseLLMAdapter):
         except Exception as e:
             print(f"[GroqAdapter Error]: {e}")
             mock = MockAdapter()
-            return mock.chat_completion(system_prompt, messages, tools)
-
-
+            return mock.chat_completion(system_prompt, messages, tools, conversation_state=conversation_state)
 
 
 class LLMClient:
@@ -438,10 +527,12 @@ class LLMClient:
         self,
         system_prompt: str,
         messages: List[Dict[str, Any]],
-        tools: List[Dict[str, Any]] = CANONICAL_TOOLS
+        tools: List[Dict[str, Any]] = CANONICAL_TOOLS,
+        conversation_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         return self.adapter.chat_completion(
             system_prompt=system_prompt,
             messages=messages,
-            tools=tools
+            tools=tools,
+            conversation_state=conversation_state
         )

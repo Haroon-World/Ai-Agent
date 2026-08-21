@@ -88,7 +88,9 @@ class TestStateContextInjection(BaseFixTest):
     """
     Step 1 validation: State context injected into LLM each turn.
     After check_availability stores doctor/date in conv state, a follow-up
-    message with just a time must trigger book_appointment (not a generic reply).
+    message with just a bare time ("9:30") must retain state and ask for name/phone
+    (never returning the generic initial greeting). A subsequent message with
+    name/phone must then complete the booking using the previously retained context.
     """
 
     def test_state_context_slot_selection_triggers_booking(self):
@@ -100,37 +102,123 @@ class TestStateContextInjection(BaseFixTest):
         db.session.add(conv)
         db.session.commit()
 
-        # Step 1: Ask for availability — MockAdapter will call check_availability and update state
+        # Step 1: Ask for availability — check_availability is called and updates state
         resp1 = agent.process_message(
             conv.id,
             f"I'd like to book a dental cleaning with Dr. Ahmed on {target_date}"
         )
-        # After this, conv should have workflow_state = CHECKING_AVAILABILITY and requested_date set
-        conv_db = db.session.get(Conversation, conv.id)
-        self.assertEqual(conv_db.requested_date, target_date,
+        conv_db1 = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db1.requested_date, target_date,
                          "check_availability should have stored requested_date in conv state")
-        self.assertEqual(conv_db.workflow_state, "CHECKING_AVAILABILITY",
+        self.assertEqual(conv_db1.workflow_state, "CHECKING_AVAILABILITY",
                          "workflow_state should be CHECKING_AVAILABILITY after slot query")
+        self.assertEqual(conv_db1.selected_doctor_id, 1,
+                         "selected_doctor_id should be 1 (Dr. Ahmed Khan)")
 
-        # Step 2: Send only the chosen time — MockAdapter's next response should synthesise
-        # booking because the state context block tells it date/doctor are already set.
-        # We validate this by checking that book_appointment was eventually called and
-        # workflow_state moved to BOOKED.
+        # Step 2: Send ONLY a bare time ("9:30") without any phone number
         resp2 = agent.process_message(
             conv.id,
-            "I'll take the 10:00 slot. My name is Ali Raza, phone 03001234567"
+            "9:30"
         )
-        # At minimum, the state context was injected — if booking was attempted,
-        # the workflow_state in DB will have advanced.
-        conv_final = db.session.get(Conversation, conv.id)
-        # With MockAdapter: it may book or ask for more info, but state_context must
-        # have been present — the key invariant is that no hard crash occurred and
-        # the reply is about the clinic (not a generic unknown-intent fallback).
-        self.assertIsNotNone(resp2.get("content"))
-        self.assertNotEqual(resp2.get("content", "").strip(), "",
-                            "Agent must produce a non-empty reply after time selection")
-        # The conversation must still be in AI mode (no unexpected handoff)
-        self.assertEqual(conv_final.status, "AI")
+        content2 = resp2.get("content", "")
+        # Strict assertion: Must NOT be the generic initial greeting or fallback
+        self.assertNotIn("Hello! Welcome to SmileCare", content2,
+                         "Bare time reply must not return the initial welcome greeting")
+        self.assertNotIn("Hello! I am the AI receptionist", content2,
+                         "Bare time reply must not return the default receptionist greeting")
+        self.assertNotIn("Sorry, I didn't quite catch that", content2,
+                         "Bare time reply must not fall through to ambiguous query fallback")
+        # Must acknowledge the slot and ask for name/phone
+        self.assertTrue(
+            "09:30" in content2 or "9:30" in content2,
+            f"Response should acknowledge the chosen 09:30 time slot: {content2}"
+        )
+        self.assertTrue(
+            "name" in content2.lower() and "phone" in content2.lower(),
+            f"Response should ask for patient name and phone number: {content2}"
+        )
+
+        # Verify state in DB retained date, doctor, service, and captured requested_time
+        conv_db2 = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db2.requested_date, target_date)
+        self.assertEqual(conv_db2.selected_doctor_id, 1)
+        self.assertEqual(conv_db2.selected_service_id, 2)
+        self.assertEqual(conv_db2.requested_time, "09:30")
+        self.assertEqual(conv_db2.status, "AI")
+
+        # Step 3: Send patient name and phone number to complete booking
+        resp3 = agent.process_message(
+            conv.id,
+            "My name is Ali Raza, phone 03001234567"
+        )
+        # Verify book_appointment tool was executed
+        executed = [t["name"] for t in resp3.get("executed_tools", [])]
+        self.assertIn("book_appointment", executed,
+                      f"book_appointment should be called to complete booking: {resp3}")
+
+        # Verify final workflow state is BOOKED and appointment was created
+        conv_db3 = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db3.workflow_state, "BOOKED")
+        self.assertEqual(conv_db3.intent, "BOOK_APPOINTMENT")
+
+        # Verify DB appointment record
+        appt = Appointment.query.filter_by(
+            business_id=biz_id,
+            appointment_date=target_date,
+            appointment_time="09:30"
+        ).first()
+        self.assertIsNotNone(appt, "Appointment record should be created in the database")
+        self.assertEqual(appt.doctor_id, 1)
+        self.assertEqual(appt.service_id, 2)
+        self.assertEqual(appt.customer.name, "Ali Raza")
+
+    def test_out_of_scope_specialty_mid_conversation_preserves_state(self):
+        """
+        Verify that out-of-scope medical specialty queries (e.g. 'neurosurgeon')
+        mid-conversation trigger human_handoff, do not return the generic welcome greeting,
+        and preserve previously accumulated booking state context.
+        """
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+        target_date = self._next_monday()
+
+        conv = Conversation(business_id=biz_id, status="AI", intent="UNKNOWN", workflow_state="START")
+        db.session.add(conv)
+        db.session.commit()
+
+        # Step 1: Check availability for Dr. Ahmed
+        resp1 = agent.process_message(
+            conv.id,
+            f"Check availability for Dr. Ahmed on {target_date}"
+        )
+        conv_db1 = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db1.requested_date, target_date)
+        self.assertEqual(conv_db1.selected_doctor_id, 1)
+
+        # Step 2: Inquire about an out-of-scope non-dental specialist
+        resp2 = agent.process_message(
+            conv.id,
+            "is there any neurosurgeon available?"
+        )
+        content2 = resp2.get("content", "")
+
+        # Assert not generic greeting
+        self.assertNotIn("Hello! Welcome to SmileCare", content2)
+        self.assertNotIn("Hello! I am the AI receptionist", content2)
+
+        # Assert human handoff was executed
+        executed = [t["name"] for t in resp2.get("executed_tools", [])]
+        self.assertIn("human_handoff", executed,
+                      "Out-of-scope medical specialty should trigger human_handoff tool")
+
+        # Assert conversation status is now HUMAN
+        conv_db2 = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db2.status, "HUMAN")
+        self.assertIn("neurosurgeon", conv_db2.handoff_reason.lower())
+
+        # Assert earlier booking context (date & doctor) was preserved
+        self.assertEqual(conv_db2.requested_date, target_date)
+        self.assertEqual(conv_db2.selected_doctor_id, 1)
 
 
 class TestAdminTenantIsolation(BaseFixTest):

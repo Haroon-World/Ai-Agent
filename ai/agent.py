@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from typing import Dict, Any, List, Optional
 from models import db, Conversation, Message, Customer, Doctor, Service
@@ -7,12 +8,73 @@ from ai.prompts import build_system_prompt
 from ai.llm_client import LLMClient
 
 
+def _extract_time_token(text: str) -> Optional[str]:
+    """Extract standard HH:MM time string from text."""
+    if not text:
+        return None
+    # Match standard HH:MM
+    m = re.search(r'\b(\d{1,2}):(\d{2})\b', text)
+    if m:
+        h, mn = int(m.group(1)), int(m.group(2))
+        return f"{h:02d}:{mn:02d}"
+    # Match spoken forms like 10 am, 2 pm, 9:30 am
+    m = re.search(r'\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b', text, re.IGNORECASE)
+    if m:
+        h = int(m.group(1))
+        mn = int(m.group(2)) if m.group(2) else 0
+        ampm = m.group(3).lower()
+        if ampm == "pm" and h < 12:
+            h += 12
+        elif ampm == "am" and h == 12:
+            h = 0
+        return f"{h:02d}:{mn:02d}"
+    return None
+
+
+def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
+    """
+    Extract structured conversation state as a programmatic dictionary.
+    Passed directly to LLMClient and adapters so adapters (like MockAdapter)
+    can access state fields programmatically without parsing strings.
+    """
+    doc_name = None
+    if conv.selected_doctor_id:
+        try:
+            doc = db.session.get(Doctor, conv.selected_doctor_id)
+            if doc:
+                doc_name = doc.name
+        except Exception:
+            pass
+
+    svc_name = None
+    if conv.selected_service_id:
+        try:
+            svc = db.session.get(Service, conv.selected_service_id)
+            if svc:
+                svc_name = svc.name
+        except Exception:
+            pass
+
+    return {
+        "workflow_state": conv.workflow_state or "START",
+        "intent": conv.intent or "UNKNOWN",
+        "selected_doctor_id": conv.selected_doctor_id,
+        "selected_doctor_name": doc_name,
+        "selected_service_id": conv.selected_service_id,
+        "selected_service_name": svc_name,
+        "requested_date": conv.requested_date,
+        "requested_time": conv.requested_time,
+        "customer_id": conv.customer_id,
+        "channel": conv.channel or "web_chat",
+        "business_id": conv.business_id
+    }
+
+
 def _build_state_context(conv: Conversation) -> str:
     """
     Build a structured context block from persisted conversation state fields.
-    This is injected as a system-level context message before conversation history
-    so that the LLM is always aware of where in the booking workflow we are,
-    even after many turns. Resolves doctor/service IDs to human-readable names.
+    This is injected as a system-level context message into the system prompt
+    for real LLM providers (Gemini, Groq) so they maintain context across turns.
     """
     lines = ["[CURRENT BOOKING CONTEXT]"]
 
@@ -70,8 +132,8 @@ class Agent:
         """
         Process incoming customer message through the central AI Agent.
         Validates backend tools, updates structured state, and returns responses.
-        Persisted conversation state is injected into every LLM turn so the model
-        is never unaware of the current booking workflow position.
+        Persisted conversation state is injected both into the system prompt (for real LLMs)
+        and passed as structured conversation_state dict (for programmatic adapters like MockAdapter).
         """
         conv = db.session.get(Conversation, conversation_id)
         if not conv:
@@ -93,13 +155,22 @@ class Agent:
                 "workflow_state": conv.workflow_state
             }
 
+        # If conversation is checking availability and user supplies a time, capture it
+        if conv.workflow_state == "CHECKING_AVAILABILITY" and user_content:
+            time_token = _extract_time_token(user_content)
+            if time_token:
+                conv.requested_time = time_token
+                db.session.flush()
+
         # Build dynamic system prompt from business DB data
         system_prompt = build_system_prompt(self.business_id)
 
-        # Inject persisted conversation state as structured context (fixes "AI feels dumb" root cause)
+        # Inject persisted conversation state as structured text context (for Gemini/Groq)
         state_context = _build_state_context(conv)
-        # Prepend as a system-level context injection — formatted to survive all adapters
         enriched_system_prompt = system_prompt + "\n\n" + state_context
+
+        # Build structured conversation state dict (for MockAdapter and adapters needing programmatic access)
+        state_dict = _build_state_dict(conv)
 
         # Retrieve last 12 messages for conversational history
         past_messages = (
@@ -126,11 +197,12 @@ class Agent:
         # Dispatcher for controlled tool execution
         dispatcher = ToolDispatcher(business_id=self.business_id, conversation_id=conv.id)
 
-        # Initial LLM call
+        # Initial LLM call (passing both enriched system prompt and structured state_dict)
         response = self.llm_client.get_completion(
             system_prompt=enriched_system_prompt,
             messages=formatted_messages,
-            tools=CANONICAL_TOOLS
+            tools=CANONICAL_TOOLS,
+            conversation_state=state_dict
         )
 
         executed_tools = []
@@ -144,7 +216,6 @@ class Agent:
             iteration += 1
 
             # If provider returned an assistant message with tool_calls, append it to history
-            # (required by OpenAI/Groq protocol so tool responses are properly associated)
             if response.get("tool_calls"):
                 formatted_messages.append({
                     "role": "assistant",
@@ -158,8 +229,7 @@ class Agent:
                 # Carry the real tool_call_id from the provider response
                 tool_call_id = tc.get("id", f"call_{iteration}")
 
-                # Auto-inject idempotency key for booking attempts so the service layer
-                # idempotency check is exercised through the real conversational flow
+                # Auto-inject idempotency key for booking attempts
                 if tool_name == "book_appointment" and not tool_args.get("idempotency_key"):
                     tool_args["idempotency_key"] = f"conv-{conv.id}-attempt-{iteration}-{uuid.uuid4().hex[:8]}"
 
@@ -184,7 +254,7 @@ class Agent:
                 db.session.add(tool_msg)
                 db.session.flush()
 
-                # Add tool response to context for next LLM turn (with real IDs)
+                # Add tool response to context for next LLM turn
                 formatted_messages.append({
                     "role": "tool",
                     "tool_name": tool_name,
@@ -192,11 +262,16 @@ class Agent:
                     "content": tool_msg_content
                 })
 
+            # Update state context and state dict after tool execution
+            state_dict = _build_state_dict(conv)
+            enriched_system_prompt = system_prompt + "\n\n" + _build_state_context(conv)
+
             # Re-query LLM with tool results to get natural language synthesis
             response = self.llm_client.get_completion(
                 system_prompt=enriched_system_prompt,
                 messages=formatted_messages,
-                tools=CANONICAL_TOOLS
+                tools=CANONICAL_TOOLS,
+                conversation_state=state_dict
             )
 
         final_content = response.get(
@@ -226,8 +301,6 @@ class Agent:
     def _update_conversation_state(self, conv: Conversation, tool_name: str, args: Dict[str, Any]):
         """
         Persist structured booking state into the conversation record after each tool call.
-        This data is read back via _build_state_context() on every subsequent turn,
-        forming the two-way feedback loop that keeps the LLM aware of workflow position.
         """
         if tool_name == "check_availability":
             conv.intent = "BOOK_APPOINTMENT"
