@@ -31,7 +31,7 @@ import os
 import sys
 import json
 from datetime import datetime, timedelta, date
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -41,7 +41,9 @@ from models import db, Business, Doctor, Service, Customer, Appointment, Convers
 from services.booking_service import BookingService
 from services.handoff_service import HandoffService
 from ai.agent import Agent
+from ai.tools import CANONICAL_TOOLS, ToolDispatcher
 from seed import seed_database
+
 
 
 class BaseFixTest(unittest.TestCase):
@@ -578,5 +580,324 @@ class TestWorkingDayValidation(BaseFixTest):
                         f"Booking on Monday should succeed for Dr. Ahmed: {result}")
 
 
+class TestVisitorSessionAndEndpointSecurity(BaseFixTest):
+    """
+    Phase 2 validation: Visitor session binding & Public endpoint protection.
+    - Visitor A cannot read or hijack Visitor B's conversation.
+    - Public mutation endpoints are removed/secured.
+    """
+
+    def test_visitor_cannot_access_other_visitor_conversation_history(self):
+        # Client 1 creates a conversation
+        client1 = self.app.test_client()
+        init_res = client1.post("/api/chat/init")
+        self.assertEqual(init_res.status_code, 200)
+        data1 = init_res.get_json()
+        conv_id = data1["conversation_id"]
+
+        # Client 1 sends a message
+        client1.post("/api/chat/send", json={"conversation_id": conv_id, "message": "My secret is 12345"})
+
+        # Client 2 (separate session) tries to read Client 1's conversation history
+        client2 = self.app.test_client()
+        hist_res = client2.get(f"/api/chat/history/{conv_id}")
+        self.assertEqual(hist_res.status_code, 404,
+                         "Cross-visitor conversation history fetch must return 404")
+        data2 = hist_res.get_json()
+        self.assertFalse(data2.get("success"))
+
+    def test_visitor_cannot_send_to_other_visitor_conversation(self):
+        # Client 1 creates conversation
+        client1 = self.app.test_client()
+        init_res = client1.post("/api/chat/init")
+        conv_id_1 = init_res.get_json()["conversation_id"]
+
+        # Client 2 attempts to send a message targeting Client 1's conversation_id
+        client2 = self.app.test_client()
+        send_res = client2.post("/api/chat/send", json={"conversation_id": conv_id_1, "message": "Hijack attempt"})
+        self.assertEqual(send_res.status_code, 200)
+        data2 = send_res.get_json()
+        # Must create a fresh conversation for Client 2 and NOT hijack conv_id_1
+        self.assertNotEqual(data2["conversation_id"], conv_id_1,
+                            "Client 2 must not hijack Client 1's conversation ID")
+        self.assertTrue(data2.get("session_reset"),
+                        "Session reset must be flagged when attempting to access foreign conversation")
+
+    def test_public_mutation_endpoints_removed(self):
+        client = self.app.test_client()
+        # Direct booking via public API should return 404 (removed)
+        book_res = client.post("/api/appointments/book", json={"customer_name": "Test", "doctor_id": 1})
+        self.assertEqual(book_res.status_code, 404, "Public /api/appointments/book endpoint must be removed")
+
+        # Direct listing via public API should return 404 (removed)
+        list_res = client.get("/api/appointments")
+        self.assertEqual(list_res.status_code, 404, "Public /api/appointments listing must be removed")
+
+        # Availability endpoint remains accessible
+class TestGeminiAndGroqToolCalling(unittest.TestCase):
+    """
+    Phase 3 validation:
+    - GeminiAdapter properly formats prior assistant tool_calls as function_call parts
+      and tool results as function_response parts in multi-turn history.
+    - Real adapters raise exceptions on provider errors rather than silently falling back to mock.
+    """
+
+    def test_gemini_history_reconstructs_function_call_and_response_parts(self):
+        from ai.llm_client import GeminiAdapter
+
+        messages = [
+            {"role": "user", "content": "Check slots for Dr. Ahmed on 2026-08-25"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"name": "check_availability", "arguments": {"doctor_id": 1, "date": "2026-08-25"}}]
+            },
+            {
+                "role": "tool",
+                "tool_name": "check_availability",
+                "content": json.dumps({"date": "2026-08-25", "results": []})
+            }
+        ]
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.candidates = [
+            MagicMock(content=MagicMock(parts=[
+                MagicMock(function_call=None, text="Here are your open slots.")
+            ]))
+        ]
+        mock_client.models.generate_content.return_value = mock_response
+
+        with patch("google.genai.Client", return_value=mock_client):
+            adapter = GeminiAdapter(api_key="fake-key")
+            resp = adapter.chat_completion(
+                system_prompt="System instructions",
+                messages=messages,
+                tools=CANONICAL_TOOLS
+            )
+
+            self.assertEqual(resp["content"], "Here are your open slots.")
+            self.assertTrue(mock_client.models.generate_content.called)
+            call_kwargs = mock_client.models.generate_content.call_args.kwargs
+            contents = call_kwargs["contents"]
+            self.assertEqual(len(contents), 3)
+
+            # Turn 1: user text
+            self.assertEqual(contents[0].role, "user")
+
+            # Turn 2: model function_call part
+            self.assertEqual(contents[1].role, "model")
+            self.assertTrue(len(contents[1].parts) > 0)
+            self.assertIsNotNone(contents[1].parts[0].function_call)
+            self.assertEqual(contents[1].parts[0].function_call.name, "check_availability")
+
+            # Turn 3: user function_response part
+            self.assertEqual(contents[2].role, "user")
+            self.assertTrue(len(contents[2].parts) > 0)
+            self.assertIsNotNone(contents[2].parts[0].function_response)
+            self.assertEqual(contents[2].parts[0].function_response.name, "check_availability")
+
+    def test_gemini_raises_on_api_error_without_mock_fallback(self):
+        from ai.llm_client import GeminiAdapter
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = RuntimeError("Gemini API Quota Exceeded")
+
+        with patch("google.genai.Client", return_value=mock_client):
+            adapter = GeminiAdapter(api_key="fake-key")
+            with self.assertRaises(RuntimeError):
+                adapter.chat_completion(
+                    system_prompt="System instructions",
+                    messages=[{"role": "user", "content": "Hi"}],
+                    tools=CANONICAL_TOOLS
+                )
+
+    def test_groq_raises_on_api_error_without_mock_fallback(self):
+        from ai.llm_client import GroqAdapter
+
+        mock_groq_client = MagicMock()
+        mock_groq_client.chat.completions.create.side_effect = RuntimeError("Groq Connection Error")
+
+        with patch("groq.Groq", return_value=mock_groq_client):
+            adapter = GroqAdapter(api_key="fake-key")
+            with self.assertRaises(RuntimeError):
+                adapter.chat_completion(
+                    system_prompt="System instructions",
+                    messages=[{"role": "user", "content": "Hi"}],
+                    tools=CANONICAL_TOOLS
+                )
+
+
+class TestConversationStateAndBookingValidation(BaseFixTest):
+    """
+    Phase 5 & 6 validation:
+    - Multi-turn booking with name and phone on separate turns preserves state.
+    - Server-side validation returns structured missing_fields.
+    - ToolDispatcher handles None arguments gracefully without uncaught exceptions.
+    """
+
+    def test_multi_turn_separate_name_and_phone_booking(self):
+        conv = Conversation(business_id=Config.DEFAULT_BUSINESS_ID, channel="web_chat", status="AI")
+        db.session.add(conv)
+        db.session.commit()
+
+        agent = Agent(business_id=Config.DEFAULT_BUSINESS_ID, llm_provider="mock")
+        monday = self._next_monday()
+
+        # Turn 1: Ask for appointment on Monday
+        res1 = agent.process_message(conv.id, f"I want an appointment with Dr. Ahmed on {monday}")
+        self.assertIn("10:00", res1["content"])
+
+        # Turn 2: Pick time "10:00"
+        res2 = agent.process_message(conv.id, "10:00")
+        self.assertIn("selected the 10:00 slot", res2["content"])
+        self.assertEqual(conv.requested_time, "10:00")
+
+        # Turn 3: User provides only name "Muhammad Haroon"
+        res3 = agent.process_message(conv.id, "Muhammad Haroon")
+        self.assertIn("phone number", res3["content"].lower())
+        self.assertEqual(conv.pending_customer_name, "Muhammad Haroon")
+        # Ensure no appointment was created yet
+        appts_count = Appointment.query.filter_by(business_id=Config.DEFAULT_BUSINESS_ID, appointment_date=monday).count()
+        self.assertEqual(appts_count, 0)
+
+        # Turn 4: User provides only phone number "03001234567"
+        res4 = agent.process_message(conv.id, "03001234567")
+        self.assertIn("confirmed", res4["content"].lower())
+        
+        # Verify DB appointment was created with correct name and phone
+        appt = Appointment.query.filter_by(business_id=Config.DEFAULT_BUSINESS_ID, appointment_date=monday, appointment_time="10:00").first()
+        self.assertIsNotNone(appt, "Appointment must be created in DB after name and phone provided")
+        self.assertEqual(appt.customer.name, "Muhammad Haroon")
+        self.assertEqual(appt.customer.phone, "03001234567")
+
+    def test_missing_fields_structured_response(self):
+        monday = self._next_monday()
+        # Missing customer_phone
+        res = BookingService.book_appointment(
+            business_id=Config.DEFAULT_BUSINESS_ID,
+            customer_name="John Doe",
+            customer_phone="",
+            doctor_id=1,
+            service_id=2,
+            appointment_date=monday,
+            appointment_time="10:00"
+        )
+        self.assertFalse(res["success"])
+        self.assertIn("missing_fields", res)
+        self.assertIn("customer_phone", res["missing_fields"])
+
+        # Missing multiple fields
+        res2 = BookingService.book_appointment(
+            business_id=Config.DEFAULT_BUSINESS_ID,
+            customer_name="",
+            customer_phone="",
+            doctor_id=None,
+            service_id=None,
+            appointment_date="",
+            appointment_time=""
+        )
+        self.assertFalse(res2["success"])
+        self.assertEqual(set(res2["missing_fields"]), {"customer_name", "customer_phone", "doctor_id", "service_id", "appointment_date", "appointment_time"})
+
+    def test_dispatcher_handles_none_arguments_gracefully(self):
+        dispatcher = ToolDispatcher(business_id=Config.DEFAULT_BUSINESS_ID, conversation_id=1)
+        res = dispatcher.execute("book_appointment", {
+            "customer_name": "Jane",
+            "customer_phone": None,
+            "doctor_id": None,
+            "service_id": None
+        })
+        self.assertFalse(res.get("success"))
+        self.assertIn("missing_fields", res)
+
+
+class TestIdempotencyAndReminderTimezone(BaseFixTest):
+    """
+    Phase 7 & 8 validation:
+    - Repeated booking submissions with same idempotency_key are handled gracefully.
+    - Reminder scheduling calculates 24H prior in clinic's timezone (Asia/Karachi) and stores in UTC.
+    """
+
+    def test_repeated_booking_with_same_idempotency_key_returns_existing(self):
+        monday = self._next_monday()
+        key = "idemp-test-key-999"
+
+        # First booking attempt
+        res1 = BookingService.book_appointment(
+            business_id=Config.DEFAULT_BUSINESS_ID,
+            customer_name="Idempotent Patient",
+            customer_phone="03009999999",
+            doctor_id=1,
+            service_id=2,
+            appointment_date=monday,
+            appointment_time="11:00",
+            idempotency_key=key
+        )
+        self.assertTrue(res1["success"])
+        appt_id = res1["appointment_id"]
+
+        # Second booking attempt with exact same key
+        res2 = BookingService.book_appointment(
+            business_id=Config.DEFAULT_BUSINESS_ID,
+            customer_name="Idempotent Patient",
+            customer_phone="03009999999",
+            doctor_id=1,
+            service_id=2,
+            appointment_date=monday,
+            appointment_time="11:00",
+            idempotency_key=key
+        )
+        self.assertTrue(res2["success"])
+        self.assertTrue(res2.get("is_duplicate_request"))
+        self.assertEqual(res2["appointment"]["id"], appt_id)
+
+        # Confirm only 1 appointment row was persisted
+        count = Appointment.query.filter_by(idempotency_key=key).count()
+        self.assertEqual(count, 1)
+
+    def test_reminder_scheduled_in_utc_matching_business_timezone(self):
+        from zoneinfo import ZoneInfo
+        from datetime import timezone
+        from services.reminder_service import ReminderService
+
+        monday = self._next_monday()
+        res = BookingService.book_appointment(
+            business_id=Config.DEFAULT_BUSINESS_ID,
+            customer_name="Timezone Patient",
+            customer_phone="03008888888",
+            doctor_id=1,
+            service_id=2,
+            appointment_date=monday,
+            appointment_time="09:00"
+        )
+        self.assertTrue(res["success"])
+        appt = db.session.get(Appointment, res["appointment_id"])
+        self.assertEqual(len(appt.reminders), 1)
+
+        reminder = appt.reminders[0]
+        # In Asia/Karachi (UTC+5), an appointment at 09:00 corresponds to 04:00 UTC on the same day.
+        # The 24-hours-before reminder must be 04:00 UTC on the preceding day.
+        appt_date_obj = datetime.strptime(monday, "%Y-%m-%d")
+        expected_reminder_date = appt_date_obj - timedelta(days=1)
+        expected_reminder_utc = datetime(
+            expected_reminder_date.year,
+            expected_reminder_date.month,
+            expected_reminder_date.day,
+            4, 0, 0,
+            tzinfo=timezone.utc
+        )
+
+        # Compare naive/aware UTC datetimes
+        rem_dt = reminder.scheduled_for
+        if rem_dt.tzinfo is None:
+            rem_dt = rem_dt.replace(tzinfo=timezone.utc)
+        self.assertEqual(rem_dt, expected_reminder_utc,
+                         f"Scheduled reminder {rem_dt} must match 24h prior in UTC {expected_reminder_utc}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+

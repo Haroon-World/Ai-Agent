@@ -7,6 +7,7 @@ class Conversation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     business_id = db.Column(db.Integer, db.ForeignKey("businesses.id"), nullable=False, index=True)
     customer_id = db.Column(db.Integer, db.ForeignKey("customers.id"), nullable=True, index=True)
+    visitor_id = db.Column(db.String(100), nullable=True, index=True) # Server-issued signed session/visitor ID
     channel = db.Column(db.String(50), nullable=False, default="web_chat")
     status = db.Column(db.String(30), nullable=False, default="AI") # AI, HUMAN, CLOSED
     
@@ -17,6 +18,8 @@ class Conversation(db.Model):
     selected_doctor_id = db.Column(db.Integer, nullable=True)
     requested_date = db.Column(db.String(20), nullable=True)
     requested_time = db.Column(db.String(10), nullable=True)
+    pending_customer_name = db.Column(db.String(100), nullable=True)
+    pending_customer_phone = db.Column(db.String(50), nullable=True)
     handoff_reason = db.Column(db.Text, nullable=True)
     
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -30,8 +33,9 @@ class Conversation(db.Model):
             "id": self.id,
             "business_id": self.business_id,
             "customer_id": self.customer_id,
-            "customer_name": self.customer.name if self.customer else "Guest Visitor",
-            "customer_phone": self.customer.phone if self.customer else None,
+            "customer_name": self.customer.name if self.customer else (self.pending_customer_name or "Guest Visitor"),
+            "customer_phone": self.customer.phone if self.customer else self.pending_customer_phone,
+            "visitor_id": self.visitor_id,
             "channel": self.channel,
             "status": self.status,
             "intent": self.intent,
@@ -40,6 +44,8 @@ class Conversation(db.Model):
             "selected_doctor_id": self.selected_doctor_id,
             "requested_date": self.requested_date,
             "requested_time": self.requested_time,
+            "pending_customer_name": self.pending_customer_name,
+            "pending_customer_phone": self.pending_customer_phone,
             "handoff_reason": self.handoff_reason,
             "message_count": len(self.messages),
             "last_message": self.messages[-1].content if self.messages else None,

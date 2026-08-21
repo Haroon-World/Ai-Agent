@@ -193,12 +193,23 @@ class ToolDispatcher:
                 )
 
             elif tool_name == "book_appointment":
+                doc_id_raw = arguments.get("doctor_id")
+                svc_id_raw = arguments.get("service_id")
+                try:
+                    parsed_doc_id = int(doc_id_raw) if doc_id_raw is not None else None
+                except (ValueError, TypeError):
+                    parsed_doc_id = None
+                try:
+                    parsed_svc_id = int(svc_id_raw) if svc_id_raw is not None else None
+                except (ValueError, TypeError):
+                    parsed_svc_id = None
+
                 return BookingService.book_appointment(
                     business_id=self.business_id,
                     customer_name=arguments.get("customer_name", ""),
                     customer_phone=arguments.get("customer_phone", ""),
-                    doctor_id=int(arguments.get("doctor_id")),
-                    service_id=int(arguments.get("service_id")),
+                    doctor_id=parsed_doc_id,
+                    service_id=parsed_svc_id,
                     appointment_date=arguments.get("appointment_date", ""),
                     appointment_time=arguments.get("appointment_time", ""),
                     notes=arguments.get("notes"),
@@ -206,16 +217,30 @@ class ToolDispatcher:
                 )
 
             elif tool_name == "cancel_appointment":
+                appt_id_raw = arguments.get("appointment_id")
+                try:
+                    parsed_appt_id = int(appt_id_raw) if appt_id_raw is not None else None
+                except (ValueError, TypeError):
+                    parsed_appt_id = None
+                if not parsed_appt_id:
+                    return {"success": False, "error": "Valid appointment_id is required."}
                 return BookingService.cancel_appointment(
                     business_id=self.business_id,
-                    appointment_id=int(arguments.get("appointment_id")),
+                    appointment_id=parsed_appt_id,
                     reason=arguments.get("reason")
                 )
 
             elif tool_name == "reschedule_appointment":
+                appt_id_raw = arguments.get("appointment_id")
+                try:
+                    parsed_appt_id = int(appt_id_raw) if appt_id_raw is not None else None
+                except (ValueError, TypeError):
+                    parsed_appt_id = None
+                if not parsed_appt_id:
+                    return {"success": False, "error": "Valid appointment_id is required."}
                 return BookingService.reschedule_appointment(
                     business_id=self.business_id,
-                    appointment_id=int(arguments.get("appointment_id")),
+                    appointment_id=parsed_appt_id,
                     new_date=arguments.get("new_date", ""),
                     new_time=arguments.get("new_time", "")
                 )

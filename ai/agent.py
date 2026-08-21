@@ -5,7 +5,8 @@ from typing import Dict, Any, List, Optional
 from models import db, Conversation, Message, Customer, Doctor, Service
 from ai.tools import CANONICAL_TOOLS, ToolDispatcher
 from ai.prompts import build_system_prompt
-from ai.llm_client import LLMClient
+from ai.llm_client import LLMClient, _extract_name
+
 
 
 def _is_question_query(text: str) -> bool:
@@ -113,6 +114,8 @@ def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
         "selected_service_name": svc_name,
         "requested_date": conv.requested_date,
         "requested_time": conv.requested_time,
+        "pending_customer_name": conv.pending_customer_name,
+        "pending_customer_phone": conv.pending_customer_phone,
         "customer_id": conv.customer_id,
         "channel": conv.channel or "web_chat",
         "business_id": conv.business_id,
@@ -162,6 +165,8 @@ def _build_state_context(conv: Conversation) -> str:
 
     lines.append(f"Requested Date : {conv.requested_date or '(not yet set)'}")
     lines.append(f"Requested Time : {conv.requested_time or '(not yet set)'}")
+    lines.append(f"Customer Name  : {conv.pending_customer_name or '(not yet provided)'}")
+    lines.append(f"Customer Phone : {conv.pending_customer_phone or '(not yet provided)'}")
     lines.append(f"Channel        : {conv.channel or 'web_chat'}")
     lines.append("")
     lines.append(
@@ -169,6 +174,7 @@ def _build_state_context(conv: Conversation) -> str:
         "If the customer provides a time (e.g. '9:30') and a date is already set in context, "
         "proceed directly to booking without asking for the date again. "
         "If a doctor is already selected, remember that selection. "
+        "If customer name or phone is already provided in context, do not ask for it again. "
         "Never lose information that is already stored in context."
     )
     return "\n".join(lines)
@@ -209,7 +215,7 @@ class Agent:
         all_offered = state_dict.get("all_offered_slots", [])
 
         # If conversation is checking availability and user supplies a non-question time selection, capture it
-        if conv.workflow_state == "CHECKING_AVAILABILITY" and user_content:
+        if conv.workflow_state in ["CHECKING_AVAILABILITY", "COLLECTING_INFO"] and user_content:
             if not _is_question_query(user_content):
                 time_token = _extract_time_token(user_content)
                 # Only set if time_token is an offered slot or if no offered list exists yet
@@ -217,6 +223,22 @@ class Agent:
                     conv.requested_time = time_token
                     db.session.flush()
                     state_dict["requested_time"] = time_token
+
+        # Capture phone number if present in user message
+        phone_match = re.search(r'\b(03\d{2}[- ]?\d{7}|\+92\d{10}|03\d{9})\b', user_content)
+        if phone_match:
+            clean_phone = phone_match.group(1).replace(" ", "").replace("-", "")
+            conv.pending_customer_phone = clean_phone
+            db.session.flush()
+            state_dict["pending_customer_phone"] = clean_phone
+
+        # Capture customer name if present in user message
+        cand_name = _extract_name(user_content)
+        if cand_name and not _is_question_query(user_content):
+            conv.pending_customer_name = cand_name
+            db.session.flush()
+            state_dict["pending_customer_name"] = cand_name
+
 
         # Build dynamic system prompt from business DB data
         system_prompt = build_system_prompt(self.business_id)
@@ -261,9 +283,10 @@ class Agent:
         executed_tools = []
         tool_results = []
 
-        # Tool execution loop (max 3 iterations to prevent infinite loops)
-        max_tool_iterations = 3
+        # Tool execution loop (max 5 iterations to prevent infinite loops)
+        max_tool_iterations = 5
         iteration = 0
+
 
         while response.get("tool_calls") and iteration < max_tool_iterations:
             iteration += 1

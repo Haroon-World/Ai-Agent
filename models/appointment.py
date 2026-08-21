@@ -23,8 +23,18 @@ class Appointment(db.Model):
     reminders = db.relationship("Reminder", backref="appointment", lazy=True, cascade="all, delete-orphan")
 
     __table_args__ = (
-        db.UniqueConstraint("business_id", "doctor_id", "appointment_date", "appointment_time", name="uq_doctor_appointment_slot"),
+        db.Index(
+            "uq_confirmed_doctor_appointment_slot",
+            "business_id",
+            "doctor_id",
+            "appointment_date",
+            "appointment_time",
+            unique=True,
+            sqlite_where=db.text("status = 'CONFIRMED'"),
+            postgresql_where=db.text("status = 'CONFIRMED'")
+        ),
     )
+
 
     def to_dict(self):
         return {

@@ -49,19 +49,24 @@ def _extract_time_str(text: str) -> Optional[str]:
     return None
 
 
-def _extract_name(text: str) -> str:
+def _extract_name(text: str) -> Optional[str]:
     """Extract person name from customer booking text."""
+    if not text:
+        return None
     m = re.search(r'(?:my\s+name\s+is\s+|name\s+is\s+|i\s+am\s+|name\s*:\s*|for\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', text, re.IGNORECASE)
     if m:
         raw = m.group(1)
-        name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b', raw, flags=re.IGNORECASE)[0].strip()
-        if name and name.lower() not in ["patient", "a", "the", "an"]:
+        name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b|\bdate\b', raw, flags=re.IGNORECASE)[0].strip()
+        if name and name.lower() not in ["patient", "a", "the", "an", "cleaning", "checkup", "appointment", "doctor", "dr", "tomorrow", "today"]:
             return name.title()
-    for part in text.split():
-        clean = re.sub(r'[^a-zA-Z]', '', part)
-        if clean and clean.lower() not in ["hi", "hello", "my", "name", "is", "please", "book", "at", "on", "for", "pm", "am", "phone", "slot", "the", "take", "ill", "i", "will"]:
-            return clean.capitalize()
-    return "Patient"
+    # Check if the entire text consists of a person's name (1-4 alphabetic words)
+    words = text.strip().split()
+    if 1 <= len(words) <= 4 and all(w.replace(".", "").replace("-", "").isalpha() for w in words):
+        lower_txt = text.strip().lower()
+        if lower_txt not in ["yes", "no", "ok", "okay", "sure", "thanks", "thank you", "cancel", "help", "hello", "hi", "hey", "booking", "appointment", "checkup", "cleaning", "dentist", "doctor"]:
+            return text.strip().title()
+    return None
+
 
 
 class BaseLLMAdapter:
@@ -194,6 +199,14 @@ class MockAdapter(BaseLLMAdapter):
         date_match = re.search(r'(\d{4}-\d{2}-\d{2})', user_text)
         is_question = _is_question_query(user_text)
 
+        # Name extraction & state resolution
+        pending_name = conv_state.get("pending_customer_name")
+        pending_phone = conv_state.get("pending_customer_phone")
+        cand_name = _extract_name(user_text)
+        effective_name = cand_name or pending_name
+        effective_phone = (phone_match.group(1).replace(" ", "").replace("-", "") if phone_match else None) or pending_phone
+
+
         from datetime import date, timedelta
         if date_match:
             target_date_str = date_match.group(1)
@@ -205,6 +218,7 @@ class MockAdapter(BaseLLMAdapter):
             target_date_str = req_date
         else:
             target_date_str = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+
 
         # Doctor / service overrides from text
         if "sara" in user_text:
@@ -308,8 +322,8 @@ class MockAdapter(BaseLLMAdapter):
                     }]
                 }
 
-        # Case B: User provides a bare time token (NOT a question) while in booking context without a phone number yet
-        if not is_question and time_token and not phone_match:
+        # Case B: User provides a bare time token (NOT a question) while in booking context without name/phone yet
+        if not is_question and time_token and not phone_match and not cand_name:
             # Validate whether the time_token was actually offered in available_slots
             if doc_slots and time_token not in doc_slots:
                 slots_preview = ", ".join(doc_slots[:4]) if doc_slots else "no open slots"
@@ -324,18 +338,16 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": []
             }
 
-        # Case C: User provides phone number (and name) to complete booking
-        if phone_match and (time_token or req_time or "10:00" in user_text or "10 am" in user_text or "11:00" in user_text or "02:00" in user_text or "2 pm" in user_text or "9:30" in user_text or "9.30" in user_text):
+        # Case C: Both name and phone are available (either from current turn or pending state) -> proceed to book
+        if (effective_phone and effective_name) and (time_token or req_time or "10:00" in user_text or "10 am" in user_text or "11:00" in user_text or "02:00" in user_text or "2 pm" in user_text or "9:30" in user_text or "9.30" in user_text):
             chosen_time = time_token or req_time or ("10:00" if "10" in user_text else (doc_slots[0] if doc_slots else "09:00"))
-            clean_phone = phone_match.group(1).replace(" ", "").replace("-", "")
-            name = _extract_name(user_text)
             return {
                 "content": f"Booking your appointment with {doc_name} for {effective_date} at {chosen_time}...",
                 "tool_calls": [{
                     "name": "book_appointment",
                     "arguments": {
-                        "customer_name": name,
-                        "customer_phone": clean_phone,
+                        "customer_name": effective_name,
+                        "customer_phone": effective_phone,
                         "doctor_id": doc_id,
                         "service_id": svc_id,
                         "appointment_date": effective_date,
@@ -343,6 +355,20 @@ class MockAdapter(BaseLLMAdapter):
                         "notes": "Booked via AI Assistant"
                     }
                 }]
+            }
+
+        # Case D: Name provided but phone still missing in booking context -> ask specifically for phone
+        if effective_name and not effective_phone and (req_time or time_token or workflow_state in ["CHECKING_AVAILABILITY", "COLLECTING_INFO"]):
+            return {
+                "content": f"Thank you, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
+                "tool_calls": []
+            }
+
+        # Case E: Phone provided but name still missing in booking context -> ask specifically for name
+        if effective_phone and not effective_name and (req_time or time_token or workflow_state in ["CHECKING_AVAILABILITY", "COLLECTING_INFO"]):
+            return {
+                "content": "Thank you. Please provide your full name to complete and confirm your booking.",
+                "tool_calls": []
             }
 
         # 5. Doctor Inquiry
@@ -400,9 +426,12 @@ class MockAdapter(BaseLLMAdapter):
 
 class GeminiAdapter(BaseLLMAdapter):
     """Google Gemini Provider Adapter with structured function declarations."""
-    def __init__(self, api_key: str, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str, model_name: str = "gemini-3.5-flash-lite"):
         self.api_key = api_key
         self.model_name = model_name
+
+
+
 
     def _translate_tools_to_gemini(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         declarations = []
@@ -422,67 +451,113 @@ class GeminiAdapter(BaseLLMAdapter):
         tools: List[Dict[str, Any]],
         conversation_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        try:
-            from google import genai
-            from google.genai import types
+        from google import genai
+        from google.genai import types
 
-            client = genai.Client(api_key=self.api_key)
-            
-            # Format messages for Gemini
-            contents = []
-            for m in messages:
-                role = "user" if m["role"] in ["user", "system"] else "model"
-                if m["role"] == "tool":
-                    # Tool response part
-                    contents.append(types.Content(
-                        role="user",
-                        parts=[types.Part.from_function_response(
-                            name=m.get("tool_name", "tool"),
-                            response={"result": m["content"]}
-                        )]
+        client = genai.Client(api_key=self.api_key)
+        
+        # Format messages for Gemini with proper multi-turn function calling history
+        contents = []
+        for m in messages:
+            role = m.get("role")
+            if role == "assistant" and m.get("tool_calls"):
+                parts = []
+                for tc in m["tool_calls"]:
+                    ts_bytes = None
+                    if tc.get("thought_signature"):
+                        try:
+                            ts_bytes = bytes.fromhex(tc["thought_signature"])
+                        except Exception:
+                            ts_bytes = None
+                    parts.append(types.Part(
+                        function_call=types.FunctionCall(
+                            name=tc["name"],
+                            args=tc.get("arguments", {}),
+                            id=tc.get("id")
+                        ),
+                        thought_signature=ts_bytes
                     ))
+                contents.append(types.Content(role="model", parts=parts))
+            elif role == "tool":
+                tool_content = m.get("content", "")
+                if isinstance(tool_content, str):
+                    try:
+                        parsed_resp = json.loads(tool_content)
+                    except Exception:
+                        parsed_resp = {"result": tool_content}
+                elif isinstance(tool_content, dict):
+                    parsed_resp = tool_content
                 else:
-                    contents.append(types.Content(
-                        role=role,
-                        parts=[types.Part.from_text(text=m["content"])]
-                    ))
+                    parsed_resp = {"result": str(tool_content)}
 
-            gemini_tools = self._translate_tools_to_gemini(tools)
-            config = types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                tools=gemini_tools,
-                temperature=0.2
-            )
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_function_response(
+                        name=m.get("tool_name", "tool"),
+                        response=parsed_resp
+                    )]
+                ))
+            else:
+                gemini_role = "user" if role in ["user", "system"] else "model"
+                contents.append(types.Content(
+                    role=gemini_role,
+                    parts=[types.Part.from_text(text=m.get("content") or "")]
+                ))
 
-            response = client.models.generate_content(
-                model=self.model_name,
-                contents=contents,
-                config=config
-            )
+        gemini_tools = self._translate_tools_to_gemini(tools)
+        config = types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            tools=gemini_tools,
+            temperature=0.2
+        )
 
-            # Check for tool calls
-            tool_calls = []
-            text_content = ""
-            if response.candidates and response.candidates[0].content.parts:
-                for part in response.candidates[0].content.parts:
-                    if part.function_call:
-                        tool_calls.append({
-                            "name": part.function_call.name,
-                            "arguments": dict(part.function_call.args) if part.function_call.args else {}
-                        })
-                    if part.text:
-                        text_content += part.text
+        import time
+        max_retries = 3
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=self.model_name,
+                    contents=contents,
+                    config=config
+                )
+                break
+            except Exception as e:
+                err_str = str(e)
+                if ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str) and attempt < max_retries - 1:
+                    match = re.search(r'retry in (\d+(?:\.\d+)?)s', err_str, re.IGNORECASE)
+                    wait_sec = float(match.group(1)) + 2.0 if match else 35.0
+                    print(f"[GeminiAdapter Rate-Limit 429]: Waiting {wait_sec:.1f}s before retry {attempt + 1}/{max_retries}...")
+                    time.sleep(wait_sec)
+                else:
+                    raise e
 
-            return {
-                "content": text_content.strip(),
-                "tool_calls": tool_calls
-            }
 
-        except Exception as e:
-            print(f"[GeminiAdapter Error]: {e}")
-            # Fallback to MockAdapter on API error so flow does not crash
-            mock = MockAdapter()
-            return mock.chat_completion(system_prompt, messages, tools, conversation_state=conversation_state)
+        # Check for tool calls
+        tool_calls = []
+        text_content = ""
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if part.function_call:
+                    ts_hex = (
+                        part.thought_signature.hex()
+                        if getattr(part, "thought_signature", None)
+                        else None
+                    )
+                    tool_calls.append({
+                        "id": getattr(part.function_call, "id", None) or f"call_{len(tool_calls)}",
+                        "name": part.function_call.name,
+                        "arguments": dict(part.function_call.args) if part.function_call.args else {},
+                        "thought_signature": ts_hex
+                    })
+                if part.text:
+                    text_content += part.text
+
+
+        return {
+            "content": text_content.strip(),
+            "tool_calls": tool_calls
+        }
 
 
 class GroqAdapter(BaseLLMAdapter):
@@ -511,78 +586,74 @@ class GroqAdapter(BaseLLMAdapter):
         tools: List[Dict[str, Any]],
         conversation_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        try:
-            from groq import Groq
-            client = Groq(api_key=self.api_key)
+        from groq import Groq
+        client = Groq(api_key=self.api_key)
 
-            formatted_messages = [{"role": "system", "content": system_prompt}]
-            for i, m in enumerate(messages):
-                role = m.get("role")
-                if role == "assistant" and m.get("tool_calls"):
-                    groq_tool_calls = []
-                    for tc in m["tool_calls"]:
-                        groq_tool_calls.append({
-                            "id": tc.get("id", f"call_{i}"),
-                            "type": "function",
-                            "function": {
-                                "name": tc.get("name", ""),
-                                "arguments": json.dumps(tc.get("arguments", {}))
-                            }
-                        })
-                    formatted_messages.append({
-                        "role": "assistant",
-                        "content": m.get("content") or "",
-                        "tool_calls": groq_tool_calls
+        formatted_messages = [{"role": "system", "content": system_prompt}]
+        for i, m in enumerate(messages):
+            role = m.get("role")
+            if role == "assistant" and m.get("tool_calls"):
+                groq_tool_calls = []
+                for tc in m["tool_calls"]:
+                    groq_tool_calls.append({
+                        "id": tc.get("id", f"call_{i}"),
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("name", ""),
+                            "arguments": json.dumps(tc.get("arguments", {}))
+                        }
                     })
-                elif role == "tool":
-                    tool_call_id = m.get("tool_call_id") or f"call_{i}"
-                    formatted_messages.append({
-                        "role": "tool",
-                        "content": (
-                            json.dumps(m["content"])
-                            if isinstance(m["content"], dict)
-                            else str(m["content"])
-                        ),
-                        "tool_call_id": tool_call_id
-                    })
-                else:
-                    formatted_messages.append({
-                        "role": role,
-                        "content": m.get("content", "")
-                    })
+                formatted_messages.append({
+                    "role": "assistant",
+                    "content": m.get("content") or "",
+                    "tool_calls": groq_tool_calls
+                })
+            elif role == "tool":
+                tool_call_id = m.get("tool_call_id") or f"call_{i}"
+                formatted_messages.append({
+                    "role": "tool",
+                    "content": (
+                        json.dumps(m["content"])
+                        if isinstance(m["content"], dict)
+                        else str(m["content"])
+                    ),
+                    "tool_call_id": tool_call_id
+                })
+            else:
+                formatted_messages.append({
+                    "role": role,
+                    "content": m.get("content", "")
+                })
 
-            groq_tools = self._translate_tools_to_groq(tools)
-            response = client.chat.completions.create(
-                model=self.model_name,
-                messages=formatted_messages,
-                tools=groq_tools,
-                tool_choice="auto",
-                temperature=0.2
-            )
+        groq_tools = self._translate_tools_to_groq(tools)
+        response = client.chat.completions.create(
+            model=self.model_name,
+            messages=formatted_messages,
+            tools=groq_tools,
+            tool_choice="auto",
+            temperature=0.2
+        )
 
-            choice = response.choices[0].message
-            tool_calls = []
-            if choice.tool_calls:
-                for tc in choice.tool_calls:
-                    args = {}
-                    try:
-                        args = json.loads(tc.function.arguments)
-                    except Exception:
-                        pass
-                    tool_calls.append({
-                        "id": tc.id,
-                        "name": tc.function.name,
-                        "arguments": args
-                    })
+        choice = response.choices[0].message
+        tool_calls = []
+        if choice.tool_calls:
+            for tc in choice.tool_calls:
+                args = {}
+                try:
+                    args = json.loads(tc.function.arguments)
+                except Exception:
+                    pass
+                tool_calls.append({
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": args
+                })
 
-            return {
-                "content": choice.content or "",
-                "tool_calls": tool_calls
-            }
-        except Exception as e:
-            print(f"[GroqAdapter Error]: {e}")
-            mock = MockAdapter()
-            return mock.chat_completion(system_prompt, messages, tools, conversation_state=conversation_state)
+        return {
+            "content": choice.content or "",
+            "tool_calls": tool_calls
+        }
+
 
 
 class LLMClient:

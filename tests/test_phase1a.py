@@ -167,5 +167,89 @@ class TestPhase1ADatabase(unittest.TestCase):
                 db.session.commit()
             db.session.rollback()
 
+    def test_cancelled_appointment_slot_can_be_rebooked(self):
+        """
+        Phase 1 Regression:
+        Verify that cancelling an appointment allows another customer to book the same slot,
+        while two concurrent CONFIRMED bookings for the same slot are still prevented.
+        """
+        with self.app.app_context():
+            biz = Business(name="Clinic B", business_type="dental_clinic", address="Address B", phone="456", opening_hours="Mon-Fri 9-5")
+            db.session.add(biz)
+            db.session.commit()
+
+            doc = Doctor(business_id=biz.id, name="Dr. B", specialization="Dentist")
+            svc = Service(business_id=biz.id, name="Checkup", duration=30, price=1000)
+            c1 = Customer(business_id=biz.id, name="Cust 1", phone="111")
+            c2 = Customer(business_id=biz.id, name="Cust 2", phone="222")
+            c3 = Customer(business_id=biz.id, name="Cust 3", phone="333")
+            db.session.add_all([doc, svc, c1, c2, c3])
+            db.session.commit()
+
+            # 1. Customer 1 books 09:00 (CONFIRMED)
+            appt1 = Appointment(
+                business_id=biz.id,
+                customer_id=c1.id,
+                doctor_id=doc.id,
+                service_id=svc.id,
+                appointment_date="2026-08-25",
+                appointment_time="09:00",
+                status="CONFIRMED"
+            )
+            db.session.add(appt1)
+            db.session.commit()
+
+            # 2. Customer 2 tries to book 09:00 while appt1 is CONFIRMED -> must fail
+            appt2 = Appointment(
+                business_id=biz.id,
+                customer_id=c2.id,
+                doctor_id=doc.id,
+                service_id=svc.id,
+                appointment_date="2026-08-25",
+                appointment_time="09:00",
+                status="CONFIRMED"
+            )
+            db.session.add(appt2)
+            with self.assertRaises(IntegrityError):
+                db.session.commit()
+            db.session.rollback()
+
+            # 3. Customer 1 cancels their appointment
+            appt1_db = db.session.get(Appointment, appt1.id)
+            appt1_db.status = "CANCELLED"
+            db.session.commit()
+
+            # 4. Customer 2 now books 09:00 -> must succeed
+            appt2_retry = Appointment(
+                business_id=biz.id,
+                customer_id=c2.id,
+                doctor_id=doc.id,
+                service_id=svc.id,
+                appointment_date="2026-08-25",
+                appointment_time="09:00",
+                status="CONFIRMED"
+            )
+            db.session.add(appt2_retry)
+            db.session.commit()
+            self.assertIsNotNone(appt2_retry.id)
+            self.assertEqual(appt2_retry.status, "CONFIRMED")
+
+            # 5. Customer 3 tries to book 09:00 while appt2 is CONFIRMED -> must fail again
+            appt3 = Appointment(
+                business_id=biz.id,
+                customer_id=c3.id,
+                doctor_id=doc.id,
+                service_id=svc.id,
+                appointment_date="2026-08-25",
+                appointment_time="09:00",
+                status="CONFIRMED"
+            )
+            db.session.add(appt3)
+            with self.assertRaises(IntegrityError):
+                db.session.commit()
+            db.session.rollback()
+
+
 if __name__ == "__main__":
     unittest.main()
+

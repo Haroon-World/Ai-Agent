@@ -178,13 +178,33 @@ class BookingService:
         - DB-level unique constraint as final safety net
         - Automatic reminder scheduling
         """
-        # --- Basic input validation ---
-        if not customer_name or not customer_name.strip():
-            return {"success": False, "error": "Customer name is required."}
-        if not customer_phone or not customer_phone.strip():
-            return {"success": False, "error": "Customer phone number is required."}
-        if not doctor_id or not service_id or not appointment_date or not appointment_time:
-            return {"success": False, "error": "Doctor, service, date, and time are required."}
+        # --- Basic input validation with structured missing_fields ---
+        missing_fields = []
+        name_str = str(customer_name).strip() if customer_name else ""
+        if not name_str or name_str.lower() in ["valued patient", "patient", "customer", "user", "anonymous", "guest", "test", "n/a", "none"]:
+            missing_fields.append("customer_name")
+
+        phone_str = str(customer_phone).strip() if customer_phone else ""
+        if not phone_str or phone_str.replace("0", "").replace("+", "").replace("-", "").replace(" ", "") == "":
+            missing_fields.append("customer_phone")
+
+        if not doctor_id:
+            missing_fields.append("doctor_id")
+        if not service_id:
+            missing_fields.append("service_id")
+        if not appointment_date or not str(appointment_date).strip():
+            missing_fields.append("appointment_date")
+        if not appointment_time or not str(appointment_time).strip():
+            missing_fields.append("appointment_time")
+
+
+        if missing_fields:
+            return {
+                "success": False,
+                "error": f"Missing required booking fields: {', '.join(missing_fields)}",
+                "missing_fields": missing_fields
+            }
+
 
         # --- Idempotency guard ---
         if idempotency_key:
