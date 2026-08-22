@@ -34,6 +34,9 @@ class Config:
     # STT (Speech-to-Text) Settings
     STT_PROVIDER = os.getenv("STT_PROVIDER", "mock").lower()
     GROQ_STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3")
+    TTS_PROVIDER = os.getenv("TTS_PROVIDER", "mock").lower()
+    GROQ_TTS_MODEL = os.getenv("GROQ_TTS_MODEL", "playai-tts")
+    GROQ_TTS_VOICE = os.getenv("GROQ_TTS_VOICE", "Fritz-PlayAI")
     
     # Multi-tenant Defaults
     DEFAULT_BUSINESS_ID = int(os.getenv("DEFAULT_BUSINESS_ID", "1"))

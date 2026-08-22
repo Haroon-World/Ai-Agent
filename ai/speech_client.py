@@ -86,3 +86,89 @@ class STTClient:
 
     def transcribe(self, audio_bytes: bytes, mime_type: str = "audio/webm") -> str:
         return self.adapter.transcribe(audio_bytes, mime_type=mime_type)
+
+
+class BaseTTSAdapter(ABC):
+    @abstractmethod
+    def synthesize(self, text: str) -> bytes:
+        """Convert text into raw audio bytes (a playable audio file)."""
+        pass
+
+
+class MockTTSAdapter(BaseTTSAdapter):
+    """Deterministic Text-to-Speech adapter for local development and
+    testing without an API key. Returns a tiny valid (silent) WAV file so
+    the response shape and frontend playback path can be exercised without
+    ever making a real network call."""
+
+    # A minimal valid WAV header for a near-empty silent clip (44 bytes,
+    # 8kHz mono, no samples) — enough for any audio player to accept it
+    # as a real file rather than producing a decode error.
+    _SILENT_WAV = (
+        b"RIFF" + (36).to_bytes(4, "little") + b"WAVE"
+        + b"fmt " + (16).to_bytes(4, "little")
+        + (1).to_bytes(2, "little")      # PCM
+        + (1).to_bytes(2, "little")      # mono
+        + (8000).to_bytes(4, "little")   # sample rate
+        + (8000).to_bytes(4, "little")   # byte rate
+        + (1).to_bytes(2, "little")      # block align
+        + (8).to_bytes(2, "little")      # bits per sample
+        + b"data" + (0).to_bytes(4, "little")
+    )
+
+    def synthesize(self, text: str) -> bytes:
+        if not text or not text.strip():
+            raise ValueError("Text is required for speech synthesis")
+        return self._SILENT_WAV
+
+
+class GroqTTSAdapter(BaseTTSAdapter):
+    """Text-to-Speech adapter using Groq's PlayAI TTS endpoint."""
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, voice: Optional[str] = None):
+        self.api_key = api_key or Config.GROQ_API_KEY
+        self.model = model or getattr(Config, "GROQ_TTS_MODEL", "playai-tts")
+        self.voice = voice or getattr(Config, "GROQ_TTS_VOICE", "Fritz-PlayAI")
+
+    def synthesize(self, text: str) -> bytes:
+        if not text or not text.strip():
+            raise ValueError("Text is required for speech synthesis")
+        if not self.api_key:
+            raise ValueError("GROQ_API_KEY is not configured for GroqTTSAdapter")
+
+        # Groq's TTS input has a length ceiling; truncate very long replies
+        # rather than failing the whole request outright.
+        clean_text = text.strip()[:2000]
+
+        try:
+            from groq import Groq
+            client = Groq(api_key=self.api_key)
+
+            response = client.audio.speech.create(
+                model=self.model,
+                voice=self.voice,
+                input=clean_text,
+                response_format="wav"
+            )
+
+            if hasattr(response, "read"):
+                return response.read()
+            if hasattr(response, "content"):
+                return response.content
+            return bytes(response)
+
+        except Exception as e:
+            logger.error(f"Groq TTS Error: {str(e)}")
+            raise RuntimeError(f"Groq TTS failed: {str(e)}")
+
+
+class TTSClient:
+    """Factory client for Text-to-Speech provider selection."""
+    def __init__(self, tts_provider: Optional[str] = None):
+        self.tts_provider = (tts_provider or getattr(Config, "TTS_PROVIDER", "mock") or "mock").lower()
+        if self.tts_provider == "groq":
+            self.adapter = GroqTTSAdapter()
+        else:
+            self.adapter = MockTTSAdapter()
+
+    def synthesize(self, text: str) -> bytes:
+        return self.adapter.synthesize(text)

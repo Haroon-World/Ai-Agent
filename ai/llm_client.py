@@ -1,9 +1,81 @@
 import os
 import json
 import re
+import difflib
 from typing import List, Dict, Any, Optional, Tuple
 from config.config import Config
 from ai.tools import CANONICAL_TOOLS
+
+
+_NAME_PREFIX_RE = re.compile(r'^\s*(dr\.?|doctor)\s+', re.IGNORECASE)
+
+# Generic words that appear across many roster entries (e.g. "Dental Checkup",
+# "Dental Cleaning", "Dental Braces" all share "dental") and so must never be
+# treated as a strong/distinctive match signal on their own — otherwise the
+# first roster entry containing the shared word wins by coincidence of
+# iteration order rather than actually matching what the user said.
+_GENERIC_MATCH_STOPWORDS = {
+    "dental", "and", "the", "for", "with", "clinic", "care", "treatment",
+    "services", "service", "appointment", "consultation", "dr", "doctor"
+}
+
+
+def _fuzzy_match_roster(user_text: str, roster: List[Dict[str, Any]], threshold: float = 0.6) -> Optional[Dict[str, Any]]:
+    """
+    Match a user's free-text reply against a real DB roster (doctors or
+    services) instead of a hardcoded keyword list, so spelling variants,
+    typos, and "dr"/"doctor" prefixes still resolve correctly (e.g.
+    "dr ahmad" -> "Dr. Ahmed Khan", "sara" -> "Dr. Sara Malik").
+
+    Strategy: for each roster entry, compare the user text against the
+    full name and against each DISTINCTIVE word in the name (generic words
+    shared across many entries, like "dental" or "consultation", are
+    excluded so they can't win a match by coincidence), using difflib's
+    sequence-matching ratio for near-misses and substring containment for
+    strong direct hits. Returns the best entry above `threshold`, or None.
+    """
+    if not user_text or not roster:
+        return None
+
+    cleaned = _NAME_PREFIX_RE.sub('', user_text.strip().lower())
+    if not cleaned:
+        return None
+
+    best_entry = None
+    best_score = 0.0
+
+    for entry in roster:
+        name = entry.get("name", "")
+        if not name:
+            continue
+        name_lower = name.lower()
+        name_clean = _NAME_PREFIX_RE.sub('', name_lower)
+        word_candidates = [
+            w for w in name_clean.split()
+            if len(w) >= 4 and w not in _GENERIC_MATCH_STOPWORDS
+        ]
+        # Always include the full name as a candidate (handles short full
+        # names like "Sara Malik" whose individual words are still fine),
+        # plus every distinctive word.
+        candidates = [name_clean] + word_candidates
+
+        for cand in candidates:
+            if not cand:
+                continue
+            # Exact substring match is only a strong (0.95) signal when the
+            # candidate is specific enough not to be a coincidental shared
+            # word — short/generic tokens fall through to ratio scoring.
+            if len(cand) >= 4 and (cand in cleaned or cleaned in cand):
+                score = 0.95
+            else:
+                score = difflib.SequenceMatcher(None, cand, cleaned).ratio()
+            if score > best_score:
+                best_score = score
+                best_entry = entry
+
+    if best_score >= threshold:
+        return best_entry
+    return None
 
 
 def _is_question_query(text: str) -> bool:
@@ -57,8 +129,20 @@ def _extract_time_str(text: str) -> Optional[str]:
     return None
 
 
-def _extract_name(text: str) -> Optional[str]:
-    """Extract person name from customer booking text."""
+def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Optional[str]:
+    """
+    Extract person name from customer booking text.
+
+    roster_names (optional): real doctor/service names for this business.
+    When the "entire text is a name" fallback heuristic would fire, it is
+    checked against this roster first — a bare reply that actually matches
+    a doctor or service (e.g. "ahmad", a spelling variant of "Ahmed Khan")
+    must never be treated as the customer's own name, regardless of the
+    current conversation state. This does NOT apply to the explicit "my
+    name is X" pattern above, since a deliberate statement of intent should
+    still be honored even in the rare case it happens to coincide with a
+    doctor's name.
+    """
     if not text:
         return None
     m = re.search(r'(?:my\s+name\s+is\s+|name\s+is\s+|i\s+am\s+|name\s*:\s*|for\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', text, re.IGNORECASE)
@@ -78,10 +162,18 @@ def _extract_name(text: str) -> Optional[str]:
             "checkup", "cleaning", "dentist", "doctor", "dr", "info", "information", "price",
             "yes", "no", "ok", "okay", "sure", "thanks", "thank you", "cancel", "help", "hello", "hi", "hey",
             "root", "canal", "treatment", "extraction", "whitening", "braces", "consultation", "scaling", "polishing",
-            "sara", "ahmed", "khan", "malik"
         ]
         if any(nw in lower_txt for nw in non_name_words):
             return None
+        # Dynamic roster check (replaces the old hardcoded "sara"/"ahmed"/
+        # "khan"/"malik" list, which broke on any spelling variant like
+        # "ahmad"): if this bare reply fuzzy-matches a real doctor or
+        # service name for this business, it's almost certainly a
+        # selection, not the customer stating their own name.
+        if roster_names:
+            roster_entries = [{"id": i, "name": n} for i, n in enumerate(roster_names)]
+            if _fuzzy_match_roster(text, roster_entries, threshold=0.6):
+                return None
         return text.strip().title()
     return None
 
@@ -279,7 +371,11 @@ class MockAdapter(BaseLLMAdapter):
         # Name extraction & state resolution
         pending_name = conv_state.get("pending_customer_name")
         pending_phone = conv_state.get("pending_customer_phone")
-        cand_name = _extract_name(user_text)
+        _roster_names_for_exclusion = (
+            [d.get("name") for d in (conv_state.get("doctor_roster") or [])] +
+            [s.get("name") for s in (conv_state.get("service_roster") or [])]
+        )
+        cand_name = _extract_name(user_text, roster_names=_roster_names_for_exclusion)
         effective_name = cand_name or pending_name
         effective_phone = (phone_match.group(1).replace(" ", "").replace("-", "") if phone_match else None) or pending_phone
 
@@ -303,29 +399,21 @@ class MockAdapter(BaseLLMAdapter):
             explicit_date_given = False
 
 
-        # Doctor / service overrides from text
-        if "sara" in user_text:
-            doc_id = 2
-            doc_name = "Dr. Sara Malik"
-        elif "ahmed" in user_text:
-            doc_id = 1
-            doc_name = "Dr. Ahmed Khan"
+        # Doctor / service overrides from text — fuzzy-matched against the
+        # real per-business roster (not hardcoded names) so spelling
+        # variants like "dr ahmad" still resolve to "Dr. Ahmed Khan".
+        doctor_roster = conv_state.get("doctor_roster") or []
+        service_roster = conv_state.get("service_roster") or []
 
-        if "whitening" in user_text:
-            svc_id = 3
-            svc_name = "Teeth Whitening"
-        elif "checkup" in user_text or "consultation" in user_text:
-            svc_id = 1
-            svc_name = "Dental Checkup & Consultation"
-        elif "root canal" in user_text:
-            svc_id = 5
-            svc_name = "Root Canal Treatment"
-        elif "extraction" in user_text or "tooth pull" in user_text:
-            svc_id = 4
-            svc_name = "Tooth Extraction"
-        elif "brace" in user_text or "aligner" in user_text:
-            svc_id = 6
-            svc_name = "Dental Braces Consultation"
+        _doc_override = _fuzzy_match_roster(user_text, doctor_roster)
+        if _doc_override:
+            doc_id = _doc_override["id"]
+            doc_name = _doc_override["name"]
+
+        _svc_override = _fuzzy_match_roster(user_text, service_roster)
+        if _svc_override:
+            svc_id = _svc_override["id"]
+            svc_name = _svc_override["name"]
 
         # --- EXPLICIT AWAITING_INPUT RESOLUTION (Runs FIRST before Case A-E & keyword matching) ---
         awaiting_input = conv_state.get("awaiting_input")
@@ -335,57 +423,33 @@ class MockAdapter(BaseLLMAdapter):
 
         if awaiting_input and not is_topic_change:
             if awaiting_input == "doctor_choice":
-                if "sara" in user_text or "malik" in user_text:
-                    doc_id = 2
-                    doc_name = "Dr. Sara Malik"
+                matched_doc = _fuzzy_match_roster(user_text, doctor_roster)
+                if matched_doc:
+                    doc_id = matched_doc["id"]
+                    doc_name = matched_doc["name"]
                     cand_name = None
                     effective_name = pending_name
                     if target_date_str:
                         return {
-                            "content": f"Checking open slots for Dr. Sara Malik on {target_date_str}...",
+                            "content": f"Checking open slots for {doc_name} on {target_date_str}...",
                             "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
                         }
                     return {
-                        "content": "Thank you! You selected Dr. Sara Malik. Which date would you like to book your appointment for?",
-                        "tool_calls": []
-                    }
-                elif "ahmed" in user_text or "khan" in user_text:
-                    doc_id = 1
-                    doc_name = "Dr. Ahmed Khan"
-                    cand_name = None
-                    effective_name = pending_name
-                    if target_date_str:
-                        return {
-                            "content": f"Checking open slots for Dr. Ahmed Khan on {target_date_str}...",
-                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
-                        }
-                    return {
-                        "content": "Thank you! You selected Dr. Ahmed Khan. Which date would you like to book your appointment for?",
+                        "content": f"Thank you! You selected {doc_name}. Which date would you like to book your appointment for?",
                         "tool_calls": []
                     }
                 elif not is_question:
+                    roster_names = ", ".join(d["name"] for d in doctor_roster) or "Dr. Ahmed Khan or Dr. Sara Malik"
                     return {
-                        "content": "Please select a doctor from our roster: Dr. Ahmed Khan or Dr. Sara Malik.",
+                        "content": f"Please select a doctor from our roster: {roster_names}.",
                         "tool_calls": []
                     }
 
             elif awaiting_input == "service_choice":
-                matched_svc = None
-                if "whitening" in user_text:
-                    matched_svc = (3, "Teeth Whitening")
-                elif "checkup" in user_text or "consultation" in user_text:
-                    matched_svc = (1, "Dental Checkup & Consultation")
-                elif "cleaning" in user_text or "scaling" in user_text:
-                    matched_svc = (2, "Dental Cleaning & Scaling")
-                elif "root canal" in user_text:
-                    matched_svc = (5, "Root Canal Treatment")
-                elif "extraction" in user_text or "tooth pull" in user_text:
-                    matched_svc = (4, "Tooth Extraction")
-                elif "brace" in user_text or "aligner" in user_text:
-                    matched_svc = (6, "Dental Braces Consultation")
-
+                matched_svc = _fuzzy_match_roster(user_text, service_roster)
                 if matched_svc:
-                    svc_id, svc_name = matched_svc
+                    svc_id = matched_svc["id"]
+                    svc_name = matched_svc["name"]
                     if target_date_str:
                         return {
                             "content": f"Checking open slots for {svc_name} on {target_date_str}...",
@@ -396,8 +460,9 @@ class MockAdapter(BaseLLMAdapter):
                         "tool_calls": []
                     }
                 elif not is_question:
+                    roster_names = ", ".join(s["name"] for s in service_roster) or "Dental Checkup, Dental Cleaning, Teeth Whitening, Tooth Extraction, Root Canal, or Braces"
                     return {
-                        "content": "Please select from our available dental services: Dental Checkup, Dental Cleaning, Teeth Whitening, Tooth Extraction, Root Canal, or Braces.",
+                        "content": f"Please select from our available dental services: {roster_names}.",
                         "tool_calls": []
                     }
 

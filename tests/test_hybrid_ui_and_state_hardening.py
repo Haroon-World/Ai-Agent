@@ -1,19 +1,24 @@
 import unittest
 from datetime import date, timedelta
 from app import create_app
+from config.config import Config
 from models import db, Business, Conversation, Doctor, Service, Appointment, Customer
 from ai.agent import Agent
 from seed import seed_database
 
 class TestHybridUIAndStateHardening(unittest.TestCase):
     def setUp(self):
-        self.app = create_app()
-        self.app.config["TESTING"] = True
-        self.app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+        class TestConfig(Config):
+            SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+            SQLALCHEMY_TRACK_MODIFICATIONS = False
+            TESTING = True
+            SECRET_KEY = "test-secret"
+            LLM_PROVIDER = "mock"
+
+        self.app = create_app(TestConfig)
         self.app_context = self.app.app_context()
         self.app_context.push()
-        db.create_all()
-        seed_database()
+        seed_database(self.app)
 
     def tearDown(self):
         db.session.remove()

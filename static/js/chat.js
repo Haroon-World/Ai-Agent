@@ -112,6 +112,13 @@ function appendMessageBubble(role, content, timestamp) {
     row.appendChild(bubble);
     row.appendChild(meta);
     chatMessages.appendChild(row);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return bubble;
+}
+
+function updateMessageBubbleContent(bubbleEl, content) {
+    if (!bubbleEl) return;
+    bubbleEl.innerHTML = formatMarkdown(content);
 }
 
 function formatMarkdown(text) {
@@ -301,7 +308,7 @@ async function sendVoiceBlob(blob, mimeType) {
         formData.append('conversation_id', conversationId);
     }
 
-    appendMessageBubble('user', '🎙️ (Voice Message)', new Date().toISOString());
+    const pendingBubble = appendMessageBubble('user', '🎙️ Transcribing your voice message...', new Date().toISOString());
     btnSend.disabled = true;
 
     try {
@@ -317,15 +324,71 @@ async function sendVoiceBlob(blob, mimeType) {
                 conversationId = data.conversation_id;
                 localStorage.setItem('ai_business_conv_id', conversationId);
             }
-            appendMessageBubble('assistant', data.reply, new Date().toISOString());
+
+            // Show what the system actually heard, not a generic
+            // placeholder — the customer needs to see this to notice if
+            // transcription got it wrong.
+            let transcriptLabel = `🎙️ "${data.transcript}"`;
+            if (data.mock_transcription) {
+                transcriptLabel += '\n(⚠️ Mock transcription — not your real audio content. A real speech provider is not configured for this demo.)';
+            }
+            if (pendingBubble) {
+                updateMessageBubbleContent(pendingBubble, transcriptLabel);
+            } else {
+                appendMessageBubble('user', transcriptLabel, new Date().toISOString());
+            }
+
+            const replyBubble = appendMessageBubble('assistant', data.reply, new Date().toISOString());
             if (data.ui_action) renderUIAction(data.ui_action);
             updateStatusUI(data.status);
+
+            // Speak the reply back as a voice note, since the customer
+            // messaged in by voice.
+            playReplyAsVoice(data.reply, replyBubble);
         } else {
+            if (pendingBubble) {
+                updateMessageBubbleContent(pendingBubble, '🎙️ (voice message)');
+            }
             appendMessageBubble('assistant', `⚠️ ${data.error || 'Voice processing error.'}`, new Date().toISOString());
         }
     } catch (err) {
         btnSend.disabled = false;
         console.error('Voice send error:', err);
+        if (pendingBubble) {
+            updateMessageBubbleContent(pendingBubble, '🎙️ (voice message)');
+        }
         appendMessageBubble('assistant', '⚠️ Failed to send voice message.', new Date().toISOString());
+    }
+}
+
+async function playReplyAsVoice(text, bubbleEl) {
+    try {
+        const res = await fetch('/api/chat/synthesize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+        });
+        if (!res.ok) return;
+
+        const audioBlob = await res.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+
+        if (bubbleEl) {
+            const playBtn = document.createElement('button');
+            playBtn.className = 'voice-reply-play-btn';
+            playBtn.type = 'button';
+            playBtn.textContent = '🔊 Play voice reply';
+            playBtn.onclick = () => audio.play();
+            bubbleEl.appendChild(playBtn);
+        }
+
+        audio.play().catch(() => {
+            // Autoplay can be blocked by the browser until the user
+            // interacts with the page — the Play button above still
+            // lets them hear it manually.
+        });
+    } catch (err) {
+        console.error('Voice reply synthesis error:', err);
     }
 }

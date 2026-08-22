@@ -1,6 +1,7 @@
 let currentConvId = null;
 
 async function selectConversation(convId) {
+    const isSwitchingConversation = currentConvId !== convId;
     currentConvId = convId;
 
     // Highlight selected in sidebar
@@ -13,10 +14,27 @@ async function selectConversation(convId) {
     if (emptyNotice) emptyNotice.style.display = 'none';
     if (activeView) activeView.style.display = 'flex';
 
-    await loadConversationDetails(convId);
+    // Always scroll to bottom when opening a different conversation.
+    // When refreshing the SAME conversation (e.g. after a reply/takeover),
+    // only re-snap to bottom if the admin was already reading near the
+    // bottom — otherwise preserve their scroll position so reading older
+    // messages isn't interrupted.
+    await loadConversationDetails(convId, { forceScrollToBottom: isSwitchingConversation });
 }
 
-async function loadConversationDetails(convId) {
+async function loadConversationDetails(convId, options = {}) {
+    const { forceScrollToBottom = false } = options;
+    const streamEl = document.getElementById('convMessagesStream');
+
+    // Detect whether the admin is currently scrolled near the bottom
+    // BEFORE we touch the DOM, so a mid-refresh doesn't yank them down
+    // while they're reading earlier messages.
+    let wasNearBottom = true;
+    if (streamEl) {
+        const distanceFromBottom = streamEl.scrollHeight - streamEl.scrollTop - streamEl.clientHeight;
+        wasNearBottom = distanceFromBottom < 80;
+    }
+
     try {
         const res = await fetch(`/api/chat/history/${convId}`);
         const data = await res.json();
@@ -58,7 +76,12 @@ async function loadConversationDetails(convId) {
             stream.appendChild(row);
         });
 
-        stream.scrollTop = stream.scrollHeight;
+        // Only snap to the latest message if the admin was already near
+        // the bottom, or this is a fresh conversation switch — never
+        // interrupt someone scrolled up reading history.
+        if (forceScrollToBottom || wasNearBottom) {
+            stream.scrollTop = stream.scrollHeight;
+        }
     } catch (e) {
         console.error('Error loading conversation details:', e);
     }

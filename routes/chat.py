@@ -1,9 +1,9 @@
 import uuid
-from flask import Blueprint, render_template, request, jsonify, session
+from flask import Blueprint, render_template, request, jsonify, session, Response
 from config.config import Config
 from models import db, Business, Conversation, Message, Customer
 from ai.agent import Agent
-from ai.speech_client import STTClient
+from ai.speech_client import STTClient, TTSClient
 from typing import Tuple
 
 chat_bp = Blueprint("chat_bp", __name__)
@@ -192,5 +192,35 @@ def send_voice():
         "input_mode": "voice",
         "executed_tools": result.get("executed_tools", []),
         "ui_action": result.get("ui_action"),
-        "session_reset": is_new
+        "session_reset": is_new,
+        "stt_provider": Config.STT_PROVIDER,
+        "mock_transcription": Config.STT_PROVIDER == "mock"
     })
+
+
+@chat_bp.route("/api/chat/synthesize", methods=["POST"])
+def synthesize_speech():
+    """
+    Convert a given text (typically the AI's most recent reply) into a
+    playable audio clip, so a customer using voice input can receive a
+    voice reply back instead of only text. Stateless — takes text
+    directly rather than re-reading conversation state, since the caller
+    (the chat UI) already has the reply text it wants spoken.
+    """
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+
+    if not text:
+        return jsonify({"success": False, "error": "Text is required for speech synthesis"}), 400
+
+    try:
+        tts_client = TTSClient()
+        audio_bytes = tts_client.synthesize(text)
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Speech synthesis failed: {str(e)}"}), 400
+
+    return Response(
+        audio_bytes,
+        mimetype="audio/wav",
+        headers={"Content-Disposition": "inline; filename=reply.wav"}
+    )

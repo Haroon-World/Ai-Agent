@@ -911,7 +911,14 @@ class TestAwaitingInputAndStateFixes(BaseFixTest):
         db.session.commit()
 
         # User Correction #2 Assertion: _extract_name("sara") MUST return None
-        extracted_name = _extract_name("sara")
+        # when checked against this business's real doctor/service roster —
+        # this replaces the old hardcoded "sara"/"ahmed"/"khan"/"malik"
+        # exclusion list, which broke on any spelling variant (e.g. "ahmad").
+        # The roster is what makes the exclusion correct now, so it must be
+        # passed explicitly here too, matching how the real call sites do it.
+        roster_names = [d.name for d in Doctor.query.filter_by(business_id=biz_id).all()] + \
+                        [s.name for s in Service.query.filter_by(business_id=biz_id).all()]
+        extracted_name = _extract_name("sara", roster_names=roster_names)
         self.assertIsNone(extracted_name, "doctor-choice input 'sara' must never be extracted as a candidate customer name")
 
         # Process message "sara" when awaiting_input == "doctor_choice" and workflow_state == "CHECKING_AVAILABILITY"
@@ -980,6 +987,121 @@ class TestAwaitingInputAndStateFixes(BaseFixTest):
 
         conv_db = db.session.get(Conversation, conv.id)
         self.assertIsNone(conv_db.awaiting_input, "awaiting_input must be cleared when topic changes away from booking")
+
+
+class TestFuzzyDoctorServiceMatching(unittest.TestCase):
+    """
+    Regression coverage for the reported bug: a spelling variant of a
+    doctor's name (e.g. "dr ahmad" for "Dr. Ahmed Khan") was not recognized
+    at all — neither the awaiting_input resolution nor the pre-LLM
+    _resolve_workflow_input state resolver matched anything, because both
+    used exact hardcoded/substring matching. Fixed by routing both through
+    a shared fuzzy matcher (ai.llm_client._fuzzy_match_roster) against the
+    real per-business doctor/service roster.
+    """
+
+    def setUp(self):
+        class TestConfig(Config):
+            SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+            SQLALCHEMY_TRACK_MODIFICATIONS = False
+            TESTING = True
+            SECRET_KEY = "test-secret"
+            LLM_PROVIDER = "mock"
+
+        self.app = create_app(TestConfig)
+        self.ctx = self.app.app_context()
+        self.ctx.push()
+        seed_database(self.app)
+
+    def tearDown(self):
+        db.session.remove()
+        db.drop_all()
+        self.ctx.pop()
+
+    def test_spelling_variant_resolves_and_persists_doctor_selection(self):
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+
+        conv = Conversation(business_id=biz_id, status="AI")
+        db.session.add(conv)
+        db.session.commit()
+
+        agent.process_message(conv.id, "doctors available")
+        self.assertEqual(db.session.get(Conversation, conv.id).awaiting_input, "doctor_choice")
+
+        resp = agent.process_message(conv.id, "dr ahmad")
+        self.assertIn("Ahmed Khan", resp.get("content", ""),
+                       "A spelling variant ('dr ahmad') must still resolve to the real doctor by name")
+
+        conv_db = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db.selected_doctor_id, 1,
+                          "selected_doctor_id must actually be persisted to the DB, not just referenced in the reply text")
+
+    def test_doctor_name_variant_after_awaiting_input_has_moved_past_doctor_choice(self):
+        """
+        Regression for the exact user-reported transcript: after a doctor
+        is selected and check_availability runs, awaiting_input moves to
+        "time_choice". A bare doctor-name reply sent AFTER that point
+        (e.g. re-selecting a different doctor, or a spelling variant like
+        "ahmad") was being swallowed by name-extraction and treated as the
+        customer's own name ("Thank you, Ahmad, please provide your phone
+        number...") instead of being recognized as a doctor reference —
+        because the doctor/service roster match only had priority during
+        the exact "doctor_choice" moment, not afterward. Doctor/service
+        roster matches must take priority over name-extraction regardless
+        of the current awaiting_input value.
+        """
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+
+        conv = Conversation(business_id=biz_id, status="AI")
+        db.session.add(conv)
+        db.session.commit()
+
+        # Turn 1: establish a requested_date (as in the real transcript,
+        # this came from an earlier booking message), then ask to see
+        # doctors, then pick one WITH a date already known — this is what
+        # actually triggers check_availability and moves awaiting_input
+        # from "doctor_choice" to "time_choice".
+        agent.process_message(conv.id, "I'd like to book for tomorrow")
+        agent.process_message(conv.id, "tell me what doctors are available")
+        agent.process_message(conv.id, "dr sara")
+        conv_db = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db.awaiting_input, "time_choice")
+        self.assertEqual(conv_db.selected_doctor_id, 2)
+
+        # Turn 2: a bare doctor-name spelling variant sent AFTER
+        # awaiting_input has moved past "doctor_choice" — must still be
+        # recognized as a doctor reference, not the customer's own name.
+        resp = agent.process_message(conv.id, "ahmad")
+        conv_db = db.session.get(Conversation, conv.id)
+
+        self.assertNotIn("Thank you, Ahmad", resp.get("content", ""),
+                          "'ahmad' must never be treated as the customer's own name, at any conversation stage")
+        self.assertIsNone(conv_db.pending_customer_name,
+                           "pending_customer_name must never be set to a doctor's name variant")
+        self.assertEqual(conv_db.selected_doctor_id, 1,
+                          "'ahmad' must re-select Dr. Ahmed Khan even after awaiting_input has moved to time_choice")
+
+    def test_shared_generic_word_does_not_cause_wrong_service_match(self):
+        """
+        Regression for a bug found while fixing the above: several service
+        names share the generic word "Dental" (Checkup, Cleaning, Braces),
+        which previously caused the FIRST alphabetical/ID-ordered service
+        containing "dental" to win by coincidence rather than the service
+        actually mentioned in the message.
+        """
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+
+        conv = Conversation(business_id=biz_id, status="AI")
+        db.session.add(conv)
+        db.session.commit()
+
+        agent.process_message(conv.id, "I'd like to book a dental cleaning with Dr. Ahmed")
+        conv_db = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db.selected_service_id, 2,
+                          "'dental cleaning' must match 'Dental Cleaning & Scaling' (id 2), not 'Dental Checkup & Consultation' (id 1) via the shared word 'dental'")
 
 
 if __name__ == "__main__":

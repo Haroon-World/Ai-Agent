@@ -48,12 +48,14 @@ body {
 }
 
 .nav-container {
-    max-width: 1200px;
+    max-width: 1280px;
     margin: 0 auto;
-    padding: 1rem 1.5rem;
+    padding: 0.85rem 1.5rem;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
+    row-gap: 0.6rem;
 }
 
 .nav-brand {
@@ -74,7 +76,9 @@ body {
 .nav-links {
     display: flex;
     align-items: center;
-    gap: 1.25rem;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.1rem;
+    row-gap: 0.5rem;
 }
 
 .nav-item {
@@ -122,6 +126,38 @@ body {
 
 .nav-btn-logout {
     color: var(--danger) !important;
+}
+
+/* Responsive Navbar */
+@media (max-width: 900px) {
+    .nav-container {
+        padding: 0.75rem 1rem;
+    }
+    .nav-links {
+        width: 100%;
+        justify-content: flex-start;
+        gap: 0.4rem 0.85rem;
+    }
+    .nav-item {
+        font-size: 0.88rem;
+    }
+    .brand-name {
+        font-size: 1rem;
+    }
+}
+
+@media (max-width: 560px) {
+    .nav-brand .brand-name strong {
+        display: block;
+        font-size: 0.75em;
+        font-weight: 600;
+    }
+    .nav-item {
+        font-size: 0.82rem;
+    }
+    .nav-badge-item span:first-child {
+        display: none;
+    }
 }
 
 /* Main Content */
@@ -692,7 +728,21 @@ body {
     display: grid;
     grid-template-columns: 340px 1fr;
     gap: 1.5rem;
-    height: 75vh;
+    height: calc(100vh - 230px);
+    min-height: 560px;
+}
+
+@media (max-width: 900px) {
+    .conversations-layout {
+        grid-template-columns: 1fr;
+        height: auto;
+    }
+    .conv-sidebar {
+        max-height: 320px;
+    }
+    .conv-main {
+        min-height: 500px;
+    }
 }
 
 .conv-sidebar {
@@ -824,6 +874,24 @@ body {
 .conv-reply-footer form {
     display: flex;
     gap: 0.6rem;
+}
+
+.voice-reply-play-btn {
+    display: block;
+    margin-top: 0.5rem;
+    padding: 0.35rem 0.75rem;
+    background: var(--primary-light);
+    color: var(--primary);
+    border: none;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.voice-reply-play-btn:hover {
+    background: var(--primary);
+    color: #ffffff;
 }
 
 /* Login Page */
