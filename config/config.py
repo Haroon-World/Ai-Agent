@@ -26,15 +26,13 @@ class Config:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
-
-
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     GROQ_MODEL = os.getenv("GROQ_MODEL", "llama3-70b-8192")
     
-    # STT (Speech-to-Text) Settings
+    # STT & TTS Settings
     STT_PROVIDER = os.getenv("STT_PROVIDER", "mock").lower()
     GROQ_STT_MODEL = os.getenv("GROQ_STT_MODEL", "whisper-large-v3")
-    TTS_PROVIDER = os.getenv("TTS_PROVIDER", "mock").lower()
+    TTS_PROVIDER = os.getenv("TTS_PROVIDER", "gemini").lower()
     GROQ_TTS_MODEL = os.getenv("GROQ_TTS_MODEL", "playai-tts")
     GROQ_TTS_VOICE = os.getenv("GROQ_TTS_VOICE", "Fritz-PlayAI")
     

@@ -16,6 +16,8 @@ class TestVoiceRoute(unittest.TestCase):
             STT_PROVIDER = "mock"
 
         self.app = create_app(TestConfig)
+        self.app.config["STT_PROVIDER"] = "mock"
+        self.app.config["TTS_PROVIDER"] = "mock"
         self.client = self.app.test_client()
         self.ctx = self.app.app_context()
         self.ctx.push()
@@ -110,6 +112,7 @@ class TestSynthesizeRoute(unittest.TestCase):
             TTS_PROVIDER = "mock"
 
         self.app = create_app(TestConfig)
+        self.app.config["TTS_PROVIDER"] = "mock"
         self.client = self.app.test_client()
         self.ctx = self.app.app_context()
         self.ctx.push()

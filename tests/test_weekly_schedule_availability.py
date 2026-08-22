@@ -2,16 +2,21 @@ import os
 import unittest
 from datetime import date, timedelta
 from app import create_app
+from config.config import Config
 from models import db, Business, Doctor, Service, Customer, Appointment, DoctorSchedule, DoctorLeave, Conversation
 from services.booking_service import BookingService
 from ai.agent import Agent
 
 class TestWeeklyScheduleAndAvailabilityEngine(unittest.TestCase):
     def setUp(self):
-        self.app = create_app()
-        self.app.config["TESTING"] = True
-        self.app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+        class TestConfig(Config):
+            SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+            SQLALCHEMY_TRACK_MODIFICATIONS = False
+            TESTING = True
+            SECRET_KEY = "test-secret"
+            LLM_PROVIDER = "mock"
 
+        self.app = create_app(TestConfig)
         self.app_context = self.app.app_context()
         self.app_context.push()
 

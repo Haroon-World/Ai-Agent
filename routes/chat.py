@@ -1,5 +1,5 @@
 import uuid
-from flask import Blueprint, render_template, request, jsonify, session, Response
+from flask import Blueprint, render_template, request, jsonify, session, Response, current_app
 from config.config import Config
 from models import db, Business, Conversation, Message, Customer
 from ai.agent import Agent
@@ -164,8 +164,9 @@ def send_voice():
 
     mime_type = audio_file.mimetype or "audio/webm"
 
+    stt_provider = current_app.config.get("STT_PROVIDER", Config.STT_PROVIDER)
     try:
-        stt_client = STTClient()
+        stt_client = STTClient(stt_provider=stt_provider)
         transcript = stt_client.transcribe(audio_bytes, mime_type=mime_type)
     except Exception as e:
         return jsonify({"success": False, "error": f"Speech transcription failed: {str(e)}"}), 400
@@ -193,8 +194,8 @@ def send_voice():
         "executed_tools": result.get("executed_tools", []),
         "ui_action": result.get("ui_action"),
         "session_reset": is_new,
-        "stt_provider": Config.STT_PROVIDER,
-        "mock_transcription": Config.STT_PROVIDER == "mock"
+        "stt_provider": stt_provider,
+        "mock_transcription": stt_provider == "mock"
     })
 
 
@@ -213,8 +214,9 @@ def synthesize_speech():
     if not text:
         return jsonify({"success": False, "error": "Text is required for speech synthesis"}), 400
 
+    tts_provider = current_app.config.get("TTS_PROVIDER", getattr(Config, "TTS_PROVIDER", "gemini"))
     try:
-        tts_client = TTSClient()
+        tts_client = TTSClient(tts_provider=tts_provider)
         audio_bytes = tts_client.synthesize(text)
     except Exception as e:
         return jsonify({"success": False, "error": f"Speech synthesis failed: {str(e)}"}), 400

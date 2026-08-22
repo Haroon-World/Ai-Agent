@@ -837,8 +837,12 @@ class GeminiAdapter(BaseLLMAdapter):
         contents = []
         for m in messages:
             role = m.get("role")
+            content_text = m.get("content") or ""
+
             if role == "assistant" and m.get("tool_calls"):
                 parts = []
+                if content_text.strip():
+                    parts.append(types.Part.from_text(text=content_text.strip()))
                 for tc in m["tool_calls"]:
                     ts_bytes = None
                     if tc.get("thought_signature"):
@@ -855,6 +859,7 @@ class GeminiAdapter(BaseLLMAdapter):
                         thought_signature=ts_bytes
                     ))
                 contents.append(types.Content(role="model", parts=parts))
+
             elif role == "tool":
                 tool_content = m.get("content", "")
                 if isinstance(tool_content, str):
@@ -867,19 +872,28 @@ class GeminiAdapter(BaseLLMAdapter):
                 else:
                     parsed_resp = {"result": str(tool_content)}
 
-                contents.append(types.Content(
-                    role="user",
-                    parts=[types.Part.from_function_response(
-                        name=m.get("tool_name", "tool"),
-                        response=parsed_resp
-                    )]
-                ))
+                tool_part = types.Part.from_function_response(
+                    name=m.get("tool_name", "tool"),
+                    response=parsed_resp
+                )
+                if contents and contents[-1].role == "user" and any(getattr(p, "function_response", None) for p in contents[-1].parts):
+                    contents[-1].parts.append(tool_part)
+                else:
+                    contents.append(types.Content(role="user", parts=[tool_part]))
+
             else:
                 gemini_role = "user" if role in ["user", "system"] else "model"
-                contents.append(types.Content(
-                    role=gemini_role,
-                    parts=[types.Part.from_text(text=m.get("content") or "")]
-                ))
+                if not content_text.strip():
+                    continue
+                part = types.Part.from_text(text=content_text.strip())
+                if contents and contents[-1].role == gemini_role and not any(getattr(p, "function_call", None) or getattr(p, "function_response", None) for p in contents[-1].parts):
+                    contents[-1].parts.append(part)
+                else:
+                    contents.append(types.Content(role=gemini_role, parts=[part]))
+
+        # Ensure history never ends with a model turn
+        while contents and contents[-1].role == "model":
+            contents.pop()
 
         gemini_tools = self._translate_tools_to_gemini(tools)
         config = types.GenerateContentConfig(
@@ -1036,7 +1050,9 @@ class GroqAdapter(BaseLLMAdapter):
 class LLMClient:
     """Unified LLM Client Factory and Router."""
     def __init__(self, provider: Optional[str] = None):
-        self.provider = (provider or Config.LLM_PROVIDER or "mock").lower()
+        from flask import has_app_context, current_app
+        app_provider = current_app.config.get("LLM_PROVIDER") if has_app_context() else None
+        self.provider = (provider or app_provider or Config.LLM_PROVIDER or "mock").lower()
 
         if self.provider == "gemini" and Config.GEMINI_API_KEY:
             self.adapter = GeminiAdapter(api_key=Config.GEMINI_API_KEY, model_name=Config.GEMINI_MODEL)

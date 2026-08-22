@@ -135,8 +135,6 @@ class GroqTTSAdapter(BaseTTSAdapter):
         if not self.api_key:
             raise ValueError("GROQ_API_KEY is not configured for GroqTTSAdapter")
 
-        # Groq's TTS input has a length ceiling; truncate very long replies
-        # rather than failing the whole request outright.
         clean_text = text.strip()[:2000]
 
         try:
@@ -161,11 +159,48 @@ class GroqTTSAdapter(BaseTTSAdapter):
             raise RuntimeError(f"Groq TTS failed: {str(e)}")
 
 
+class GeminiTTSAdapter(BaseTTSAdapter):
+    """Text-to-Speech adapter using Gemini API audio generation endpoint."""
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        self.api_key = api_key or Config.GEMINI_API_KEY
+        self.model = model or "gemini-2.5-flash-preview-tts"
+
+    def synthesize(self, text: str) -> bytes:
+        if not text or not text.strip():
+            raise ValueError("Text is required for speech synthesis")
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY is not configured for GeminiTTSAdapter")
+
+        try:
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=self.api_key)
+
+            clean_text = text.strip()[:2000]
+            response = client.models.generate_content(
+                model=self.model,
+                contents=clean_text,
+                config=types.GenerateContentConfig(response_modalities=["AUDIO"])
+            )
+
+            if response.candidates and response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if getattr(part, "inline_data", None) and part.inline_data.data:
+                        return part.inline_data.data
+
+            raise RuntimeError("No audio data returned in Gemini TTS response")
+        except Exception as e:
+            logger.error(f"Gemini TTS Error: {str(e)}")
+            raise RuntimeError(f"Gemini TTS failed: {str(e)}")
+
+
 class TTSClient:
     """Factory client for Text-to-Speech provider selection."""
     def __init__(self, tts_provider: Optional[str] = None):
-        self.tts_provider = (tts_provider or getattr(Config, "TTS_PROVIDER", "mock") or "mock").lower()
-        if self.tts_provider == "groq":
+        self.tts_provider = (tts_provider or getattr(Config, "TTS_PROVIDER", "gemini") or "gemini").lower()
+        if self.tts_provider == "gemini":
+            self.adapter = GeminiTTSAdapter()
+        elif self.tts_provider == "groq":
             self.adapter = GroqTTSAdapter()
         else:
             self.adapter = MockTTSAdapter()
