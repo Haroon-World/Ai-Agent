@@ -3,6 +3,7 @@ from flask import Blueprint, render_template, request, jsonify, session
 from config.config import Config
 from models import db, Business, Conversation, Message, Customer
 from ai.agent import Agent
+from ai.speech_client import STTClient
 from typing import Tuple
 
 chat_bp = Blueprint("chat_bp", __name__)
@@ -127,6 +128,7 @@ def send_message():
         "workflow_state": result.get("workflow_state"),
         "reply": result.get("content"),
         "executed_tools": result.get("executed_tools", []),
+        "ui_action": result.get("ui_action"),
         "session_reset": is_new
     })
 
@@ -141,4 +143,54 @@ def reset_chat():
         "conversation_id": conv.id,
         "status": conv.status,
         "messages": [m.to_dict() for m in conv.messages]
+    })
+
+
+@chat_bp.route("/api/chat/send-voice", methods=["POST"])
+def send_voice():
+    visitor_id = _get_or_set_visitor_id()
+    business_id = Config.DEFAULT_BUSINESS_ID
+
+    audio_file = request.files.get("file") or request.files.get("audio")
+    conversation_id_str = request.form.get("conversation_id")
+    conversation_id = int(conversation_id_str) if conversation_id_str and conversation_id_str.isdigit() else None
+
+    if not audio_file:
+        return jsonify({"success": False, "error": "Audio file is required"}), 400
+
+    audio_bytes = audio_file.read()
+    if not audio_bytes or len(audio_bytes) == 0:
+        return jsonify({"success": False, "error": "Empty audio file received"}), 400
+
+    mime_type = audio_file.mimetype or "audio/webm"
+
+    try:
+        stt_client = STTClient()
+        transcript = stt_client.transcribe(audio_bytes, mime_type=mime_type)
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Speech transcription failed: {str(e)}"}), 400
+
+    if not transcript or not transcript.strip():
+        return jsonify({"success": False, "error": "Could not transcribe audio content"}), 400
+
+    conv, is_new = get_or_create_conversation(business_id, conversation_id, visitor_id=visitor_id)
+    agent = Agent(business_id=business_id)
+    result = agent.process_message(conversation_id=conv.id, user_content=transcript)
+
+    user_msg = Message.query.filter_by(conversation_id=conv.id, role="user").order_by(Message.created_at.desc()).first()
+    if user_msg:
+        user_msg.input_mode = "voice"
+        db.session.commit()
+
+    return jsonify({
+        "success": True,
+        "conversation_id": conv.id,
+        "status": result.get("status"),
+        "workflow_state": result.get("workflow_state"),
+        "transcript": transcript,
+        "reply": result.get("content"),
+        "input_mode": "voice",
+        "executed_tools": result.get("executed_tools", []),
+        "ui_action": result.get("ui_action"),
+        "session_reset": is_new
     })

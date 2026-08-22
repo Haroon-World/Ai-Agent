@@ -14,6 +14,7 @@ class Conversation(db.Model):
     # Structured conversation state
     intent = db.Column(db.String(50), nullable=True, default="UNKNOWN")
     workflow_state = db.Column(db.String(50), nullable=False, default="START") # START, COLLECTING_INFO, CHECKING_AVAILABILITY, AWAITING_CONFIRMATION, BOOKED
+    awaiting_input = db.Column(db.String(50), nullable=True) # None, "doctor_choice", "service_choice", "time_choice", "confirmation", "name", "phone"
     selected_service_id = db.Column(db.Integer, nullable=True)
     selected_doctor_id = db.Column(db.Integer, nullable=True)
     requested_date = db.Column(db.String(20), nullable=True)
@@ -40,6 +41,7 @@ class Conversation(db.Model):
             "status": self.status,
             "intent": self.intent,
             "workflow_state": self.workflow_state,
+            "awaiting_input": self.awaiting_input,
             "selected_service_id": self.selected_service_id,
             "selected_doctor_id": self.selected_doctor_id,
             "requested_date": self.requested_date,

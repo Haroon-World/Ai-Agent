@@ -46,13 +46,15 @@
         <!-- Chat Input Footer -->
         <div class="chat-footer">
             <form id="chatForm" class="chat-input-form">
+                <button type="button" class="btn btn-voice" id="btnVoiceRecord" title="Record Voice Message">
+                    <span id="voiceMicIcon">🎤</span>
+                </button>
                 <input 
                     type="text" 
                     id="chatInput" 
                     class="chat-input" 
-                    placeholder="Type your message here (e.g., 'Book a cleaning tomorrow at 10 AM')..." 
-                    autocomplete="off" 
-                    required
+                    placeholder="Type or record your message..." 
+                    autocomplete="off"
                 >
                 <button type="submit" class="btn btn-send" id="btnSend">
                     <span>Send</span>

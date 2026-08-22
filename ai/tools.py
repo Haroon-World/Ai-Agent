@@ -26,7 +26,7 @@ CANONICAL_TOOLS = [
     },
     {
         "name": "get_doctors",
-        "description": "Get the list of all doctors at the clinic with their specializations, working days, and working hours. Use this when the customer asks about doctors or wants to know who is available.",
+        "description": "Get the complete list of practicing doctors at the clinic with their specializations, working days, and working hours. ALWAYS call this when the customer asks about doctors, doctor names, specializations, or who works at the clinic, even if they also mention wanting an appointment.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -35,13 +35,13 @@ CANONICAL_TOOLS = [
     },
     {
         "name": "check_availability",
-        "description": "Check real-time available appointment slots for a specific date and optional doctor or service.",
+        "description": "Check real-time available appointment slots for a specific date and optional doctor or service. ONLY call this tool when an EXPLICIT date (e.g. 'tomorrow', '2026-08-25', or a date stored in context) is provided by the customer. NEVER call this tool if no date is known.",
         "parameters": {
             "type": "object",
             "properties": {
                 "date": {
                     "type": "string",
-                    "description": "Date in YYYY-MM-DD format for checking availability"
+                    "description": "Explicit date in YYYY-MM-DD format for checking availability"
                 },
                 "doctor_id": {
                     "type": "integer",

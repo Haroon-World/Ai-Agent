@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+
+{% block title %}Doctor Schedules & Availability - {{ business.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <div>
+        <h1 class="page-title">Doctor Weekly Schedules & Leave Management</h1>
+        <p class="page-subtitle">Configure day-by-day availability (Monday–Sunday), practicing hours, lunch breaks, and blocked leave periods per doctor.</p>
+    </div>
+    <div class="header-actions">
+        <button class="btn btn-primary" onclick="toggleAddForm()">➕ Add New Doctor</button>
+    </div>
+</div>
+
+<!-- Add Doctor Form (Hidden by default) -->
+<div id="addDoctorCard" class="section-card" style="display: none; margin-bottom: 24px; border: 2px solid #2563eb;">
+    <h3 style="margin-top: 0; margin-bottom: 16px; color: #1e293b;">Add Doctor & Set Weekly Schedule</h3>
+    <form action="/admin/doctors/add" method="POST">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 16px;">
+            <div>
+                <label style="display: block; font-weight: 600; margin-bottom: 6px;">Doctor Full Name</label>
+                <input type="text" name="name" class="form-control" placeholder="Dr. Jane Doe" required style="width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1;">
+            </div>
+            <div>
+                <label style="display: block; font-weight: 600; margin-bottom: 6px;">Specialization</label>
+                <input type="text" name="specialization" class="form-control" placeholder="General Dentistry & Orthodontics" required style="width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1;">
+            </div>
+            <div>
+                <label style="display: block; font-weight: 600; margin-bottom: 6px;">Slot Gap Step (Minutes)</label>
+                <select name="slot_interval" style="width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                    <option value="15">15 Minutes</option>
+                    <option value="30" selected>30 Minutes (Default)</option>
+                    <option value="45">45 Minutes</option>
+                    <option value="60">60 Minutes (1 Hour)</option>
+                </select>
+            </div>
+            <div>
+                <label style="display: block; font-weight: 600; margin-bottom: 6px;">Lunch Break Range (Optional)</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="time" name="break_start_time" placeholder="13:00" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                    <span style="align-self: center;">to</span>
+                    <input type="time" name="break_end_time" placeholder="14:00" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                </div>
+            </div>
+        </div>
+
+        <div style="margin-top: 16px; background: #f8fafc; padding: 16px; border-radius: 8px; border: 1px solid #e2e8f0;">
+            <h4 style="margin: 0 0 12px 0; color: #1e293b;">📅 Weekly Schedule Configuration</h4>
+            <div style="display: grid; gap: 10px;">
+                {% for day in days_of_week %}
+                <div style="display: flex; align-items: center; justify-content: space-between; background: #ffffff; padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1;">
+                    <label style="font-weight: 600; width: 110px; margin: 0; display: flex; align-items: center; gap: 6px;">
+                        <input type="checkbox" name="is_available_{{ day }}" {% if day != 'Sunday' %}checked{% endif %}>
+                        {{ day }}
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 0.85rem; color: #64748b;">From</span>
+                        <input type="time" name="start_time_{{ day }}" value="09:00" style="padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                        <span style="font-size: 0.85rem; color: #64748b;">To</span>
+                        <input type="time" name="end_time_{{ day }}" value="17:00" style="padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1;">
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div style="margin-top: 20px; display: flex; gap: 10px;">
+            <button type="submit" class="btn btn-primary">Save Doctor Profile & Schedule</button>
+            <button type="button" class="btn btn-secondary" onclick="toggleAddForm()">Cancel</button>
+        </div>
+    </form>
+</div>
+
+<!-- Doctors List -->
+<div class="section-card">
+    {% if doctors %}
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 24px;">
+        {% for doc in doctors %}
+        <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                <div>
+                    <h2 style="margin: 0; font-size: 1.3rem; color: #0f172a;">👨‍⚕️ {{ doc.name }}</h2>
+                    <span style="color: #475569; font-size: 0.95rem; font-weight: 500;">{{ doc.specialization }}</span>
+                </div>
+                <form action="/admin/doctors/toggle/{{ doc.id }}" method="POST" style="margin: 0;">
+                    {% if doc.is_active %}
+                        <button type="submit" class="badge badge-success" style="border: none; cursor: pointer;" title="Click to deactivate">ACTIVE</button>
+                    {% else %}
+                        <button type="submit" class="badge badge-danger" style="border: none; cursor: pointer;" title="Click to activate">INACTIVE</button>
+                    {% endif %}
+                </form>
+            </div>
+
+            <hr style="border: None; border-top: 1px solid #e2e8f0; margin: 12px 0;">
+
+            <form action="/admin/doctors/edit/{{ doc.id }}" method="POST">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                    <div>
+                        <label style="font-size: 0.8rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Doctor Name</label>
+                        <input type="text" name="name" value="{{ doc.name }}" required style="width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 0.9rem;">
+                    </div>
+                    <div>
+                        <label style="font-size: 0.8rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Specialization</label>
+                        <input type="text" name="specialization" value="{{ doc.specialization }}" required style="width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 0.9rem;">
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                    <div>
+                        <label style="font-size: 0.8rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Slot Gap / Step (Mins)</label>
+                        <select name="slot_interval" style="width: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 0.9rem;">
+                            <option value="15" {% if doc.slot_interval == 15 %}selected{% endif %}>15 Minutes</option>
+                            <option value="30" {% if doc.slot_interval == 30 or not doc.slot_interval %}selected{% endif %}>30 Minutes</option>
+                            <option value="45" {% if doc.slot_interval == 45 %}selected{% endif %}>45 Minutes</option>
+                            <option value="60" {% if doc.slot_interval == 60 %}selected{% endif %}>60 Minutes</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style="font-size: 0.8rem; font-weight: 600; color: #475569; display: block; margin-bottom: 4px;">Lunch Break Range</label>
+                        <div style="display: flex; gap: 4px; align-items: center;">
+                            <input type="time" name="break_start_time" value="{{ doc.break_start_time or '' }}" placeholder="13:00" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 0.85rem;">
+                            <span>to</span>
+                            <input type="time" name="break_end_time" value="{{ doc.break_end_time or '' }}" placeholder="14:00" style="flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 0.85rem;">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Per-Day Weekly Schedule Grid -->
+                <div style="margin-bottom: 16px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
+                    <label style="font-size: 0.85rem; font-weight: 700; color: #1e293b; display: block; margin-bottom: 8px;">🗓️ Per-Day Weekly Working Hours</label>
+                    
+                    {% set sched_map = {} %}
+                    {% if doc.schedules %}
+                        {% for s in doc.schedules %}
+                            {% set _ = sched_map.update({s.day_of_week: s}) %}
+                        {% endfor %}
+                    {% endif %}
+
+                    <div style="display: grid; gap: 6px;">
+                        {% for day in days_of_week %}
+                            {% set day_sched = sched_map.get(day) %}
+                            {% set is_avail = day_sched.is_available if day_sched else (day in (doc.working_days.split(',') if doc.working_days else [])) %}
+                            {% set s_time = day_sched.start_time if day_sched else doc.start_time %}
+                            {% set e_time = day_sched.end_time if day_sched else doc.end_time %}
+                            <div style="display: flex; align-items: center; justify-content: space-between; background: #ffffff; padding: 6px 10px; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 0.85rem;">
+                                <label style="font-weight: 600; width: 100px; margin: 0; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                    <input type="checkbox" name="is_available_{{ day }}" {% if is_avail %}checked{% endif %}>
+                                    {{ day[:3] }} {% if is_avail %}<span style="color: #16a34a; font-size: 0.75rem; font-weight: 700;">(Available)</span>{% else %}<span style="color: #dc2626; font-size: 0.75rem;">(Closed)</span>{% endif %}
+                                </label>
+                                <div style="display: flex; align-items: center; gap: 4px;">
+                                    <input type="time" name="start_time_{{ day }}" value="{{ s_time or '09:00' }}" style="padding: 2px 6px; border-radius: 4px; border: 1px solid #cbd5e1; font-size: 0.8rem;">
+                                    <span>–</span>
+                                    <input type="time" name="end_time_{{ day }}" value="{{ e_time or '17:00' }}" style="padding: 2px 6px; border-radius: 4px; border: 1px solid #cbd5e1; font-size: 0.8rem;">
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                    <label style="font-size: 0.85rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                        <input type="checkbox" name="is_active" {% if doc.is_active %}checked{% endif %}>
+                        Active & Accepting Bookings
+                    </label>
+                    <button type="submit" class="btn btn-sm btn-primary">Save Schedule Changes</button>
+                </div>
+            </form>
+
+            <!-- Doctor Blocked Leave Dates Section -->
+            <div style="background: #f1f5f9; padding: 12px; border-radius: 8px; border: 1px solid #cbd5e1; margin-top: 12px;">
+                <h4 style="margin: 0 0 8px 0; font-size: 0.9rem; color: #334155;">🚫 Blocked Dates / Leave Periods</h4>
+                
+                {% if doc.leaves %}
+                <div style="margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 6px;">
+                    {% for leave in doc.leaves %}
+                    <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 8px; font-size: 0.8rem; display: flex; align-items: center; gap: 6px;">
+                        <span>📅 <strong>{{ leave.leave_date }}</strong> ({% if leave.is_all_day %}All Day{% else %}{{ leave.start_time }}-{{ leave.end_time }}{% endif %}) - {{ leave.reason }}</span>
+                        <form action="/admin/doctors/leave/delete/{{ leave.id }}" method="POST" style="margin: 0;">
+                            <button type="submit" style="border: none; background: none; color: #ef4444; cursor: pointer; font-weight: bold;">✕</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p style="margin: 0 0 8px 0; font-size: 0.8rem; color: #64748b;">No blocked leave dates configured.</p>
+                {% endif %}
+
+                <!-- Form to Add Leave -->
+                <form action="/admin/doctors/leave/add" method="POST" style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+                    <input type="hidden" name="doctor_id" value="{{ doc.id }}">
+                    <input type="date" name="leave_date" required style="padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1; font-size: 0.8rem;">
+                    <input type="text" name="reason" placeholder="Reason (e.g. Vacation)" style="padding: 4px 8px; border-radius: 4px; border: 1px solid #cbd5e1; font-size: 0.8rem; flex: 1; min-width: 120px;">
+                    <label style="font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                        <input type="checkbox" name="is_all_day" checked> All Day
+                    </label>
+                    <button type="submit" class="btn btn-sm btn-secondary" style="font-size: 0.8rem; padding: 4px 8px;">+ Add Leave</button>
+                </form>
+            </div>
+
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>No doctor records found in the database.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAddForm() {
+    const card = document.getElementById('addDoctorCard');
+    if (card.style.display === 'none' || !card.style.display) {
+        card.style.display = 'block';
+    } else {
+        card.style.display = 'none';
+    }
+}
+</script>
+{% endblock %}

@@ -31,6 +31,11 @@ class TestEndToEndSuite(unittest.TestCase):
 
         # Explicitly seed the in-memory database
         seed_database(self.app)
+        from models import DoctorSchedule
+        scheds = DoctorSchedule.query.filter_by(doctor_id=1).all()
+        for s in scheds:
+            s.is_available = True
+        db.session.commit()
 
     def tearDown(self):
         db.session.remove()

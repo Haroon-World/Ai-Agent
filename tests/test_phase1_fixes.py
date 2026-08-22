@@ -896,6 +896,92 @@ class TestIdempotencyAndReminderTimezone(BaseFixTest):
                          f"Scheduled reminder {rem_dt} must match 24h prior in UTC {expected_reminder_utc}")
 
 
+class TestAwaitingInputAndStateFixes(BaseFixTest):
+    """
+    Validation for explicit awaiting_input state tracking and priority resolution.
+    """
+
+    def test_bare_sara_after_get_doctors_selects_doctor_sara_not_customer_name(self):
+        from ai.llm_client import _extract_name
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+
+        conv = Conversation(business_id=biz_id, status="AI", intent="BOOK_APPOINTMENT", workflow_state="CHECKING_AVAILABILITY", awaiting_input="doctor_choice")
+        db.session.add(conv)
+        db.session.commit()
+
+        # User Correction #2 Assertion: _extract_name("sara") MUST return None
+        extracted_name = _extract_name("sara")
+        self.assertIsNone(extracted_name, "doctor-choice input 'sara' must never be extracted as a candidate customer name")
+
+        # Process message "sara" when awaiting_input == "doctor_choice" and workflow_state == "CHECKING_AVAILABILITY"
+        resp = agent.process_message(conv.id, "sara")
+        conv_db = db.session.get(Conversation, conv.id)
+
+        # Must set doctor_id to 2 (Dr. Sara Malik)
+        self.assertEqual(conv_db.selected_doctor_id, 2, "Bare 'sara' reply must select Dr. Sara Malik (ID 2)")
+        self.assertNotEqual(conv_db.pending_customer_name, "Sara", "Doctor choice must never set pending_customer_name to 'Sara'")
+        self.assertNotIn("Hello! Welcome to SmileCare", resp.get("content", ""), "Must not fall through to generic fallback greeting")
+
+    def test_bare_service_after_get_services_selects_service(self):
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+
+        conv = Conversation(business_id=biz_id, status="AI", intent="BOOK_APPOINTMENT", workflow_state="COLLECTING_INFO", awaiting_input="service_choice")
+        db.session.add(conv)
+        db.session.commit()
+
+        resp = agent.process_message(conv.id, "whitening")
+        conv_db = db.session.get(Conversation, conv.id)
+
+        self.assertEqual(conv_db.selected_service_id, 3, "Bare 'whitening' reply must select Teeth Whitening (ID 3)")
+        self.assertIn("Teeth Whitening", resp.get("content", ""), "Response must acknowledge Teeth Whitening selection")
+
+    def test_bare_yes_after_confirmation_pending_state_proceeds_with_booking(self):
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+        target_date = self._next_monday()
+
+        conv = Conversation(
+            business_id=biz_id,
+            status="AI",
+            intent="BOOK_APPOINTMENT",
+            workflow_state="CHECKING_AVAILABILITY",
+            awaiting_input="confirmation",
+            selected_doctor_id=1,
+            selected_service_id=2,
+            requested_date=target_date,
+            requested_time="10:00",
+            pending_customer_name="Ali Khan",
+            pending_customer_phone="03001234567"
+        )
+        db.session.add(conv)
+        db.session.commit()
+
+        resp = agent.process_message(conv.id, "yes")
+        executed = [t["name"] for t in resp.get("executed_tools", [])]
+        self.assertIn("book_appointment", executed, "Bare 'yes' reply when confirmation is pending must trigger book_appointment")
+
+        conv_db = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db.workflow_state, "BOOKED")
+        self.assertIsNone(conv_db.awaiting_input, "awaiting_input must be cleared (None) after booking completed")
+
+    def test_awaiting_input_cleared_on_topic_change(self):
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+
+        conv = Conversation(business_id=biz_id, status="AI", intent="BOOK_APPOINTMENT", workflow_state="COLLECTING_INFO", awaiting_input="doctor_choice")
+        db.session.add(conv)
+        db.session.commit()
+
+        resp = agent.process_message(conv.id, "Where is your clinic located?")
+        executed = [t["name"] for t in resp.get("executed_tools", [])]
+        self.assertIn("get_clinic_info", executed, "Topic change asking for location must execute get_clinic_info")
+
+        conv_db = db.session.get(Conversation, conv.id)
+        self.assertIsNone(conv_db.awaiting_input, "awaiting_input must be cleared when topic changes away from booking")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

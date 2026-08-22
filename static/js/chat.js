@@ -161,6 +161,9 @@ async function handleSendMessage(e) {
 
         if (data.success) {
             appendMessageBubble('assistant', data.reply);
+            if (data.ui_action) {
+                renderUIAction(data.ui_action);
+            }
             updateStatusUI(data.status);
         } else {
             appendMessageBubble('assistant', `⚠️ Error: ${data.error || 'Something went wrong.'}`);
@@ -170,6 +173,47 @@ async function handleSendMessage(e) {
         if (thinkingElem) thinkingElem.remove();
         appendMessageBubble('assistant', '⚠️ Connection error. Please try sending again.');
     }
+    scrollToBottom();
+}
+
+function renderUIAction(uiAction) {
+    if (!uiAction || !uiAction.options || uiAction.options.length === 0) return;
+
+    const container = document.createElement('div');
+    container.className = 'ui-action-container';
+    container.style.display = 'flex';
+    container.style.flexWrap = 'wrap';
+    container.style.gap = '8px';
+    container.style.marginTop = '8px';
+    container.style.marginBottom = '12px';
+
+    if (uiAction.type === 'doctor_selection') {
+        uiAction.options.forEach(doc => {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm btn-outline ui-card-btn';
+            btn.innerHTML = `<strong>${doc.name}</strong><br><small>${doc.specialization}</small>`;
+            btn.onclick = () => sendQuickPrompt(`I select ${doc.name}`);
+            container.appendChild(btn);
+        });
+    } else if (uiAction.type === 'service_selection') {
+        uiAction.options.forEach(svc => {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm btn-outline ui-card-btn';
+            btn.innerHTML = `<strong>${svc.name}</strong><br><small>Rs. ${svc.price} • ${svc.duration}m</small>`;
+            btn.onclick = () => sendQuickPrompt(`I want ${svc.name}`);
+            container.appendChild(btn);
+        });
+    } else if (uiAction.type === 'date_selection') {
+        uiAction.options.forEach(opt => {
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-sm btn-outline ui-chip-btn';
+            btn.textContent = `📅 ${opt.label} (${opt.value})`;
+            btn.onclick = () => sendQuickPrompt(opt.value);
+            container.appendChild(btn);
+        });
+    }
+
+    chatMessages.appendChild(container);
     scrollToBottom();
 }
 
@@ -196,4 +240,92 @@ async function resetChat() {
 
 function scrollToBottom() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Voice Recording Handling
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+
+const btnVoiceRecord = document.getElementById('btnVoiceRecord');
+const voiceMicIcon = document.getElementById('voiceMicIcon');
+
+if (btnVoiceRecord) {
+    btnVoiceRecord.addEventListener('click', toggleVoiceRecord);
+}
+
+async function toggleVoiceRecord() {
+    if (!isRecording) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioChunks = [];
+            const options = MediaRecorder.isTypeSupported('audio/webm') ? { mimeType: 'audio/webm' } : {};
+            mediaRecorder = new MediaRecorder(stream, options);
+            
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) audioChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = async () => {
+                const recordedMime = mediaRecorder.mimeType || 'audio/webm';
+                const audioBlob = new Blob(audioChunks, { type: recordedMime });
+                await sendVoiceBlob(audioBlob, recordedMime);
+                stream.getTracks().forEach(track => track.stop());
+            };
+
+            mediaRecorder.start();
+            isRecording = true;
+            btnVoiceRecord.style.background = '#e74c3c';
+            btnVoiceRecord.style.color = '#fff';
+            voiceMicIcon.textContent = '⏹️';
+        } catch (err) {
+            console.error('Microphone access error:', err);
+            alert('Microphone access is required for voice messages.');
+        }
+    } else {
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+        }
+        isRecording = false;
+        btnVoiceRecord.style.background = '';
+        btnVoiceRecord.style.color = '';
+        voiceMicIcon.textContent = '🎤';
+    }
+}
+
+async function sendVoiceBlob(blob, mimeType) {
+    const formData = new FormData();
+    const ext = mimeType.includes('wav') ? 'wav' : 'webm';
+    formData.append('file', blob, `voice_input.${ext}`);
+    if (conversationId) {
+        formData.append('conversation_id', conversationId);
+    }
+
+    appendMessageBubble('user', '🎙️ (Voice Message)', new Date().toISOString());
+    btnSend.disabled = true;
+
+    try {
+        const res = await fetch('/api/chat/send-voice', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await res.json();
+        btnSend.disabled = false;
+
+        if (data.success) {
+            if (data.session_reset || !conversationId) {
+                conversationId = data.conversation_id;
+                localStorage.setItem('ai_business_conv_id', conversationId);
+            }
+            appendMessageBubble('assistant', data.reply, new Date().toISOString());
+            if (data.ui_action) renderUIAction(data.ui_action);
+            updateStatusUI(data.status);
+        } else {
+            appendMessageBubble('assistant', `⚠️ ${data.error || 'Voice processing error.'}`, new Date().toISOString());
+        }
+    } catch (err) {
+        btnSend.disabled = false;
+        console.error('Voice send error:', err);
+        appendMessageBubble('assistant', '⚠️ Failed to send voice message.', new Date().toISOString());
+    }
 }

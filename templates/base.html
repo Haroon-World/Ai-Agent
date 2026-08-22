@@ -22,14 +22,15 @@
                     <span>Customer Chat</span>
                     <span class="live-dot"></span>
                 </a>
-                <a href="/admin" class="nav-item">Admin Dashboard</a>
                 {% if session.get('admin_logged_in') %}
+                    <a href="/admin" class="nav-item">Admin Dashboard</a>
                     <a href="/admin/appointments" class="nav-item">Appointments</a>
+                    <a href="/admin/doctors" class="nav-item">Doctor Schedules</a>
                     <a href="/admin/conversations" class="nav-item">Conversations</a>
                     <a href="/admin/reminders" class="nav-item">Reminders</a>
                     <a href="/admin/logout" class="nav-item nav-btn-logout">Logout</a>
                 {% else %}
-                    <a href="/admin/login" class="nav-item nav-btn">Admin Login</a>
+                    <a href="/admin/login" class="nav-item nav-btn">Admin Portal</a>
                 {% endif %}
             </div>
         </div>

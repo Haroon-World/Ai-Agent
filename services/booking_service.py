@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional, Tuple, Any
 from sqlalchemy.exc import IntegrityError
-from models import db, Business, Doctor, Service, Customer, Appointment
+from models import db, Business, Doctor, Service, Customer, Appointment, DoctorSchedule, DoctorLeave
 from services.reminder_service import ReminderService
 
 # Fallback timezone used only when no business record is found
@@ -48,24 +48,25 @@ class BookingService:
         date_str: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Calculate available time slots for a given doctor (or all doctors) on a specific date.
-        Past-date check uses the clinic's configured timezone so that server-UTC and
-        clinic-local date disagreements are correctly handled.
-        Format of date_str: 'YYYY-MM-DD'
+        Calculate actual available time slots using:
+        - Normalized DoctorSchedule (per day of week: is_available, start_time, end_time)
+        - Service duration (e.g. 30, 45, 60 minutes)
+        - Active confirmed appointments (excluding CANCELLED)
+        - DoctorLeave / blocked time ranges
         """
         if not date_str:
-            return {"error": "Date is required in YYYY-MM-DD format"}
+            return {"success": False, "error": "Date is required in YYYY-MM-DD format"}
 
         try:
             target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
-            return {"error": "Invalid date format. Please use YYYY-MM-DD"}
+            return {"success": False, "error": "Invalid date format. Please use YYYY-MM-DD"}
 
-        # Validate date is not in the past — compare against clinic's local date, not server UTC
+        # Validate date is not in the past — compare against clinic's local date
         tz = _get_business_tz(business_id)
         today = datetime.now(tz).date()
         if target_date < today:
-            return {"error": f"The date {date_str} is in the past. Please select a future date."}
+            return {"success": False, "error": f"The date {date_str} is in the past. Please select a future date."}
 
         day_name = target_date.strftime("%A")
 
@@ -76,7 +77,7 @@ class BookingService:
         doctors = query.all()
 
         if not doctors:
-            return {"error": "No matching doctors found for this clinic."}
+            return {"success": False, "error": "No matching doctors found for this clinic."}
 
         service = None
         duration = 30
@@ -86,28 +87,77 @@ class BookingService:
                 duration = service.duration
 
         results = []
+        all_available_slots = []
 
         for doc in doctors:
-            working_days = [d.strip() for d in doc.working_days.split(",")] if doc.working_days else []
-            if day_name not in working_days:
+            if hasattr(doc, "is_active") and not doc.is_active:
                 results.append({
                     "doctor_id": doc.id,
                     "doctor_name": doc.name,
                     "date": date_str,
                     "day": day_name,
                     "available_slots": [],
-                    "message": f"{doc.name} does not practice on {day_name}s."
+                    "message": f"{doc.name} is currently not active."
                 })
                 continue
 
-            # Parse start and end times
+            # 1. Lookup DoctorSchedule for target day of week
+            sched = DoctorSchedule.query.filter_by(doctor_id=doc.id, day_of_week=day_name).first()
+            
+            # Fallback to doctor's working_days field if no DoctorSchedule record exists
+            is_day_available = sched.is_available if sched else (day_name in [d.strip() for d in (doc.working_days or "").split(",")])
+            start_time_str = sched.start_time if sched else (doc.start_time or "09:00")
+            end_time_str = sched.end_time if sched else (doc.end_time or "17:00")
+
+            if not is_day_available:
+                results.append({
+                    "doctor_id": doc.id,
+                    "doctor_name": doc.name,
+                    "date": date_str,
+                    "day": day_name,
+                    "available_slots": [],
+                    "message": f"{doc.name} is closed / not practicing on {day_name}s."
+                })
+                continue
+
+            # 2. Parse day-specific start and end working hours
             try:
-                start_h, start_m = map(int, doc.start_time.split(":"))
-                end_h, end_m = map(int, doc.end_time.split(":"))
+                start_h, start_m = map(int, start_time_str.split(":"))
+                end_h, end_m = map(int, end_time_str.split(":"))
             except Exception:
                 start_h, start_m, end_h, end_m = 9, 0, 17, 0
 
-            # Get all confirmed appointments for this doctor on target_date (with service info)
+            start_day_min = start_h * 60 + start_m
+            end_day_min = end_h * 60 + end_m
+
+            # 3. Check DoctorLeave / Blocked times
+            leaves = DoctorLeave.query.filter_by(doctor_id=doc.id, leave_date=date_str).all()
+            is_full_day_leave = any(l.is_all_day for l in leaves)
+            if is_full_day_leave:
+                results.append({
+                    "doctor_id": doc.id,
+                    "doctor_name": doc.name,
+                    "date": date_str,
+                    "day": day_name,
+                    "available_slots": [],
+                    "message": f"{doc.name} is on leave / unavailable on {date_str}."
+                })
+                continue
+
+            # Build list of blocked ranges (start_min, end_min)
+            blocked_ranges: List[Tuple[int, int]] = []
+
+            # Partial day leaves
+            for l in leaves:
+                if not l.is_all_day and l.start_time and l.end_time:
+                    try:
+                        l_sh, l_sm = map(int, l.start_time.split(":"))
+                        l_eh, l_em = map(int, l.end_time.split(":"))
+                        blocked_ranges.append((l_sh * 60 + l_sm, l_eh * 60 + l_em))
+                    except Exception:
+                        pass
+
+            # Confirmed active appointments (CANCELLED excluded)
             booked_appts = Appointment.query.filter_by(
                 business_id=business_id,
                 doctor_id=doc.id,
@@ -115,8 +165,6 @@ class BookingService:
                 status="CONFIRMED"
             ).all()
 
-            # Build blocked-time ranges: list of (start_min, end_min) for each booked appt
-            blocked_ranges: List[Tuple[int, int]] = []
             for a in booked_appts:
                 try:
                     ah, am = map(int, a.appointment_time.split(":"))
@@ -126,7 +174,21 @@ class BookingService:
                 except Exception:
                     pass
 
-            # Generate slots using requested service duration as step — skip any slot that overlaps a blocked range
+            # Include Break Time if specified by admin (e.g., Lunch 13:00 to 14:00)
+            if getattr(doc, "break_start_time", None) and getattr(doc, "break_end_time", None):
+                try:
+                    b_sh, b_sm = map(int, doc.break_start_time.split(":"))
+                    b_eh, b_em = map(int, doc.break_end_time.split(":"))
+                    b_start_min = b_sh * 60 + b_sm
+                    b_end_min = b_eh * 60 + b_em
+                    if b_start_min < b_end_min:
+                        blocked_ranges.append((b_start_min, b_end_min))
+                except Exception:
+                    pass
+
+            # Slot calculation step size: match service duration (or slot_interval if defined)
+            step_interval = getattr(doc, "slot_interval", None) or duration or 30
+
             slots = []
             curr = datetime.combine(target_date, time(start_h, start_m))
             end_time_dt = datetime.combine(target_date, time(end_h, end_m))
@@ -135,11 +197,13 @@ class BookingService:
                 slot_str = curr.strftime("%H:%M")
                 s_min = curr.hour * 60 + curr.minute
                 e_min = s_min + duration
+
                 # Check overlap with every blocked range
                 overlaps = any(s_min < blk_end and e_min > blk_start for blk_start, blk_end in blocked_ranges)
                 if not overlaps:
                     slots.append(slot_str)
-                curr += timedelta(minutes=30)
+
+                curr += timedelta(minutes=step_interval)
 
             results.append({
                 "doctor_id": doc.id,
@@ -151,9 +215,19 @@ class BookingService:
                 "total_slots": len(slots)
             })
 
+            if len(doctors) == 1 or not all_available_slots:
+                all_available_slots = slots
+
+        target_doc = doctors[0] if doctors else None
         return {
+            "success": True,
+            "doctor": target_doc.name if (doctor_id and target_doc) else "All Doctors",
+            "doctor_id": doctor_id,
             "date": date_str,
             "day": day_name,
+            "service": service.name if service else "Dental Service",
+            "duration_minutes": duration,
+            "available_slots": all_available_slots,
             "results": results
         }
 
@@ -173,12 +247,10 @@ class BookingService:
         Atomic appointment booking transaction with:
         - Customer deduplication
         - Idempotency check
-        - Schedule revalidation (working day + working hours)
-        - Duration-aware overlap conflict detection
+        - Strict schedule revalidation (day availability, working hours, leaves, overlaps)
         - DB-level unique constraint as final safety net
         - Automatic reminder scheduling
         """
-        # --- Basic input validation with structured missing_fields ---
         missing_fields = []
         name_str = str(customer_name).strip() if customer_name else ""
         if not name_str or name_str.lower() in ["valued patient", "patient", "customer", "user", "anonymous", "guest", "test", "n/a", "none"]:
@@ -197,14 +269,12 @@ class BookingService:
         if not appointment_time or not str(appointment_time).strip():
             missing_fields.append("appointment_time")
 
-
         if missing_fields:
             return {
                 "success": False,
                 "error": f"Missing required booking fields: {', '.join(missing_fields)}",
                 "missing_fields": missing_fields
             }
-
 
         # --- Idempotency guard ---
         if idempotency_key:
@@ -221,47 +291,83 @@ class BookingService:
         doctor = Doctor.query.filter_by(id=doctor_id, business_id=business_id).first()
         if not doctor:
             return {"success": False, "error": f"Doctor with ID {doctor_id} not found."}
+        if hasattr(doctor, "is_active") and not doctor.is_active:
+            return {"success": False, "error": f"Dr. {doctor.name} is currently not active."}
 
         # --- Validate Service ---
         service = Service.query.filter_by(id=service_id, business_id=business_id).first()
         if not service:
             return {"success": False, "error": f"Service with ID {service_id} not found."}
 
-        # --- Schedule revalidation: working day ---
+        # --- Validate Date & Day of Week ---
         try:
-            day_name = datetime.strptime(appointment_date, "%Y-%m-%d").strftime("%A")
+            target_date = datetime.strptime(appointment_date, "%Y-%m-%d").date()
+            day_name = target_date.strftime("%A")
         except ValueError:
             return {"success": False, "error": "Invalid appointment_date format. Use YYYY-MM-DD."}
 
-        working_days = [d.strip() for d in (doctor.working_days or "").split(",")]
-        if day_name not in working_days:
+        # Past-date revalidation
+        tz = _get_business_tz(business_id)
+        if target_date < datetime.now(tz).date():
+            return {"success": False, "error": f"The date {appointment_date} is in the past."}
+
+        # --- Revalidate DoctorSchedule ---
+        sched = DoctorSchedule.query.filter_by(doctor_id=doctor.id, day_of_week=day_name).first()
+        is_day_available = sched.is_available if sched else (day_name in [d.strip() for d in (doctor.working_days or "").split(",")])
+        start_time_str = sched.start_time if sched else (doctor.start_time or "09:00")
+        end_time_str = sched.end_time if sched else (doctor.end_time or "17:00")
+
+        if not is_day_available:
             return {
                 "success": False,
-                "error": f"Dr. {doctor.name} does not work on {day_name}s. "
-                         f"Available days: {', '.join(working_days)}."
+                "error": f"Dr. {doctor.name} is closed / not practicing on {day_name}s."
             }
 
-        # --- Schedule revalidation: working hours ---
+        # --- Revalidate Working Hours ---
         try:
             req_time = datetime.strptime(appointment_time, "%H:%M").time()
-            start_time = datetime.strptime(doctor.start_time, "%H:%M").time()
-            end_time = datetime.strptime(doctor.end_time, "%H:%M").time()
+            start_time = datetime.strptime(start_time_str, "%H:%M").time()
+            end_time = datetime.strptime(end_time_str, "%H:%M").time()
         except (ValueError, TypeError):
             return {"success": False, "error": "Invalid time format. Use HH:MM."}
 
-        if not (start_time <= req_time < end_time):
+        req_start_m = req_time.hour * 60 + req_time.minute
+        req_end_m = req_start_m + service.duration
+        start_m = start_time.hour * 60 + start_time.minute
+        end_m = end_time.hour * 60 + end_time.minute
+
+        if not (start_m <= req_start_m and req_end_m <= end_m):
             return {
                 "success": False,
                 "error": (
-                    f"Requested time {appointment_time} is outside Dr. {doctor.name}'s "
-                    f"working hours ({doctor.start_time}–{doctor.end_time})."
+                    f"Requested slot {appointment_time} ({service.duration} mins) is outside Dr. {doctor.name}'s "
+                    f"working hours ({start_time_str}–{end_time_str}) on {day_name}s."
                 )
             }
 
-        # --- Duration-aware overlap conflict check ---
-        req_start_m = req_time.hour * 60 + req_time.minute
-        req_end_m = req_start_m + service.duration
+        # --- Revalidate DoctorLeave / Blocked Period ---
+        leaves = DoctorLeave.query.filter_by(doctor_id=doctor.id, leave_date=appointment_date).all()
+        for l in leaves:
+            if l.is_all_day:
+                return {
+                    "success": False,
+                    "error": f"Dr. {doctor.name} is on leave on {appointment_date} ({l.reason or 'All day'})."
+                }
+            if l.start_time and l.end_time:
+                try:
+                    l_sh, l_sm = map(int, l.start_time.split(":"))
+                    l_eh, l_em = map(int, l.end_time.split(":"))
+                    l_start = l_sh * 60 + l_sm
+                    l_end = l_eh * 60 + l_em
+                    if req_start_m < l_end and req_end_m > l_start:
+                        return {
+                            "success": False,
+                            "error": f"Dr. {doctor.name} is unavailable from {l.start_time} to {l.end_time} on {appointment_date}."
+                        }
+                except Exception:
+                    pass
 
+        # --- Duration-aware overlap conflict check against existing confirmed appointments ---
         booked_appts = Appointment.query.filter_by(
             business_id=business_id,
             doctor_id=doctor_id,
@@ -301,7 +407,6 @@ class BookingService:
                 db.session.add(customer)
                 db.session.flush()
             else:
-                # Update name if it has changed
                 if customer_name.strip() and customer.name != customer_name.strip():
                     customer.name = customer_name.strip()
                     db.session.flush()
@@ -332,7 +437,7 @@ class BookingService:
                 "appointment": appointment.to_dict(),
                 "message": (
                     f"Appointment successfully confirmed for {customer.name} on "
-                    f"{appointment_date} at {appointment_time} with {doctor.name}."
+                    f"{appointment_date} at {appointment_time} with {doctor.name} for {service.name}."
                 )
             }
 
@@ -353,6 +458,23 @@ class BookingService:
             }
 
     @staticmethod
+    def update_doctor_schedule(doctor_id: int, schedule_data: List[Dict[str, Any]]) -> bool:
+        """Update or create normalized DoctorSchedule entries for a doctor."""
+        for item in schedule_data:
+            day = item.get("day_of_week")
+            if not day:
+                continue
+            sched = DoctorSchedule.query.filter_by(doctor_id=doctor_id, day_of_week=day).first()
+            if not sched:
+                sched = DoctorSchedule(doctor_id=doctor_id, day_of_week=day)
+                db.session.add(sched)
+            sched.is_available = bool(item.get("is_available", True))
+            sched.start_time = item.get("start_time", "09:00")
+            sched.end_time = item.get("end_time", "17:00")
+        db.session.commit()
+        return True
+
+    @staticmethod
     def cancel_appointment(
         business_id: int,
         appointment_id: int,
@@ -370,7 +492,6 @@ class BookingService:
         if reason:
             appt.notes = f"{appt.notes or ''} [Cancelled: {reason}]".strip()
 
-        # Cancel associated scheduled reminders
         ReminderService.cancel_for_appointment(appt.id)
 
         db.session.commit()
@@ -395,7 +516,6 @@ class BookingService:
         if not appt:
             return {"success": False, "error": f"Appointment #{appointment_id} not found."}
 
-        # Duration-aware overlap check for the new slot (excluding the appointment being rescheduled)
         service = appt.service
         duration = service.duration if service else 30
         try:
@@ -435,7 +555,6 @@ class BookingService:
             appt.appointment_time = new_time
             appt.status = "CONFIRMED"
 
-            # Reschedule reminder
             ReminderService.cancel_for_appointment(appt.id)
             ReminderService.schedule_for_appointment(appt)
 
