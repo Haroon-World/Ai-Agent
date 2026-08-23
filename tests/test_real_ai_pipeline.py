@@ -122,11 +122,15 @@ class TestRealAIPipeline(unittest.TestCase):
         r4 = self.agent.process_message(conv.id, "My name is Tariq Mahmood")
         print("Turn 5 (Name):", r4.get("content"))
 
-        # Step 6: Phone -> Completes booking
+        # Step 6: Phone -> Completes booking or asks for confirmation
         r5 = self.agent.process_message(conv.id, "My phone number is 03001234567")
         print("Turn 6 (Phone & Book):", r5.get("content"))
 
         executed_all = [t["name"] for t in r4.get("executed_tools", [])] + [t["name"] for t in r5.get("executed_tools", [])]
+        if "book_appointment" not in executed_all:
+            r6 = self.agent.process_message(conv.id, "Yes, please confirm and book my appointment.")
+            executed_all += [t["name"] for t in r6.get("executed_tools", [])]
+
         self.assertIn("book_appointment", executed_all)
 
         # Assert DB appointment created

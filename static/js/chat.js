@@ -144,6 +144,11 @@ async function handleSendMessage(e) {
     const text = chatInput.value.trim();
     if (!text) return;
 
+    // Disable any active interactive options from previous turns
+    document.querySelectorAll('.ui-action-wrapper:not(.ui-action-disabled)').forEach(w => {
+        w.classList.add('ui-action-disabled');
+    });
+
     // Append user message immediately to UI
     appendMessageBubble('user', text);
     chatInput.value = '';
@@ -190,6 +195,12 @@ async function handleSendMessage(e) {
 
 function renderUIAction(uiAction, isCurrent = true) {
     if (!uiAction) return;
+
+    if (isCurrent) {
+        document.querySelectorAll('.ui-action-wrapper:not(.ui-action-disabled)').forEach(w => {
+            w.classList.add('ui-action-disabled');
+        });
+    }
 
     // 1. Final Booking Confirmation Card
     if (uiAction.type === 'booking_confirmation' && uiAction.details) {

@@ -640,25 +640,77 @@ class MockAdapter(BaseLLMAdapter):
 
         if awaiting_input and not is_topic_change:
             # Check for "I don't know / consultation / toothache" first
-            if any(w in user_text for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup", "consult"]) and not any(d["name"].lower() in user_text for d in doctor_roster):
+            if any(w in user_text for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup", "consult"]):
                 consultation_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else {"id": 1, "name": "Dental Checkup & Consultation", "price": 2000})
                 svc_id = consultation_svc["id"]
                 svc_name = consultation_svc["name"]
                 fee = consultation_svc.get("price", 2000.0)
-                return {
-                    "content": f"No problem. We can book a consultation. The consultation fee is PKR {fee:,.0f}. Which doctor would you prefer?",
-                    "tool_calls": []
-                }
-
-            if awaiting_input == "doctor_choice":
-                matched_svc_here = _fuzzy_match_roster(user_text, service_roster)
-                if matched_svc_here:
-                    svc_id = matched_svc_here["id"]
-                    svc_name = matched_svc_here["name"]
+                if not doc_name:
                     return {
-                        "content": f"You selected {svc_name}. Which doctor would you prefer?",
+                        "content": f"No problem. We can book a consultation. The consultation fee is PKR {fee:,.0f}. Which doctor would you prefer?",
                         "tool_calls": []
                     }
+                elif not target_date_str:
+                    greeting = f"Sure {effective_name}. " if effective_name else "Sure! "
+                    return {
+                        "content": f"{greeting}We'll arrange a consultation with {doc_name} (Fee: PKR {fee:,.0f}). What date would you prefer for your appointment?",
+                        "tool_calls": []
+                    }
+
+            if awaiting_input in ["date_choice", "date"]:
+                if target_date_str and not is_question:
+                    if time_token or req_time:
+                        chosen_time = time_token or req_time
+                        if effective_name and effective_phone:
+                            return {
+                                "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {chosen_time}...",
+                                "tool_calls": [{
+                                    "name": "book_appointment",
+                                    "arguments": {
+                                        "customer_name": effective_name,
+                                        "customer_phone": effective_phone,
+                                        "doctor_id": doc_id or 1,
+                                        "service_id": svc_id or 1,
+                                        "appointment_date": target_date_str,
+                                        "appointment_time": chosen_time,
+                                        "notes": "Booked via AI Assistant"
+                                    }
+                                }]
+                            }
+                        elif effective_name and not effective_phone:
+                            return {
+                                "content": f"Thanks, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
+                                "tool_calls": []
+                            }
+                        else:
+                            return {
+                                "content": f"Thank you. Please provide your full name and contact phone number to complete and confirm your booking.",
+                                "tool_calls": []
+                            }
+                    else:
+                        return {
+                            "content": f"Checking open slots for {doc_name or 'our practicing dentist'} on {target_date_str}...",
+                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id or 1, "service_id": svc_id or 1}}]
+                        }
+                elif not is_question:
+                    greeting = f"Sure {effective_name}. " if effective_name else "Sure! "
+                    if doc_name and svc_name:
+                        return {
+                            "content": f"{greeting}We'll arrange a {svc_name} with {doc_name}. What date would you prefer for your appointment?",
+                            "tool_calls": []
+                        }
+                    elif doc_name:
+                        return {
+                            "content": f"{doc_name} selected. Which date would you prefer?",
+                            "tool_calls": []
+                        }
+                    else:
+                        return {
+                            "content": "Which date would you prefer for your appointment?",
+                            "tool_calls": []
+                        }
+
+            elif awaiting_input == "doctor_choice":
                 matched_doc = _fuzzy_match_roster(user_text, doctor_roster) or ({"id": doc_id, "name": doc_name} if doc_id else None)
                 if matched_doc:
                     doc_id = matched_doc["id"]
@@ -668,10 +720,28 @@ class MockAdapter(BaseLLMAdapter):
                     if target_date_str:
                         return {
                             "content": f"Checking open slots for {doc_name} on {target_date_str}...",
-                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
+                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id or 1}}]
                         }
                     return {
                         "content": f"{doc_name} selected. Which date would you prefer?",
+                        "tool_calls": []
+                    }
+                matched_svc_here = _fuzzy_match_roster(user_text, service_roster)
+                if matched_svc_here:
+                    svc_id = matched_svc_here["id"]
+                    svc_name = matched_svc_here["name"]
+                    if target_date_str:
+                        return {
+                            "content": f"Checking open slots for {svc_name} on {target_date_str}...",
+                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id or 1, "service_id": svc_id}}]
+                        }
+                    if doc_id:
+                        return {
+                            "content": f"You selected {svc_name} with {doc_name}. Which date would you prefer?",
+                            "tool_calls": []
+                        }
+                    return {
+                        "content": f"You selected {svc_name}. Which doctor would you prefer?",
                         "tool_calls": []
                     }
                 elif not is_question and not target_date_str:
@@ -686,10 +756,30 @@ class MockAdapter(BaseLLMAdapter):
                 if matched_svc:
                     svc_id = matched_svc["id"]
                     svc_name = matched_svc["name"]
-                    if target_date_str and doc_id:
+                    if effective_phone and effective_name and (req_time or time_token) and target_date_str:
+                        effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
+                        effective_doc_name = doc_name or (doctor_roster[0]["name"] if doctor_roster else "our practicing dentist")
+                        chosen_time = time_token or req_time or "10:00"
                         return {
-                            "content": f"Checking open slots for {svc_name} with {doc_name} on {target_date_str}...",
-                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
+                            "content": f"Booking your appointment with {effective_doc_name} for {target_date_str} at {chosen_time}...",
+                            "tool_calls": [{
+                                "name": "book_appointment",
+                                "arguments": {
+                                    "customer_name": effective_name,
+                                    "customer_phone": effective_phone,
+                                    "doctor_id": effective_doc_id,
+                                    "service_id": svc_id,
+                                    "appointment_date": target_date_str,
+                                    "appointment_time": chosen_time,
+                                    "notes": "Booked via AI Assistant"
+                                }
+                            }]
+                        }
+                    elif target_date_str:
+                        effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
+                        return {
+                            "content": f"Checking open slots for {svc_name} on {target_date_str}...",
+                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": effective_doc_id, "service_id": svc_id}}]
                         }
                     elif doc_id:
                         return {
@@ -1030,6 +1120,12 @@ class MockAdapter(BaseLLMAdapter):
         elif any(w in user_text for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup"]):
             consultation_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else {"id": 1, "name": "Dental Checkup & Consultation", "price": 2000})
             fee = consultation_svc.get("price", 2000.0)
+            if doc_name:
+                greeting = f"Sure {effective_name}. " if effective_name else "Sure! "
+                return {
+                    "content": f"{greeting}We'll arrange a Dental Checkup & Consultation with {doc_name} (Fee: PKR {fee:,.0f}). What date would you prefer for your appointment?",
+                    "tool_calls": []
+                }
             return {
                 "content": f"No problem. We can book a consultation. The consultation fee is PKR {fee:,.0f}. Which doctor would you prefer?",
                 "tool_calls": []

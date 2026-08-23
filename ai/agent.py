@@ -212,6 +212,8 @@ def _build_state_context(conv: Conversation) -> str:
         services = Service.query.filter_by(business_id=conv.business_id).all()
         svc_str = ", ".join([f"{s.name} (id {s.id})" for s in services]) if services else "available services"
         lines.append(f"INSTRUCTION: The user was just asked to choose a service from: {svc_str}. Interpret their next reply as answering this question first, before considering any other intent, unless they clearly change the subject.")
+    elif conv.awaiting_input in ["date_choice", "date"]:
+        lines.append("INSTRUCTION: The user was just asked to choose an appointment date. Interpret their next reply as choosing a date first, before considering any other intent, unless they clearly change the subject.")
     elif conv.awaiting_input == "time_choice":
         lines.append("INSTRUCTION: The user was just asked to choose an available time slot. Interpret their next reply as choosing a time slot first, before considering any other intent, unless they clearly change the subject.")
     elif conv.awaiting_input == "confirmation":
@@ -344,20 +346,48 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         conv.pending_customer_name = None
         conv.pending_customer_phone = None
 
+    # Default service or doctor if date/time are specified and one of them was not explicitly selected
+    if conv.selected_doctor_id and (conv.requested_date or conv.requested_time) and not conv.selected_service_id:
+        def_svc = Service.query.filter_by(business_id=conv.business_id, is_active=True).first()
+        if def_svc:
+            conv.selected_service_id = def_svc.id
+
+    if conv.selected_service_id and (conv.requested_date or conv.requested_time) and not conv.selected_doctor_id:
+        def_doc = Doctor.query.filter_by(business_id=conv.business_id, is_active=True).first()
+        if def_doc:
+            conv.selected_doctor_id = def_doc.id
+
     # Update intent/state when customer wants appointment or gives parameters
     if (
         conv.selected_service_id or
         conv.selected_doctor_id or
         conv.requested_date or
         conv.requested_time or
+        conv.pending_customer_name or
+        conv.pending_customer_phone or
         any(w in text_lower for w in ["appointment", "book", "reserve", "consultation", "checkup", "visit"])
     ):
         if conv.intent in [None, "UNKNOWN"]:
             conv.intent = "BOOK_APPOINTMENT"
         if conv.workflow_state in [None, "START"]:
             conv.workflow_state = "COLLECTING_INFO"
-        if not conv.selected_service_id and not conv.awaiting_input:
-            conv.awaiting_input = "service_choice"
+        
+        # Calculate the next missing field in strict logical sequence
+        if conv.workflow_state != "BOOKED":
+            if not conv.selected_service_id and not conv.selected_doctor_id:
+                conv.awaiting_input = "service_choice"
+            elif not conv.selected_doctor_id and conv.selected_service_id:
+                conv.awaiting_input = "doctor_choice"
+            elif not conv.requested_date:
+                conv.awaiting_input = "date_choice"
+            elif not conv.requested_time:
+                conv.awaiting_input = "time_choice"
+            elif not conv.pending_customer_phone:
+                conv.awaiting_input = "phone"
+            elif not conv.pending_customer_name:
+                conv.awaiting_input = "name"
+            else:
+                conv.awaiting_input = "confirmation"
 
     db.session.flush()
 
