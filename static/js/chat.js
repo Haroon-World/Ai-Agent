@@ -90,9 +90,9 @@ function renderMessages(messages) {
     messages.forEach((m, idx) => {
         if (m.role === 'user' || m.role === 'assistant') {
             appendMessageBubble(m.role, m.content, m.created_at);
-            if (m.role === 'assistant' && (m.interactive_data || m.ui_action)) {
-                const isCurrent = idx === lastAssistantIdx;
-                renderUIAction(m.interactive_data || m.ui_action, isCurrent);
+            // Render interactive UI controls ONLY for the current active assistant message
+            if (m.role === 'assistant' && (m.interactive_data || m.ui_action) && idx === lastAssistantIdx) {
+                renderUIAction(m.interactive_data || m.ui_action, true);
             }
         }
     });

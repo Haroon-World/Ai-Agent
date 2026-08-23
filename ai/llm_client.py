@@ -632,6 +632,22 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": []
             }
 
+        # Check Explicit Doctor Switch / Change Request
+        if any(w in user_text for w in ["instead", "switch", "change doctor", "different doctor", "actually i want", "prefer dr"]):
+            matched_switch_doc = _fuzzy_match_roster(user_text, doctor_roster)
+            if matched_switch_doc:
+                doc_id = matched_switch_doc["id"]
+                doc_name = matched_switch_doc["name"]
+                if target_date_str:
+                    return {
+                        "content": f"Switched to {doc_name}. Checking available slots on {target_date_str}...",
+                        "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id or 1}}]
+                    }
+                return {
+                    "content": f"{doc_name} selected. Which date would you prefer for your appointment?",
+                    "tool_calls": []
+                }
+
         # --- EXPLICIT AWAITING_INPUT RESOLUTION (Runs FIRST before Case A-E & keyword matching) ---
         awaiting_input = conv_state.get("awaiting_input")
         

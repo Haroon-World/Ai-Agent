@@ -243,6 +243,7 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         return
 
     text_lower = user_content.lower()
+    is_explicit_change = any(w in text_lower for w in ["change", "modify", "reset", "switch", "different", "instead", "another", "actually i want", "actually want", "prefer dr"])
 
     # 1. Resolve Doctor from DB for current business_id — fuzzy-matched so
     # spelling variants/typos (e.g. "dr ahmad" for "Dr. Ahmed Khan") still
@@ -251,9 +252,12 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     doctor_roster = [{"id": d.id, "name": d.name} for d in doctors]
     matched_doc = _fuzzy_match_roster(user_content, doctor_roster)
     if matched_doc:
-        conv.selected_doctor_id = matched_doc["id"]
-        if conv.awaiting_input == "doctor_choice":
-            conv.awaiting_input = "date_choice" if not conv.requested_date else None
+        if not conv.selected_doctor_id or is_explicit_change or conv.awaiting_input == "doctor_choice":
+            if conv.selected_doctor_id and conv.selected_doctor_id != matched_doc["id"]:
+                conv.requested_time = None
+            conv.selected_doctor_id = matched_doc["id"]
+            if conv.awaiting_input == "doctor_choice":
+                conv.awaiting_input = "date_choice" if not conv.requested_date else None
 
     # 2. Resolve Service from DB for current business_id — same fuzzy
     # matching, so a typo'd or partially-remembered service name resolves
@@ -262,9 +266,12 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     service_roster = [{"id": s.id, "name": s.name} for s in services]
     matched_svc = _fuzzy_match_roster(user_content, service_roster)
     if matched_svc:
-        conv.selected_service_id = matched_svc["id"]
-        if conv.awaiting_input == "service_choice":
-            conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
+        if not conv.selected_service_id or is_explicit_change or conv.awaiting_input == "service_choice":
+            if conv.selected_service_id and conv.selected_service_id != matched_svc["id"]:
+                conv.requested_time = None
+            conv.selected_service_id = matched_svc["id"]
+            if conv.awaiting_input == "service_choice":
+                conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
     elif not conv.selected_service_id and any(w in text_lower for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup", "consult"]):
         consult_svc = Service.query.filter(
             Service.business_id == conv.business_id,
@@ -319,19 +326,19 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                 conv.awaiting_input = "confirmation"
 
     # 7. Intent and change triggers
-    if "change" in text_lower or "modify" in text_lower or "reset" in text_lower:
-        if "doctor" in text_lower:
+    if is_explicit_change:
+        if "doctor" in text_lower and not matched_doc:
             conv.selected_doctor_id = None
             conv.requested_time = None
-        elif "date" in text_lower:
+        elif ("date" in text_lower or "day" in text_lower) and not parsed_date:
             conv.requested_date = None
             conv.requested_time = None
         elif "time" in text_lower or "slot" in text_lower:
             conv.requested_time = None
-        elif "service" in text_lower:
+        elif "service" in text_lower and not matched_svc:
             conv.selected_service_id = None
             conv.requested_time = None
-        else:
+        elif not matched_doc and not matched_svc and not parsed_date:
             conv.requested_time = None
 
     # 8. Cancel trigger
