@@ -18,7 +18,7 @@
         </div>
         <div class="conv-list">
             {% for c in conversations %}
-            <div class="conv-list-item {% if c.status == 'HUMAN' %}conv-item-handoff{% endif %}" onclick="selectConversation({{ c.id }})" id="conv-tab-{{ c.id }}">
+            <div class="conv-list-item {% if c.status == 'HUMAN' %}conv-item-handoff{% endif %}" onclick="selectConversation('{{ c.id }}')" id="conv-tab-{{ c.id }}">
                 <div class="conv-item-top">
                     <span class="conv-customer-name">{{ c.customer.name if c.customer else "Visitor #" ~ c.id }}</span>
                     {% if c.status == 'HUMAN' %}

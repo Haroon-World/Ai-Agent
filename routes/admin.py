@@ -158,6 +158,33 @@ def staff_reply():
     status_code = 403 if result.get("code") == 403 else 200
     return jsonify(result), status_code
 
+from services.booking_service import BookingService
+
+@admin_bp.route("/api/admin/appointments/cancel", methods=["POST"])
+@admin_bp.route("/api/appointments/cancel", methods=["POST"])
+@login_required
+def admin_cancel_appointment():
+    data = request.get_json() or {}
+    appointment_id = data.get("appointment_id")
+    reason = data.get("reason", "Cancelled by Admin Staff")
+    business_id = Config.DEFAULT_BUSINESS_ID
+
+    if not appointment_id:
+        return jsonify({"success": False, "error": "appointment_id is required"}), 400
+
+    try:
+        appt_id_int = int(appointment_id)
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "Invalid appointment_id format."}), 400
+
+    result = BookingService.cancel_appointment(
+        business_id=business_id,
+        appointment_id=appt_id_int,
+        reason=reason
+    )
+    status_code = 200 if result.get("success") else 400
+    return jsonify(result), status_code
+
 from models import DoctorSchedule, DoctorLeave, DAYS_OF_WEEK
 
 # --- Doctor Schedule & Profile Management Routes ---
@@ -186,6 +213,14 @@ def add_doctor():
     break_start_time = request.form.get("break_start_time", "").strip() or None
     break_end_time = request.form.get("break_end_time", "").strip() or None
 
+    if break_start_time and break_end_time and break_start_time >= break_end_time:
+        flash("Lunch break start time must be before end time.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+
+    if start_time_global and end_time_global and start_time_global >= end_time_global:
+        flash("Global end time must be after start time.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+
     if name and specialization:
         doctor = Doctor(
             business_id=business_id,
@@ -208,6 +243,11 @@ def add_doctor():
             is_avail = (f"is_available_{day}" in request.form) or (day in working_days_form)
             s_time = request.form.get(f"start_time_{day}", start_time_global).strip()
             e_time = request.form.get(f"end_time_{day}", end_time_global).strip()
+            if s_time >= e_time and is_avail:
+                flash(f"End time for {day} must be after start time.", "danger")
+                db.session.rollback()
+                return redirect(url_for("admin_bp.doctors_view"))
+
             if is_avail:
                 active_days.append(day)
 
@@ -239,18 +279,29 @@ def edit_doctor(doctor_id):
         flash("Doctor not found.", "danger")
         return redirect(url_for("admin_bp.doctors_view"))
 
+    b_start = request.form.get("break_start_time", "").strip() or None
+    b_end = request.form.get("break_end_time", "").strip() or None
+    if b_start and b_end and b_start >= b_end:
+        flash("Lunch break start time must be before end time.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+
     doctor.name = request.form.get("name", doctor.name).strip()
     doctor.specialization = request.form.get("specialization", doctor.specialization).strip()
     if "start_time" in request.form:
         doctor.start_time = request.form.get("start_time").strip()
     if "end_time" in request.form:
         doctor.end_time = request.form.get("end_time").strip()
+
+    if doctor.start_time and doctor.end_time and doctor.start_time >= doctor.end_time:
+        flash("Global end time must be after start time.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+
     try:
         doctor.slot_interval = int(request.form.get("slot_interval", doctor.slot_interval or 30))
     except Exception:
         pass
-    doctor.break_start_time = request.form.get("break_start_time", "").strip() or None
-    doctor.break_end_time = request.form.get("break_end_time", "").strip() or None
+    doctor.break_start_time = b_start
+    doctor.break_end_time = b_end
     doctor.is_active = "is_active" in request.form
 
     working_days_form = request.form.getlist("working_days")
@@ -261,6 +312,11 @@ def edit_doctor(doctor_id):
         is_avail = (f"is_available_{day}" in request.form) or (day in working_days_form)
         s_time = request.form.get(f"start_time_{day}", request.form.get("start_time", doctor.start_time)).strip()
         e_time = request.form.get(f"end_time_{day}", request.form.get("end_time", doctor.end_time)).strip()
+
+        if is_avail and s_time >= e_time:
+            flash(f"End time for {day} must be after start time.", "danger")
+            return redirect(url_for("admin_bp.doctors_view"))
+
         if is_avail:
             active_days.append(day)
 
@@ -308,21 +364,31 @@ def add_doctor_leave():
     start_time = request.form.get("start_time", "").strip() or None
     end_time = request.form.get("end_time", "").strip() or None
 
-    if leave_date:
-        leave = DoctorLeave(
-            doctor_id=doctor.id,
-            leave_date=leave_date,
-            is_all_day=is_all_day,
-            start_time=start_time if not is_all_day else None,
-            end_time=end_time if not is_all_day else None,
-            reason=reason or "Leave / Blocked Time"
-        )
-        db.session.add(leave)
-        db.session.commit()
-        flash(f"Leave/Blocked date on {leave_date} added for Dr. '{doctor.name}'.", "success")
-    else:
+    if not leave_date:
         flash("Leave date is required.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
 
+    try:
+        datetime.strptime(leave_date, "%Y-%m-%d")
+    except ValueError:
+        flash("Invalid leave date format. Use YYYY-MM-DD.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+
+    if not is_all_day and start_time and end_time and start_time >= end_time:
+        flash("Partial day leave start time must be before end time.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+
+    leave = DoctorLeave(
+        doctor_id=doctor.id,
+        leave_date=leave_date,
+        is_all_day=is_all_day,
+        start_time=start_time if not is_all_day else None,
+        end_time=end_time if not is_all_day else None,
+        reason=reason or "Leave / Blocked Time"
+    )
+    db.session.add(leave)
+    db.session.commit()
+    flash(f"Leave/Blocked date on {leave_date} added for Dr. '{doctor.name}'.", "success")
     return redirect(url_for("admin_bp.doctors_view"))
 
 @admin_bp.route("/admin/doctors/leave/delete/<int:leave_id>", methods=["POST"])
@@ -334,4 +400,118 @@ def delete_doctor_leave(leave_id):
         db.session.commit()
         flash("Leave entry removed.", "info")
     return redirect(url_for("admin_bp.doctors_view"))
+
+# --- Services & Pricing Management Routes ---
+@admin_bp.route("/admin/services")
+@login_required
+def services_view():
+    business_id = Config.DEFAULT_BUSINESS_ID
+    business = db.session.get(Business, business_id)
+    services = Service.query.filter_by(business_id=business_id).order_by(Service.id.asc()).all()
+    return render_template("services.html", business=business, services=services)
+
+@admin_bp.route("/admin/services/add", methods=["POST"])
+@login_required
+def add_service():
+    business_id = Config.DEFAULT_BUSINESS_ID
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
+    try:
+        duration = int(request.form.get("duration", "30"))
+    except Exception:
+        duration = 30
+    try:
+        price = float(request.form.get("price", "2000"))
+    except Exception:
+        price = 2000.0
+    is_active = "is_active" in request.form
+
+    if not name:
+        flash("Service name is required.", "danger")
+        return redirect(url_for("admin_bp.services_view"))
+
+    service = Service(
+        business_id=business_id,
+        name=name,
+        description=description or None,
+        duration=duration,
+        price=price,
+        is_active=is_active
+    )
+    db.session.add(service)
+    db.session.commit()
+    flash(f"Service '{name}' added successfully at PKR {price:,.0f}.", "success")
+    return redirect(url_for("admin_bp.services_view"))
+
+@admin_bp.route("/admin/services/edit/<int:service_id>", methods=["POST"])
+@login_required
+def edit_service(service_id):
+    business_id = Config.DEFAULT_BUSINESS_ID
+    service = Service.query.filter_by(id=service_id, business_id=business_id).first()
+    if not service:
+        flash("Service not found.", "danger")
+        return redirect(url_for("admin_bp.services_view"))
+
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
+    try:
+        duration = int(request.form.get("duration", str(service.duration)))
+    except Exception:
+        duration = service.duration
+    try:
+        price = float(request.form.get("price", str(service.price)))
+    except Exception:
+        price = service.price
+    is_active = "is_active" in request.form
+
+    if not name:
+        flash("Service name is required.", "danger")
+        return redirect(url_for("admin_bp.services_view"))
+
+    service.name = name
+    service.description = description or None
+    service.duration = duration
+    service.price = price
+    service.is_active = is_active
+
+    db.session.commit()
+    flash(f"Service '{name}' pricing and settings updated successfully.", "success")
+    return redirect(url_for("admin_bp.services_view"))
+
+@admin_bp.route("/admin/services/toggle/<int:service_id>", methods=["POST"])
+@login_required
+def toggle_service(service_id):
+    business_id = Config.DEFAULT_BUSINESS_ID
+    service = Service.query.filter_by(id=service_id, business_id=business_id).first()
+    if service:
+        service.is_active = not service.is_active
+        db.session.commit()
+        status_text = "activated" if service.is_active else "deactivated"
+        flash(f"Service '{service.name}' {status_text}.", "info")
+    return redirect(url_for("admin_bp.services_view"))
+
+@admin_bp.route("/admin/settings/edit", methods=["POST"])
+@login_required
+def edit_settings():
+    business_id = Config.DEFAULT_BUSINESS_ID
+    business = db.session.get(Business, business_id)
+    if not business:
+        flash("Business record not found.", "danger")
+        return redirect(url_for("admin_bp.services_view"))
+
+    business.name = request.form.get("name", business.name).strip()
+    business.phone = request.form.get("phone", business.phone).strip()
+    business.address = request.form.get("address", business.address).strip()
+    business.opening_hours = request.form.get("opening_hours", business.opening_hours).strip()
+    business.policies = request.form.get("policies", business.policies).strip()
+
+    try:
+        consultation_fee = float(request.form.get("consultation_fee", "2000"))
+        business.consultation_fee = consultation_fee
+    except Exception:
+        pass
+
+    db.session.commit()
+    flash("Clinic business information and consultation fee updated successfully.", "success")
+    return redirect(url_for("admin_bp.services_view"))
 

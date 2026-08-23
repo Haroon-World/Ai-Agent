@@ -12,6 +12,7 @@ class Business(db.Model):
     timezone = db.Column(db.String(50), nullable=False, default="Asia/Karachi")
     opening_hours = db.Column(db.Text, nullable=False)
     policies = db.Column(db.Text, nullable=True)
+    consultation_fee = db.Column(db.Float, nullable=True, default=2000.0)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -33,6 +34,7 @@ class Business(db.Model):
             "timezone": self.timezone,
             "opening_hours": self.opening_hours,
             "policies": self.policies,
+            "consultation_fee": self.consultation_fee,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

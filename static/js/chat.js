@@ -86,9 +86,14 @@ function updateStatusUI(status) {
 
 function renderMessages(messages) {
     chatMessages.innerHTML = '';
-    messages.forEach(m => {
+    const lastAssistantIdx = messages.map(m => m.role).lastIndexOf('assistant');
+    messages.forEach((m, idx) => {
         if (m.role === 'user' || m.role === 'assistant') {
             appendMessageBubble(m.role, m.content, m.created_at);
+            if (m.role === 'assistant' && (m.interactive_data || m.ui_action)) {
+                const isCurrent = idx === lastAssistantIdx;
+                renderUIAction(m.interactive_data || m.ui_action, isCurrent);
+            }
         }
     });
     scrollToBottom();
@@ -169,7 +174,7 @@ async function handleSendMessage(e) {
         if (data.success) {
             appendMessageBubble('assistant', data.reply);
             if (data.ui_action) {
-                renderUIAction(data.ui_action);
+                renderUIAction(data.ui_action, true);
             }
             updateStatusUI(data.status);
         } else {
@@ -183,44 +188,257 @@ async function handleSendMessage(e) {
     scrollToBottom();
 }
 
-function renderUIAction(uiAction) {
-    if (!uiAction || !uiAction.options || uiAction.options.length === 0) return;
+function renderUIAction(uiAction, isCurrent = true) {
+    if (!uiAction) return;
 
-    const container = document.createElement('div');
-    container.className = 'ui-action-container';
-    container.style.display = 'flex';
-    container.style.flexWrap = 'wrap';
-    container.style.gap = '8px';
-    container.style.marginTop = '8px';
-    container.style.marginBottom = '12px';
+    // 1. Final Booking Confirmation Card
+    if (uiAction.type === 'booking_confirmation' && uiAction.details) {
+        const d = uiAction.details;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'ui-action-wrapper';
+        if (!isCurrent) {
+            wrapper.classList.add('ui-action-disabled');
+        }
 
-    if (uiAction.type === 'doctor_selection') {
-        uiAction.options.forEach(doc => {
-            const btn = document.createElement('button');
-            btn.className = 'btn btn-sm btn-outline ui-card-btn';
-            btn.innerHTML = `<strong>${doc.name}</strong><br><small>${doc.specialization}</small>`;
-            btn.onclick = () => sendQuickPrompt(`I select ${doc.name}`);
-            container.appendChild(btn);
-        });
-    } else if (uiAction.type === 'service_selection') {
-        uiAction.options.forEach(svc => {
-            const btn = document.createElement('button');
-            btn.className = 'btn btn-sm btn-outline ui-card-btn';
-            btn.innerHTML = `<strong>${svc.name}</strong><br><small>Rs. ${svc.price} • ${svc.duration}m</small>`;
-            btn.onclick = () => sendQuickPrompt(`I want ${svc.name}`);
-            container.appendChild(btn);
-        });
-    } else if (uiAction.type === 'date_selection') {
-        uiAction.options.forEach(opt => {
-            const btn = document.createElement('button');
-            btn.className = 'btn btn-sm btn-outline ui-chip-btn';
-            btn.textContent = `📅 ${opt.label} (${opt.value})`;
-            btn.onclick = () => sendQuickPrompt(opt.value);
-            container.appendChild(btn);
-        });
+        const card = document.createElement('div');
+        card.className = 'ui-confirm-card';
+        card.innerHTML = `
+            <div class="ui-confirm-header">
+                <span>📋</span>
+                <span>${uiAction.title || 'Review & Confirm Appointment'}</span>
+            </div>
+            <table class="ui-confirm-table">
+                <tbody>
+                    <tr><td>🩺 Service</td><td>${d.service_name} (${d.service_duration})</td></tr>
+                    <tr><td>👨‍⚕️ Doctor</td><td>${d.doctor_name}</td></tr>
+                    <tr><td>📅 Date</td><td>${d.formatted_date || d.date}</td></tr>
+                    <tr><td>⏰ Time</td><td>${d.formatted_time || d.time}</td></tr>
+                    <tr><td>👤 Patient</td><td>${d.customer_name}</td></tr>
+                    <tr><td>📞 Phone</td><td>${d.customer_phone}</td></tr>
+                    ${d.service_price ? `<tr><td>💰 Fee</td><td>${d.service_price}</td></tr>` : ''}
+                </tbody>
+            </table>
+            <div class="ui-confirm-actions">
+                <button class="ui-btn-confirm" id="btnConfirmAppointment">
+                    <span>✅ Confirm Booking</span>
+                </button>
+                <button class="ui-btn-change" id="btnChangeAppointment">
+                    <span>✏️ Change</span>
+                </button>
+                <button class="ui-btn-change" id="btnCancelAppointment" style="color: #ef4444; border-color: #fca5a5;">
+                    <span>❌ Cancel</span>
+                </button>
+            </div>
+        `;
+
+        const confirmBtn = card.querySelector('#btnConfirmAppointment');
+        const changeBtn = card.querySelector('#btnChangeAppointment');
+        const cancelBtn = card.querySelector('#btnCancelAppointment');
+
+        if (confirmBtn) {
+            confirmBtn.onclick = () => {
+                wrapper.classList.add('ui-action-disabled');
+                sendQuickPrompt('Confirm Appointment');
+            };
+        }
+
+        if (changeBtn) {
+            changeBtn.onclick = () => {
+                wrapper.classList.add('ui-action-disabled');
+                sendQuickPrompt('I want to change my appointment details');
+            };
+        }
+
+        if (cancelBtn) {
+            cancelBtn.onclick = () => {
+                wrapper.classList.add('ui-action-disabled');
+                sendQuickPrompt('Cancel booking');
+            };
+        }
+
+        wrapper.appendChild(card);
+        chatMessages.appendChild(wrapper);
+        scrollToBottom();
+        return;
     }
 
-    chatMessages.appendChild(container);
+    if (!uiAction.options || uiAction.options.length === 0) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'ui-action-wrapper';
+    if (!isCurrent) {
+        wrapper.classList.add('ui-action-disabled');
+    }
+
+    if (uiAction.title) {
+        const titleEl = document.createElement('div');
+        titleEl.className = 'ui-action-title';
+        titleEl.textContent = uiAction.title;
+        wrapper.appendChild(titleEl);
+    }
+
+    // 2. Service Selection Cards
+    if (uiAction.type === 'service_selection') {
+        const grid = document.createElement('div');
+        grid.className = 'ui-service-grid';
+
+        uiAction.options.forEach(svc => {
+            const card = document.createElement('div');
+            card.className = 'ui-service-card';
+            card.innerHTML = `
+                <div class="ui-service-name">🦷 ${svc.name}</div>
+                <div class="ui-service-meta">
+                    <span class="ui-service-price">${svc.price_formatted || ('Rs. ' + svc.price)}</span>
+                    <span>⏱️ ${svc.duration} mins</span>
+                </div>
+                ${svc.description ? `<div class="ui-service-desc">${svc.description}</div>` : ''}
+            `;
+            card.onclick = () => {
+                wrapper.classList.add('ui-action-disabled');
+                sendQuickPrompt(svc.name);
+            };
+            grid.appendChild(card);
+        });
+        wrapper.appendChild(grid);
+    }
+
+    // 3. Doctor Selection Cards
+    else if (uiAction.type === 'doctor_selection') {
+        const grid = document.createElement('div');
+        grid.className = 'ui-doctor-grid';
+
+        uiAction.options.forEach(doc => {
+            const card = document.createElement('div');
+            card.className = 'ui-doctor-card';
+            card.innerHTML = `
+                <div class="ui-doctor-avatar">👨‍⚕️</div>
+                <div class="ui-doctor-info">
+                    <div class="ui-doctor-name">${doc.name}</div>
+                    <div class="ui-doctor-spec">${doc.specialization || 'Dentist'}</div>
+                </div>
+            `;
+            card.onclick = () => {
+                wrapper.classList.add('ui-action-disabled');
+                sendQuickPrompt(doc.name);
+            };
+            grid.appendChild(card);
+        });
+        wrapper.appendChild(grid);
+    }
+
+    // 4. Date Selection Chips + Date Picker
+    else if (uiAction.type === 'date_selection') {
+        const grid = document.createElement('div');
+        grid.className = 'ui-date-grid';
+
+        uiAction.options.forEach(opt => {
+            const chip = document.createElement('button');
+            chip.className = 'ui-date-chip';
+            chip.innerHTML = `
+                <span>📅 ${opt.label}</span>
+                <span class="day-label">${opt.day || ''}</span>
+            `;
+            chip.onclick = () => {
+                wrapper.classList.add('ui-action-disabled');
+                sendQuickPrompt(opt.value);
+            };
+            grid.appendChild(chip);
+        });
+
+        // Custom date input picker
+        if (uiAction.allow_custom_date) {
+            const customContainer = document.createElement('div');
+            customContainer.style.display = 'inline-flex';
+            customContainer.style.alignItems = 'center';
+
+            const datePicker = document.createElement('input');
+            datePicker.type = 'date';
+            datePicker.className = 'ui-custom-date-btn';
+            const todayStr = new Date().toISOString().split('T')[0];
+            datePicker.min = todayStr;
+            datePicker.title = 'Choose custom date';
+
+            datePicker.onchange = (e) => {
+                if (e.target.value) {
+                    wrapper.classList.add('ui-action-disabled');
+                    sendQuickPrompt(e.target.value);
+                }
+            };
+            customContainer.appendChild(datePicker);
+            grid.appendChild(customContainer);
+        }
+
+        wrapper.appendChild(grid);
+    }
+
+    // 5. Time Slots Selection (Grouped Morning / Afternoon)
+    else if (uiAction.type === 'time_slot_selection' || uiAction.type === 'time_selection' || uiAction.type === 'slot_selection') {
+        const slotsContainer = document.createElement('div');
+        slotsContainer.className = 'ui-slots-container';
+
+        const morningSlots = uiAction.options.filter(o => o.period === 'Morning');
+        const afternoonSlots = uiAction.options.filter(o => o.period === 'Afternoon');
+
+        if (morningSlots.length > 0) {
+            const sec = document.createElement('div');
+            sec.className = 'ui-slot-section';
+            sec.innerHTML = `<div class="ui-slot-section-title">🌅 Morning</div>`;
+            const g = document.createElement('div');
+            g.className = 'ui-slot-grid';
+            morningSlots.forEach(opt => {
+                const pill = document.createElement('button');
+                pill.className = 'ui-slot-pill';
+                pill.textContent = opt.label || opt.value || opt;
+                pill.onclick = () => {
+                    wrapper.classList.add('ui-action-disabled');
+                    sendQuickPrompt(opt.value || opt.label || opt);
+                };
+                g.appendChild(pill);
+            });
+            sec.appendChild(g);
+            slotsContainer.appendChild(sec);
+        }
+
+        if (afternoonSlots.length > 0) {
+            const sec = document.createElement('div');
+            sec.className = 'ui-slot-section';
+            sec.innerHTML = `<div class="ui-slot-section-title">☀️ Afternoon</div>`;
+            const g = document.createElement('div');
+            g.className = 'ui-slot-grid';
+            afternoonSlots.forEach(opt => {
+                const pill = document.createElement('button');
+                pill.className = 'ui-slot-pill';
+                pill.textContent = opt.label || opt.value || opt;
+                pill.onclick = () => {
+                    wrapper.classList.add('ui-action-disabled');
+                    sendQuickPrompt(opt.value || opt.label || opt);
+                };
+                g.appendChild(pill);
+            });
+            sec.appendChild(g);
+            slotsContainer.appendChild(sec);
+        }
+
+        if (morningSlots.length === 0 && afternoonSlots.length === 0) {
+            const g = document.createElement('div');
+            g.className = 'ui-slot-grid';
+            uiAction.options.forEach(opt => {
+                const pill = document.createElement('button');
+                pill.className = 'ui-slot-pill';
+                pill.textContent = opt.label || opt.value || opt;
+                pill.onclick = () => {
+                    wrapper.classList.add('ui-action-disabled');
+                    sendQuickPrompt(opt.value || opt.label || opt);
+                };
+                g.appendChild(pill);
+            });
+            slotsContainer.appendChild(g);
+        }
+
+        wrapper.appendChild(slotsContainer);
+    }
+
+    chatMessages.appendChild(wrapper);
     scrollToBottom();
 }
 

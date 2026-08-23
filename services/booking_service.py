@@ -19,6 +19,89 @@ def _get_business_tz(business_id: int) -> ZoneInfo:
     return ZoneInfo(tz_name)
 
 
+def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, business_id: int) -> Tuple[List[str], str]:
+    """Calculate available time slots for a doctor on target_date. Returns (slots, unavailability_message)."""
+    if hasattr(doc, "is_active") and not doc.is_active:
+        return [], f"{doc.name} is currently not active."
+
+    day_name = target_date.strftime("%A")
+    date_str = target_date.strftime("%Y-%m-%d")
+
+    sched = DoctorSchedule.query.filter_by(doctor_id=doc.id, day_of_week=day_name).first()
+    is_day_available = sched.is_available if sched else (day_name in [d.strip() for d in (doc.working_days or "").split(",")])
+    start_time_str = sched.start_time if sched else (doc.start_time or "09:00")
+    end_time_str = sched.end_time if sched else (doc.end_time or "17:00")
+
+    if not is_day_available:
+        return [], f"{doc.name} is closed / not practicing on {day_name}s."
+
+    try:
+        start_h, start_m = map(int, start_time_str.split(":"))
+        end_h, end_m = map(int, end_time_str.split(":"))
+    except Exception:
+        start_h, start_m, end_h, end_m = 9, 0, 17, 0
+
+    leaves = DoctorLeave.query.filter_by(doctor_id=doc.id, leave_date=date_str).all()
+    if any(l.is_all_day for l in leaves):
+        return [], f"{doc.name} is on leave / unavailable on {date_str}."
+
+    blocked_ranges: List[Tuple[int, int]] = []
+    for l in leaves:
+        if not l.is_all_day and l.start_time and l.end_time:
+            try:
+                l_sh, l_sm = map(int, l.start_time.split(":"))
+                l_eh, l_em = map(int, l.end_time.split(":"))
+                blocked_ranges.append((l_sh * 60 + l_sm, l_eh * 60 + l_em))
+            except Exception:
+                pass
+
+    booked_appts = Appointment.query.filter_by(
+        business_id=business_id,
+        doctor_id=doc.id,
+        appointment_date=date_str,
+        status="CONFIRMED"
+    ).all()
+
+    for a in booked_appts:
+        try:
+            ah, am = map(int, a.appointment_time.split(":"))
+            a_start = ah * 60 + am
+            svc_dur = a.service.duration if a.service else 30
+            blocked_ranges.append((a_start, a_start + svc_dur))
+        except Exception:
+            pass
+
+    if getattr(doc, "break_start_time", None) and getattr(doc, "break_end_time", None):
+        try:
+            b_sh, b_sm = map(int, doc.break_start_time.split(":"))
+            b_eh, b_em = map(int, doc.break_end_time.split(":"))
+            b_start_min = b_sh * 60 + b_sm
+            b_end_min = b_eh * 60 + b_em
+            if b_start_min < b_end_min:
+                blocked_ranges.append((b_start_min, b_end_min))
+        except Exception:
+            pass
+
+    step_interval = getattr(doc, "slot_interval", None) or 30
+
+    slots = []
+    curr = datetime.combine(target_date, time(start_h, start_m))
+    end_time_dt = datetime.combine(target_date, time(end_h, end_m))
+
+    while curr + timedelta(minutes=duration) <= end_time_dt:
+        slot_str = curr.strftime("%H:%M")
+        s_min = curr.hour * 60 + curr.minute
+        e_min = s_min + duration
+
+        overlaps = any(s_min < blk_end and e_min > blk_start for blk_start, blk_end in blocked_ranges)
+        if not overlaps:
+            slots.append(slot_str)
+
+        curr += timedelta(minutes=step_interval)
+
+    return slots, ""
+
+
 class BookingService:
     @staticmethod
     def get_clinic_info(business_id: int) -> Dict[str, Any]:
@@ -80,154 +163,71 @@ class BookingService:
             return {"success": False, "error": "No matching doctors found for this clinic."}
 
         service = None
-        duration = 30
+        duration_override = None
         if service_id:
             service = Service.query.filter_by(id=service_id, business_id=business_id).first()
             if service:
-                duration = service.duration
+                duration_override = service.duration
 
         results = []
         all_available_slots = []
 
         for doc in doctors:
-            if hasattr(doc, "is_active") and not doc.is_active:
+            eff_duration = duration_override or getattr(doc, "slot_interval", None) or 30
+            slots, msg = _get_slots_for_doctor_on_date(doc, target_date, eff_duration, business_id)
+            if not slots and msg:
                 results.append({
                     "doctor_id": doc.id,
                     "doctor_name": doc.name,
                     "date": date_str,
                     "day": day_name,
                     "available_slots": [],
-                    "message": f"{doc.name} is currently not active."
+                    "message": msg
                 })
-                continue
-
-            # 1. Lookup DoctorSchedule for target day of week
-            sched = DoctorSchedule.query.filter_by(doctor_id=doc.id, day_of_week=day_name).first()
-            
-            # Fallback to doctor's working_days field if no DoctorSchedule record exists
-            is_day_available = sched.is_available if sched else (day_name in [d.strip() for d in (doc.working_days or "").split(",")])
-            start_time_str = sched.start_time if sched else (doc.start_time or "09:00")
-            end_time_str = sched.end_time if sched else (doc.end_time or "17:00")
-
-            if not is_day_available:
+            else:
                 results.append({
                     "doctor_id": doc.id,
                     "doctor_name": doc.name,
+                    "specialization": doc.specialization,
                     "date": date_str,
                     "day": day_name,
-                    "available_slots": [],
-                    "message": f"{doc.name} is closed / not practicing on {day_name}s."
+                    "available_slots": slots,
+                    "total_slots": len(slots)
                 })
-                continue
-
-            # 2. Parse day-specific start and end working hours
-            try:
-                start_h, start_m = map(int, start_time_str.split(":"))
-                end_h, end_m = map(int, end_time_str.split(":"))
-            except Exception:
-                start_h, start_m, end_h, end_m = 9, 0, 17, 0
-
-            start_day_min = start_h * 60 + start_m
-            end_day_min = end_h * 60 + end_m
-
-            # 3. Check DoctorLeave / Blocked times
-            leaves = DoctorLeave.query.filter_by(doctor_id=doc.id, leave_date=date_str).all()
-            is_full_day_leave = any(l.is_all_day for l in leaves)
-            if is_full_day_leave:
-                results.append({
-                    "doctor_id": doc.id,
-                    "doctor_name": doc.name,
-                    "date": date_str,
-                    "day": day_name,
-                    "available_slots": [],
-                    "message": f"{doc.name} is on leave / unavailable on {date_str}."
-                })
-                continue
-
-            # Build list of blocked ranges (start_min, end_min)
-            blocked_ranges: List[Tuple[int, int]] = []
-
-            # Partial day leaves
-            for l in leaves:
-                if not l.is_all_day and l.start_time and l.end_time:
-                    try:
-                        l_sh, l_sm = map(int, l.start_time.split(":"))
-                        l_eh, l_em = map(int, l.end_time.split(":"))
-                        blocked_ranges.append((l_sh * 60 + l_sm, l_eh * 60 + l_em))
-                    except Exception:
-                        pass
-
-            # Confirmed active appointments (CANCELLED excluded)
-            booked_appts = Appointment.query.filter_by(
-                business_id=business_id,
-                doctor_id=doc.id,
-                appointment_date=date_str,
-                status="CONFIRMED"
-            ).all()
-
-            for a in booked_appts:
-                try:
-                    ah, am = map(int, a.appointment_time.split(":"))
-                    a_start = ah * 60 + am
-                    svc_dur = a.service.duration if a.service else 30
-                    blocked_ranges.append((a_start, a_start + svc_dur))
-                except Exception:
-                    pass
-
-            # Include Break Time if specified by admin (e.g., Lunch 13:00 to 14:00)
-            if getattr(doc, "break_start_time", None) and getattr(doc, "break_end_time", None):
-                try:
-                    b_sh, b_sm = map(int, doc.break_start_time.split(":"))
-                    b_eh, b_em = map(int, doc.break_end_time.split(":"))
-                    b_start_min = b_sh * 60 + b_sm
-                    b_end_min = b_eh * 60 + b_em
-                    if b_start_min < b_end_min:
-                        blocked_ranges.append((b_start_min, b_end_min))
-                except Exception:
-                    pass
-
-            # Slot calculation step size: match service duration (or slot_interval if defined)
-            step_interval = getattr(doc, "slot_interval", None) or duration or 30
-
-            slots = []
-            curr = datetime.combine(target_date, time(start_h, start_m))
-            end_time_dt = datetime.combine(target_date, time(end_h, end_m))
-
-            while curr + timedelta(minutes=duration) <= end_time_dt:
-                slot_str = curr.strftime("%H:%M")
-                s_min = curr.hour * 60 + curr.minute
-                e_min = s_min + duration
-
-                # Check overlap with every blocked range
-                overlaps = any(s_min < blk_end and e_min > blk_start for blk_start, blk_end in blocked_ranges)
-                if not overlaps:
-                    slots.append(slot_str)
-
-                curr += timedelta(minutes=step_interval)
-
-            results.append({
-                "doctor_id": doc.id,
-                "doctor_name": doc.name,
-                "specialization": doc.specialization,
-                "date": date_str,
-                "day": day_name,
-                "available_slots": slots,
-                "total_slots": len(slots)
-            })
 
             if len(doctors) == 1 or not all_available_slots:
                 all_available_slots = slots
 
         target_doc = doctors[0] if doctors else None
+        target_doc_dur = duration_override or (getattr(target_doc, "slot_interval", None) if target_doc else 30) or 30
+
+        # Next available date lookup if requested date has no slots
+        next_available_date = None
+        next_available_day = None
+        next_available_slots = []
+        if not all_available_slots and target_doc:
+            for offset in range(1, 15):
+                next_dt = target_date + timedelta(days=offset)
+                n_slots, _ = _get_slots_for_doctor_on_date(target_doc, next_dt, target_doc_dur, business_id)
+                if n_slots:
+                    next_available_date = next_dt.strftime("%Y-%m-%d")
+                    next_available_day = next_dt.strftime("%A")
+                    next_available_slots = n_slots
+                    break
+
         return {
             "success": True,
             "doctor": target_doc.name if (doctor_id and target_doc) else "All Doctors",
             "doctor_id": doctor_id,
             "date": date_str,
             "day": day_name,
-            "service": service.name if service else "Dental Service",
-            "duration_minutes": duration,
+            "service": service.name if service else "Dental Consultation",
+            "duration_minutes": target_doc_dur,
             "available_slots": all_available_slots,
+            "is_closed": len(all_available_slots) == 0,
+            "next_available_date": next_available_date,
+            "next_available_day": next_available_day,
+            "next_available_slots": next_available_slots,
             "results": results
         }
 
@@ -257,7 +257,11 @@ class BookingService:
             missing_fields.append("customer_name")
 
         phone_str = str(customer_phone).strip() if customer_phone else ""
-        if not phone_str or phone_str.replace("0", "").replace("+", "").replace("-", "").replace(" ", "") == "":
+        biz = db.session.get(Business, business_id)
+        biz_phone = biz.phone.strip() if (biz and biz.phone) else ""
+        clean_p = phone_str.replace(" ", "").replace("-", "")
+        clean_bp = biz_phone.replace(" ", "").replace("-", "")
+        if not phone_str or phone_str.replace("0", "").replace("+", "").replace("-", "").replace(" ", "") == "" or (clean_bp and clean_p == clean_bp):
             missing_fields.append("customer_phone")
 
         if not doctor_id:

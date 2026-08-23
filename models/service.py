@@ -10,6 +10,7 @@ class Service(db.Model):
     description = db.Column(db.Text, nullable=True)
     duration = db.Column(db.Integer, nullable=False, default=30)  # In minutes
     price = db.Column(db.Float, nullable=False, default=0.0)      # Currency units (PKR / USD)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -24,4 +25,5 @@ class Service(db.Model):
             "description": self.description,
             "duration": self.duration,
             "price": self.price,
+            "is_active": self.is_active,
         }

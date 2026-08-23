@@ -34,7 +34,7 @@ class TestOffTopicQueries(unittest.TestCase):
         db.session.commit()
 
         agent = Agent(business_id=1, llm_provider="mock")
-        res = agent.process_message(conv.id, "what is the weather today?")
+        res = agent.process_message(conv.id, "what is the weather in London?")
 
         self.assertNotIn("Sorry, I didn't quite catch that", res["content"])
         self.assertIn("dental", res["content"].lower())

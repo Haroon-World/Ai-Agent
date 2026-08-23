@@ -1,10 +1,113 @@
-import os
 import json
 import re
+import time
 import difflib
-from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime, date, timedelta
+from typing import List, Dict, Any, Optional
 from config.config import Config
 from ai.tools import CANONICAL_TOOLS
+
+try:
+    from google import genai
+    from google.genai import types as genai_types
+except ImportError:
+    genai = None  # type: ignore
+    genai_types = None  # type: ignore
+
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None  # type: ignore
+
+
+MONTH_MAP = {
+    "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+    "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10, "oct": 10,
+    "november": 11, "nov": 11, "december": 12, "dec": 12
+}
+
+WEEKDAY_MAP = {
+    "monday": 0, "mon": 0,
+    "tuesday": 1, "tue": 1, "tues": 1,
+    "wednesday": 2, "wed": 2,
+    "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
+    "friday": 4, "fri": 4,
+    "saturday": 5, "sat": 5,
+    "sunday": 6, "sun": 6
+}
+
+
+def resolve_date_string(user_content: str, business_id: int = 1) -> Optional[str]:
+    """
+    Parse relative and explicit date references relative to clinic local timezone.
+    Supports: YYYY-MM-DD, today, tomorrow, day after tomorrow, parson, kal, aaj,
+    relative weekdays (monday..sunday, next monday), explicit dates (August 24, 24 August, etc.).
+    Returns YYYY-MM-DD string or None.
+    """
+    if not user_content:
+        return None
+
+    text_lower = user_content.lower().strip()
+
+    try:
+        from services.booking_service import _get_business_tz
+        tz = _get_business_tz(business_id)
+        today = datetime.now(tz).date()
+    except Exception:
+        today = datetime.now().date()
+
+    # 1. ISO format YYYY-MM-DD
+    iso_match = re.search(r'\b(\d{4}-\d{2}-\d{2})\b', user_content)
+    if iso_match:
+        return iso_match.group(1)
+
+    # 2. Relative keywords
+    if "day after tomorrow" in text_lower or "parson" in text_lower or "parso" in text_lower:
+        return (today + timedelta(days=2)).strftime("%Y-%m-%d")
+    if "tomorrow" in text_lower or "kal" in text_lower:
+        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    if "today" in text_lower or "aaj" in text_lower:
+        return today.strftime("%Y-%m-%d")
+
+    # 3. Explicit Month + Day (e.g. August 24, 24 August, Aug 24th)
+    m1 = re.search(r'\b(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)\s+(\d{1,2})(st|nd|rd|th)?\b', text_lower)
+    if m1:
+        month_num = MONTH_MAP.get(m1.group(1).lower(), 1)
+        day_num = int(m1.group(2))
+        try:
+            target_year = today.year
+            d = date(target_year, month_num, day_num)
+            if d < today - timedelta(days=30):
+                d = date(target_year + 1, month_num, day_num)
+            return d.strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    m2 = re.search(r'\b(\d{1,2})(st|nd|rd|th)?\s+(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sep|sept|october|oct|november|nov|december|dec)\b', text_lower)
+    if m2:
+        day_num = int(m2.group(1))
+        month_num = MONTH_MAP.get(m2.group(3).lower(), 1)
+        try:
+            target_year = today.year
+            d = date(target_year, month_num, day_num)
+            if d < today - timedelta(days=30):
+                d = date(target_year + 1, month_num, day_num)
+            return d.strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    # 4. Relative Weekdays (Monday..Sunday)
+    for day_word, target_weekday in WEEKDAY_MAP.items():
+        if re.search(r'\b' + re.escape(day_word) + r'\b', text_lower):
+            days_ahead = (target_weekday - today.weekday()) % 7
+            if days_ahead == 0 and ("next" in text_lower or "coming" in text_lower):
+                days_ahead = 7
+            elif days_ahead == 0 and "today" not in text_lower:
+                days_ahead = 7
+            return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+    return None
 
 
 _NAME_PREFIX_RE = re.compile(r'^\s*(dr\.?|doctor)\s+', re.IGNORECASE)
@@ -20,25 +123,33 @@ _GENERIC_MATCH_STOPWORDS = {
 }
 
 
-def _fuzzy_match_roster(user_text: str, roster: List[Dict[str, Any]], threshold: float = 0.6) -> Optional[Dict[str, Any]]:
+def _fmt_time_ampm(t_str: str) -> str:
+    """Format 24-hour time HH:MM into clean human-friendly 12-hour AM/PM format (e.g. 09:00 AM, 02:30 PM)."""
+    if not t_str:
+        return ""
+    try:
+        parts = t_str.strip().split(":")
+        h = int(parts[0])
+        m = int(parts[1]) if len(parts) > 1 else 0
+        ap = "AM" if h < 12 else "PM"
+        h12 = h if (1 <= h <= 12) else (12 if h % 12 == 0 else h % 12)
+        return f"{h12:02d}:{m:02d} {ap}"
+    except Exception:
+        return str(t_str)
+
+
+def _fuzzy_match_roster(user_text: str, roster: List[Dict[str, Any]], threshold: float = 0.75) -> Optional[Dict[str, Any]]:
     """
     Match a user's free-text reply against a real DB roster (doctors or
-    services) instead of a hardcoded keyword list, so spelling variants,
-    typos, and "dr"/"doctor" prefixes still resolve correctly (e.g.
-    "dr ahmad" -> "Dr. Ahmed Khan", "sara" -> "Dr. Sara Malik").
-
-    Strategy: for each roster entry, compare the user text against the
-    full name and against each DISTINCTIVE word in the name (generic words
-    shared across many entries, like "dental" or "consultation", are
-    excluded so they can't win a match by coincidence), using difflib's
-    sequence-matching ratio for near-misses and substring containment for
-    strong direct hits. Returns the best entry above `threshold`, or None.
+    services) using strict token and word-boundary matching so customer
+    names (e.g. Haroon, Ali, Tariq) are never mistakenly fuzzy-matched to
+    unrelated doctor or service roster entries.
     """
     if not user_text or not roster:
         return None
 
-    cleaned = _NAME_PREFIX_RE.sub('', user_text.strip().lower())
-    if not cleaned:
+    cleaned = _NAME_PREFIX_RE.sub('', user_text.lower().strip()).strip()
+    if not cleaned or not any(c.isalpha() for c in cleaned):
         return None
 
     best_entry = None
@@ -49,26 +160,26 @@ def _fuzzy_match_roster(user_text: str, roster: List[Dict[str, Any]], threshold:
         if not name:
             continue
         name_lower = name.lower()
-        name_clean = _NAME_PREFIX_RE.sub('', name_lower)
+        name_clean = _NAME_PREFIX_RE.sub('', name_lower).strip()
         word_candidates = [
             w for w in name_clean.split()
-            if len(w) >= 4 and w not in _GENERIC_MATCH_STOPWORDS
+            if len(w) >= 3 and w not in _GENERIC_MATCH_STOPWORDS
         ]
-        # Always include the full name as a candidate (handles short full
-        # names like "Sara Malik" whose individual words are still fine),
-        # plus every distinctive word.
         candidates = [name_clean] + word_candidates
 
         for cand in candidates:
-            if not cand:
+            if not cand or len(cand) < 3:
                 continue
-            # Exact substring match is only a strong (0.95) signal when the
-            # candidate is specific enough not to be a coincidental shared
-            # word — short/generic tokens fall through to ratio scoring.
-            if len(cand) >= 4 and (cand in cleaned or cleaned in cand):
-                score = 0.95
+
+            # Exact whole-word match in user text (e.g. "sara" in "dr sara se appoinment leni ha")
+            if re.search(r'\b' + re.escape(cand) + r'\b', cleaned):
+                score = 1.0
+            # User text is exact substring of multi-word candidate (e.g. "root canal" in "root canal treatment")
+            elif len(cleaned) >= 4 and cleaned in cand and len(cleaned) / len(cand) >= 0.5:
+                score = 0.9
             else:
                 score = difflib.SequenceMatcher(None, cand, cleaned).ratio()
+
             if score > best_score:
                 best_score = score
                 best_entry = entry
@@ -145,10 +256,10 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
     """
     if not text:
         return None
-    m = re.search(r'(?:my\s+name\s+is\s+|name\s+is\s+|i\s+am\s+|name\s*:\s*|for\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', text, re.IGNORECASE)
+    m = re.search(r'(?:my\s+name\s+is\s+|name\s+is\s+|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|name\s*:\s*|for\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', text, re.IGNORECASE)
     if m:
         raw = m.group(1)
-        name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b|\bdate\b|\bfor\b', raw, flags=re.IGNORECASE)[0].strip()
+        name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b|\bdate\b|\bfor\b|\bwith\b|\bi\s+need\b|\bi\s+want\b|\band\b', raw, flags=re.IGNORECASE)[0].strip()
         name = re.sub(r'^(?:a\s+|an\s+|the\s+)?(?:cleaning|checkup|consultation|appointment|booking)\s+(?:for\s+)?', '', name, flags=re.IGNORECASE).strip()
         if name and name.lower() not in ["patient", "a", "the", "an", "cleaning", "checkup", "appointment", "doctor", "dr", "tomorrow", "today", "me", "us", "him", "her"]:
             return name.title()
@@ -162,8 +273,12 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
             "checkup", "cleaning", "dentist", "doctor", "dr", "info", "information", "price",
             "yes", "no", "ok", "okay", "sure", "thanks", "thank you", "cancel", "help", "hello", "hi", "hey",
             "root", "canal", "treatment", "extraction", "whitening", "braces", "consultation", "scaling", "polishing",
+            "confirm", "confirmed", "confirmation", "change", "modify", "reset", "details", "haan", "theek",
+            "who", "what", "where", "when", "why", "how", "are", "you", "your", "is", "am", "i", "a", "an", "the",
+            "for", "with", "at", "to", "in", "on", "can", "could", "should", "will", "shall", "do", "does", "did",
+            "have", "has", "had", "tell", "show", "list", "give", "please", "not", "dont", "good", "morning", "afternoon"
         ]
-        if any(nw in lower_txt for nw in non_name_words):
+        if any(nw in lower_txt.split() or lower_txt == nw for nw in non_name_words):
             return None
         # Dynamic roster check (replaces the old hardcoded "sara"/"ahmed"/
         # "khan"/"malik" list, which broke on any spelling variant like
@@ -172,7 +287,7 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
         # selection, not the customer stating their own name.
         if roster_names:
             roster_entries = [{"id": i, "name": n} for i, n in enumerate(roster_names)]
-            if _fuzzy_match_roster(text, roster_entries, threshold=0.6):
+            if _fuzzy_match_roster(text, roster_entries):
                 return None
         return text.strip().title()
     return None
@@ -184,10 +299,10 @@ def _has_booking_intent(text: str) -> bool:
     if not text:
         return False
     lower = text.lower()
-    pattern = r'\b(book|booking|appo?i?n?t?m?e?n?t?s?|sch?e?d?u?l?e?s?|skedule|slots?|time|timing|timings|available|availability|doctor|dentist|teeth|cleaning|checkup|visit|consultants?|physicians?|practitioners?)\b'
+    pattern = r'\b(book|booking|appo?i?n?t?m?e?n?t?s?|sch?e?d?u?l?e?s?|skedule|slots?|time|timing|timings|available|availability|doctor|dentist|teeth|cleaning|checkup|visit|consultants?|physicians?|practitioners?|braces|whitening|extraction|root canal|filling|scaling|aligners?|implants?|toothache|cavity|pain|applied|apply|consultation)\b'
     if re.search(pattern, lower, re.IGNORECASE):
         return True
-    typos = ["appoinment", "apointment", "appintment", "schdeule", "scedule", "skedule", "appoint", "sched", "timings"]
+    typos = ["appoinment", "apointment", "appintment", "schdeule", "scedule", "skedule", "appoint", "sched", "timings", "lagwana", "lagwany", "karwana", "karwani"]
     return any(t in lower for t in typos)
 
 
@@ -234,6 +349,10 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": []
             }
 
+        conv_state = conversation_state or {}
+        doc_id = conv_state.get("selected_doctor_id")
+        svc_id = conv_state.get("selected_service_id")
+
         # Check if previous turn was a tool response
         last_msg = messages[-1]
         if last_msg.get("role") == "tool":
@@ -256,64 +375,109 @@ class MockAdapter(BaseLLMAdapter):
                 is_after_query = "after" in last_user_text and user_time_token
                 is_before_query = "before" in last_user_text and user_time_token
 
-                slots_list = []
-                filtered_slots_list = []
-                for res in tool_data.get("results", []):
-                    doc_name = res.get("doctor_name", "Doctor")
-                    slots = res.get("available_slots", [])
-                    if slots:
-                        slots_preview = ", ".join(slots[:4])
-                        slots_list.append(f"• {doc_name}: {slots_preview}")
-                        if is_after_query:
-                            after_slots = [s for s in slots if s > user_time_token]
-                            if after_slots:
-                                filtered_slots_list.append(f"• {doc_name}: {', '.join(after_slots[:4])}")
-                        elif is_before_query:
-                            before_slots = [s for s in slots if s < user_time_token]
-                            if before_slots:
-                                filtered_slots_list.append(f"• {doc_name}: {', '.join(before_slots[:4])}")
+                # Format friendly date title: "Monday, August 24, 2026"
+                date_val = tool_data.get("date", "")
+                day_val = tool_data.get("day", "")
+                try:
+                    dt_obj = datetime.strptime(date_val, "%Y-%m-%d")
+                    formatted_date_title = dt_obj.strftime("%A, %B %d, %Y")
+                except Exception:
+                    formatted_date_title = f"{day_val}, {date_val}"
+
+                results = tool_data.get("results", [])
+                
+                # If specific doctor was selected, filter display to that doctor
+                if doc_id:
+                    results = [r for r in results if r.get("doctor_id") == doc_id] or results
 
                 if is_after_query:
-                    if filtered_slots_list:
+                    filtered_lines = []
+                    for res in results:
+                        d_name = res.get("doctor_name", "Doctor")
+                        after_slots = [_fmt_time_ampm(s) for s in res.get("available_slots", []) if s > user_time_token]
+                        if after_slots:
+                            filtered_lines.append(f"• **{d_name}**: {', '.join(after_slots)}")
+                    if filtered_lines:
                         return {
-                            "content": f"Yes, the available slots for {tool_data.get('date')} ({tool_data.get('day')}) after {user_time_token} are:\n" + "\n".join(filtered_slots_list) + "\n\nPlease let me know which time slot works best for you, along with your full name and phone number to confirm!",
+                            "content": f"Yes, the available slots on **{formatted_date_title}** after {_fmt_time_ampm(user_time_token)} are:\n\n" + "\n".join(filtered_lines) + "\n\nPlease let me know which time works best for you!",
                             "tool_calls": []
                         }
                     else:
-                        all_preview = "\n".join(slots_list) if slots_list else "No open slots."
                         return {
-                            "content": f"I checked our schedule for {tool_data.get('date')} ({tool_data.get('day')}), but there are no available slots after {user_time_token}.\n\nThe open slots on that day are:\n{all_preview}\n\nWould you like one of these morning slots or would you like to check another date?",
+                            "content": f"I checked our schedule for **{formatted_date_title}**, but there are no available slots after {_fmt_time_ampm(user_time_token)}. Would you like to check earlier times or another date?",
                             "tool_calls": []
                         }
 
                 if is_before_query:
-                    if filtered_slots_list:
+                    filtered_lines = []
+                    for res in results:
+                        d_name = res.get("doctor_name", "Doctor")
+                        before_slots = [_fmt_time_ampm(s) for s in res.get("available_slots", []) if s < user_time_token]
+                        if before_slots:
+                            filtered_lines.append(f"• **{d_name}**: {', '.join(before_slots)}")
+                    if filtered_lines:
                         return {
-                            "content": f"Yes, the available slots for {tool_data.get('date')} ({tool_data.get('day')}) before {user_time_token} are:\n" + "\n".join(filtered_slots_list) + "\n\nPlease let me know which time slot works best for you, along with your full name and phone number to confirm!",
+                            "content": f"Yes, the available slots on **{formatted_date_title}** before {_fmt_time_ampm(user_time_token)} are:\n\n" + "\n".join(filtered_lines) + "\n\nPlease let me know which time works best for you!",
                             "tool_calls": []
                         }
                     else:
-                        all_preview = "\n".join(slots_list) if slots_list else "No open slots."
                         return {
-                            "content": f"I checked our schedule for {tool_data.get('date')} ({tool_data.get('day')}), but there are no available slots before {user_time_token}.\n\nThe open slots on that day are:\n{all_preview}\n\nWould you like one of these slots or would you like to check another date?",
+                            "content": f"I checked our schedule for **{formatted_date_title}**, but there are no available slots before {_fmt_time_ampm(user_time_token)}. Would you like to check later times or another date?",
                             "tool_calls": []
                         }
 
-                if slots_list:
+                lines = []
+                for res in results:
+                    d_name = res.get("doctor_name", "Doctor")
+                    slots = res.get("available_slots", [])
+                    if not slots:
+                        msg = res.get("message") or f"{d_name} is closed / not available on this date."
+                        lines.append(f"• **{d_name}**: {msg}")
+                        continue
+
+                    morning_slots = [_fmt_time_ampm(s) for s in slots if int(s.split(":")[0]) < 12]
+                    afternoon_slots = [_fmt_time_ampm(s) for s in slots if int(s.split(":")[0]) >= 12]
+
+                    groups = []
+                    if morning_slots:
+                        groups.append(f"  - **Morning:** {', '.join(morning_slots)}")
+                    if afternoon_slots:
+                        groups.append(f"  - **Afternoon:** {', '.join(afternoon_slots)}")
+
+                    slots_text = "\n".join(groups) if groups else "  - " + ", ".join([_fmt_time_ampm(s) for s in slots])
+                    lines.append(f"• **{d_name}**:\n{slots_text}")
+
+                if lines and any(res.get("available_slots") for res in results):
                     return {
-                        "content": f"Here are the available slots for {tool_data.get('date')} ({tool_data.get('day')}):\n" + "\n".join(slots_list) + "\n\nPlease let me know which time slot works best for you, along with your full name and phone number to confirm the booking!",
+                        "content": f"Here are the available appointment slots on **{formatted_date_title}**:\n\n" + "\n\n".join(lines) + "\n\nPlease let me know which time slot works best for you!",
                         "tool_calls": []
                     }
                 else:
+                    next_d = tool_data.get("next_available_date")
+                    next_day = tool_data.get("next_available_day")
+                    if next_d:
+                        return {
+                            "content": f"I checked our schedule for **{formatted_date_title}**, but there are no open slots on that day. The next available opening is on **{next_day}, {next_d}**. Would you like to check slots for that day?",
+                            "tool_calls": []
+                        }
                     return {
-                        "content": f"I checked our schedule for {tool_data.get('date')}, but unfortunately there are no open slots on that day. Would you like to check the following day?",
+                        "content": f"I checked our schedule for **{formatted_date_title}**, but unfortunately there are no open slots on that day. Would you like to check another date?",
                         "tool_calls": []
                     }
 
             elif "appointment_id" in tool_data and tool_data.get("success"):
                 appt = tool_data.get("appointment", {})
                 return {
-                    "content": f"🎉 **Your appointment is confirmed!**\n\n• **Appointment ID:** #{tool_data.get('appointment_id')}\n• **Patient:** {appt.get('customer_name')}\n• **Doctor:** {appt.get('doctor_name')}\n• **Service:** {appt.get('service_name')}\n• **Date & Time:** {appt.get('appointment_date')} at {appt.get('appointment_time')}\n• **Location:** Plot 42-B, Main Boulevard, Gulberg III, Lahore\n\nA reminder has been automatically scheduled for your visit. Please arrive 10 minutes early. Let us know if you need anything else!",
+                    "content": (
+                        f"🎉 **Your appointment is confirmed!**\n\n"
+                        f"• **Appointment ID:** #{tool_data.get('appointment_id')}\n"
+                        f"• **Patient Name:** {appt.get('customer_name')}\n"
+                        f"• **Doctor:** {appt.get('doctor_name')}\n"
+                        f"• **Service:** {appt.get('service_name')}\n"
+                        f"• **Date & Time:** {appt.get('appointment_date')} at {_fmt_time_ampm(appt.get('appointment_time'))}\n"
+                        f"• **Clinic Address:** Plot 42-B, Main Boulevard, Gulberg III, Lahore\n\n"
+                        f"A reminder has been automatically scheduled for your visit. Please arrive 10 minutes early. Let us know if you need anything else!"
+                    ),
                     "tool_calls": []
                 }
 
@@ -324,9 +488,16 @@ class MockAdapter(BaseLLMAdapter):
                 }
 
             elif "doctors" in tool_data:
-                doc_list = [f"• **{d['name']}** - {d.get('specialization', 'Dentist')} (Working Days: {d.get('working_days', 'Mon-Sat')}, Hours: {d.get('start_time', '09:00')} - {d.get('end_time', '17:00')})" for d in tool_data.get("doctors", [])]
+                doc_items = []
+                for d in tool_data.get("doctors", []):
+                    wk_days = d.get("working_days", [])
+                    wk_str = ", ".join(wk_days) if isinstance(wk_days, list) else str(wk_days)
+                    start_str = _fmt_time_ampm(d.get("start_time", "09:00"))
+                    end_str = _fmt_time_ampm(d.get("end_time", "17:00"))
+                    lunch_str = f" | Lunch: {_fmt_time_ampm(d['break_start_time'])}–{_fmt_time_ampm(d['break_end_time'])}" if (d.get("break_start_time") and d.get("break_end_time")) else ""
+                    doc_items.append(f"• **{d['name']}** - {d.get('specialization', 'Dentist')} (Working Days: {wk_str}, Hours: {start_str} – {end_str}{lunch_str})")
                 return {
-                    "content": "Of course. Here are our practicing dentists at SmileCare:\n\n" + "\n\n".join(doc_list) + "\n\nWhich doctor would you prefer?",
+                    "content": "Of course. Here are our practicing dentists at SmileCare:\n\n" + "\n\n".join(doc_items) + "\n\nWhich doctor would you prefer?",
                     "tool_calls": []
                 }
 
@@ -355,16 +526,16 @@ class MockAdapter(BaseLLMAdapter):
         workflow_state = conv_state.get("workflow_state")
         req_date = conv_state.get("requested_date")
         req_time = conv_state.get("requested_time")
-        doc_id = conv_state.get("selected_doctor_id") or 1
-        doc_name = conv_state.get("selected_doctor_name") or ("Dr. Ahmed Khan" if doc_id == 1 else "Dr. Sara Malik")
-        svc_id = conv_state.get("selected_service_id") or 2
-        svc_name = conv_state.get("selected_service_name") or "Dental Cleaning & Scaling"
+        doc_id = conv_state.get("selected_doctor_id")
+        doc_name = conv_state.get("selected_doctor_name") or ("Dr. Ahmed Khan" if doc_id == 1 else ("Dr. Sara Malik" if doc_id == 2 else None))
+        svc_id = conv_state.get("selected_service_id")
+        svc_name = conv_state.get("selected_service_name")
         last_offered_slots = conv_state.get("last_offered_slots", {})
         all_offered_slots = conv_state.get("all_offered_slots", [])
 
         # Token extractions
         time_token = _extract_time_str(user_text)
-        phone_match = re.search(r'(\+?\d[\d\s\-]{8,14}\d)', user_text)
+        phone_match = re.search(r'\b(03\d{2}[- ]?\d{7}|\+92\d{10}|03\d{9})\b', user_text)
         date_match = re.search(r'(\d{4}-\d{2}-\d{2})', user_text)
         is_question = _is_question_query(user_text)
 
@@ -380,16 +551,10 @@ class MockAdapter(BaseLLMAdapter):
         effective_phone = (phone_match.group(1).replace(" ", "").replace("-", "") if phone_match else None) or pending_phone
 
 
-        from datetime import date, timedelta
         explicit_date_given = False
-        if date_match:
-            target_date_str = date_match.group(1)
-            explicit_date_given = True
-        elif "tomorrow" in user_text:
-            target_date_str = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-            explicit_date_given = True
-        elif "today" in user_text:
-            target_date_str = date.today().strftime("%Y-%m-%d")
+        parsed_target_date = resolve_date_string(user_text, business_id=conv_state.get("business_id", 1))
+        if parsed_target_date:
+            target_date_str = parsed_target_date
             explicit_date_given = True
         elif req_date:
             target_date_str = req_date
@@ -415,130 +580,7 @@ class MockAdapter(BaseLLMAdapter):
             svc_id = _svc_override["id"]
             svc_name = _svc_override["name"]
 
-        # --- EXPLICIT AWAITING_INPUT RESOLUTION (Runs FIRST before Case A-E & keyword matching) ---
-        awaiting_input = conv_state.get("awaiting_input")
-        
-        # Check if user clearly changed subject or asked a question
-        is_topic_change = is_question or any(w in user_text for w in ["address", "location", "timing", "hours", "insurance", "human", "receptionist", "eye", "skin"])
-
-        if awaiting_input and not is_topic_change:
-            if awaiting_input == "doctor_choice":
-                matched_doc = _fuzzy_match_roster(user_text, doctor_roster)
-                if matched_doc:
-                    doc_id = matched_doc["id"]
-                    doc_name = matched_doc["name"]
-                    cand_name = None
-                    effective_name = pending_name
-                    if target_date_str:
-                        return {
-                            "content": f"Checking open slots for {doc_name} on {target_date_str}...",
-                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
-                        }
-                    return {
-                        "content": f"Thank you! You selected {doc_name}. Which date would you like to book your appointment for?",
-                        "tool_calls": []
-                    }
-                elif not is_question:
-                    roster_names = ", ".join(d["name"] for d in doctor_roster) or "Dr. Ahmed Khan or Dr. Sara Malik"
-                    return {
-                        "content": f"Please select a doctor from our roster: {roster_names}.",
-                        "tool_calls": []
-                    }
-
-            elif awaiting_input == "service_choice":
-                matched_svc = _fuzzy_match_roster(user_text, service_roster)
-                if matched_svc:
-                    svc_id = matched_svc["id"]
-                    svc_name = matched_svc["name"]
-                    if target_date_str:
-                        return {
-                            "content": f"Checking open slots for {svc_name} on {target_date_str}...",
-                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
-                        }
-                    return {
-                        "content": f"You selected {svc_name}. Which date or doctor would you prefer?",
-                        "tool_calls": []
-                    }
-                elif not is_question:
-                    roster_names = ", ".join(s["name"] for s in service_roster) or "Dental Checkup, Dental Cleaning, Teeth Whitening, Tooth Extraction, Root Canal, or Braces"
-                    return {
-                        "content": f"Please select from our available dental services: {roster_names}.",
-                        "tool_calls": []
-                    }
-
-            elif awaiting_input == "confirmation":
-                if any(w in user_text for w in ["yes", "yeah", "confirm", "sure", "go ahead", "ok", "okay", "haan", "theek"]):
-                    if effective_name and effective_phone and target_date_str:
-                        return {
-                            "content": f"Booking your appointment with {doc_name} for {target_date_str} at {req_time or '09:00'}...",
-                            "tool_calls": [{
-                                "name": "book_appointment",
-                                "arguments": {
-                                    "customer_name": effective_name,
-                                    "customer_phone": effective_phone,
-                                    "doctor_id": doc_id,
-                                    "service_id": svc_id,
-                                    "appointment_date": target_date_str,
-                                    "appointment_time": req_time or "09:00",
-                                    "notes": "Booked via AI Assistant"
-                                }
-                            }]
-                        }
-                elif any(w in user_text for w in ["no", "cancel", "nevermind", "nahi"]):
-                    return {
-                        "content": "I have cancelled your booking request. How else may I assist you?",
-                        "tool_calls": []
-                    }
-
-            elif awaiting_input == "name":
-                if cand_name:
-                    effective_name = cand_name
-                    if effective_phone:
-                        return {
-                            "content": f"Booking your appointment with {doc_name} for {target_date_str or 'tomorrow'} at {req_time or '09:00'}...",
-                            "tool_calls": [{
-                                "name": "book_appointment",
-                                "arguments": {
-                                    "customer_name": effective_name,
-                                    "customer_phone": effective_phone,
-                                    "doctor_id": doc_id,
-                                    "service_id": svc_id,
-                                    "appointment_date": target_date_str or "tomorrow",
-                                    "appointment_time": req_time or "09:00",
-                                    "notes": "Booked via AI Assistant"
-                                }
-                            }]
-                        }
-                    return {
-                        "content": f"Thank you, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
-                        "tool_calls": []
-                    }
-
-            elif awaiting_input == "phone":
-                if phone_match:
-                    effective_phone = phone_match.group(1).replace(" ", "").replace("-", "")
-                    if effective_name:
-                        return {
-                            "content": f"Booking your appointment with {doc_name} for {target_date_str or 'tomorrow'} at {req_time or '09:00'}...",
-                            "tool_calls": [{
-                                "name": "book_appointment",
-                                "arguments": {
-                                    "customer_name": effective_name,
-                                    "customer_phone": effective_phone,
-                                    "doctor_id": doc_id,
-                                    "service_id": svc_id,
-                                    "appointment_date": target_date_str or "tomorrow",
-                                    "appointment_time": req_time or "09:00",
-                                    "notes": "Booked via AI Assistant"
-                                }
-                            }]
-                        }
-                    return {
-                        "content": "Thank you. Please provide your full name to complete and confirm your booking.",
-                        "tool_calls": []
-                    }
-
-        # 1. Non-Dental / Non-Oral Out-of-Scope Health Inquiries (e.g. eyes, vision, skin, heart, etc.)
+        # --- OUT-OF-SCOPE & SPECIALTY CHECKS (Run FIRST regardless of awaiting_input) ---
         specialist_terms = [
             "neurosurgeon", "neurologist", "neurology", "cardiologist", "cardiology",
             "dermatologist", "dermatology", "oncologist", "oncology", "orthopedic",
@@ -561,12 +603,213 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": []
             }
 
-        # 2. Medical advice / prescription / insurance triggers
         if any(w in user_text for w in ["insurance", "prescription", "antibiotic", "diagnose", "severe bleeding"]):
             return {
                 "content": "I cannot provide medical advice or verify insurance coverage directly. Let me connect you with our medical staff.",
                 "tool_calls": [{"name": "human_handoff", "arguments": {"reason": f"Out-of-scope / medical query: {user_text}"}}]
             }
+
+        # --- EXPLICIT AWAITING_INPUT RESOLUTION (Runs FIRST before Case A-E & keyword matching) ---
+        # Check BOOKED state FIRST
+        if workflow_state == "BOOKED":
+            if any(w in user_text for w in ["yes", "yeah", "confirm", "sure", "go ahead", "ok", "okay", "haan", "theek", "book it", "please book", "book", "thanks", "thank you", "done", "alright"]):
+                return {
+                    "content": "Your appointment is already confirmed! We look forward to seeing you at SmileCare Dental Clinic. Please let us know if you need anything else.",
+                    "tool_calls": []
+                }
+
+        # Check Cancellation Request FIRST
+        if any(w in user_text for w in ["cancel booking", "cancel appointment", "cancel my booking"]):
+            return {
+                "content": "Your booking request has been cancelled. Please let me know whenever you would like to schedule a new appointment or ask any questions about our services!",
+                "tool_calls": []
+            }
+
+        # Check Change Details Request
+        if any(w in user_text for w in ["change my appointment", "change appointment", "change details"]):
+            return {
+                "content": "Sure, let's update your appointment details. Which doctor, date, or time slot would you like to choose instead?",
+                "tool_calls": []
+            }
+
+        # --- EXPLICIT AWAITING_INPUT RESOLUTION (Runs FIRST before Case A-E & keyword matching) ---
+        awaiting_input = conv_state.get("awaiting_input")
+        
+        # Check if user clearly changed subject or asked a question
+        is_topic_change = is_question or any(w in user_text for w in ["address", "location", "timing", "hours", "insurance", "human", "receptionist", "eye", "skin", "cancel"])
+
+        if awaiting_input and not is_topic_change:
+            # Check for "I don't know / consultation / toothache" first
+            if any(w in user_text for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup", "consult"]) and not any(d["name"].lower() in user_text for d in doctor_roster):
+                consultation_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else {"id": 1, "name": "Dental Checkup & Consultation", "price": 2000})
+                svc_id = consultation_svc["id"]
+                svc_name = consultation_svc["name"]
+                fee = consultation_svc.get("price", 2000.0)
+                return {
+                    "content": f"No problem. We can book a consultation. The consultation fee is PKR {fee:,.0f}. Which doctor would you prefer?",
+                    "tool_calls": []
+                }
+
+            if awaiting_input == "doctor_choice":
+                matched_svc_here = _fuzzy_match_roster(user_text, service_roster)
+                if matched_svc_here:
+                    svc_id = matched_svc_here["id"]
+                    svc_name = matched_svc_here["name"]
+                    return {
+                        "content": f"You selected {svc_name}. Which doctor would you prefer?",
+                        "tool_calls": []
+                    }
+                matched_doc = _fuzzy_match_roster(user_text, doctor_roster) or ({"id": doc_id, "name": doc_name} if doc_id else None)
+                if matched_doc:
+                    doc_id = matched_doc["id"]
+                    doc_name = matched_doc["name"]
+                    cand_name = None
+                    effective_name = pending_name
+                    if target_date_str:
+                        return {
+                            "content": f"Checking open slots for {doc_name} on {target_date_str}...",
+                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
+                        }
+                    return {
+                        "content": f"{doc_name} selected. Which date would you prefer?",
+                        "tool_calls": []
+                    }
+                elif not is_question and not target_date_str:
+                    roster_names = ", ".join(d["name"] for d in doctor_roster) or "Dr. Ahmed Khan or Dr. Sara Malik"
+                    return {
+                        "content": f"Please select a doctor from our roster: {roster_names}.",
+                        "tool_calls": []
+                    }
+
+            elif awaiting_input == "service_choice":
+                matched_svc = _fuzzy_match_roster(user_text, service_roster) or ({"id": svc_id, "name": svc_name} if svc_id else None)
+                if matched_svc:
+                    svc_id = matched_svc["id"]
+                    svc_name = matched_svc["name"]
+                    if target_date_str and doc_id:
+                        return {
+                            "content": f"Checking open slots for {svc_name} with {doc_name} on {target_date_str}...",
+                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
+                        }
+                    elif doc_id:
+                        return {
+                            "content": f"You selected {svc_name} with {doc_name}. Which date would you prefer?",
+                            "tool_calls": []
+                        }
+                    return {
+                        "content": f"You selected {svc_name}. Which doctor would you prefer?",
+                        "tool_calls": []
+                    }
+                elif not is_question and not target_date_str:
+                    roster_names = ", ".join(s["name"] for s in service_roster) or "Dental Checkup, Dental Cleaning, Teeth Whitening, Tooth Extraction, Root Canal, or Braces"
+                    return {
+                        "content": f"Which of our available dental services would you like to select? {roster_names}. (If you are not sure what you need, we can book a general consultation.)",
+                        "tool_calls": []
+                    }
+
+            elif awaiting_input == "confirmation":
+                if any(w in user_text for w in ["yes", "yeah", "confirm", "sure", "go ahead", "ok", "okay", "haan", "theek", "book it", "please book", "book"]):
+                    if effective_name and effective_phone and target_date_str:
+                        chosen_time = req_time or "10:00"
+                        return {
+                            "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {chosen_time}...",
+                            "tool_calls": [{
+                                "name": "book_appointment",
+                                "arguments": {
+                                    "customer_name": effective_name,
+                                    "customer_phone": effective_phone,
+                                    "doctor_id": doc_id or 1,
+                                    "service_id": svc_id or 1,
+                                    "appointment_date": target_date_str,
+                                    "appointment_time": chosen_time,
+                                    "notes": "Booked via AI Assistant"
+                                }
+                            }]
+                        }
+                elif any(w in user_text for w in ["no", "cancel", "nevermind", "nahi"]):
+                    return {
+                        "content": "I have cancelled your booking request. How else may I assist you?",
+                        "tool_calls": []
+                    }
+
+            elif awaiting_input == "name":
+                if cand_name:
+                    effective_name = cand_name
+                    if effective_phone and target_date_str and req_time:
+                        return {
+                            "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {req_time}...",
+                            "tool_calls": [{
+                                "name": "book_appointment",
+                                "arguments": {
+                                    "customer_name": effective_name,
+                                    "customer_phone": effective_phone,
+                                    "doctor_id": doc_id or 1,
+                                    "service_id": svc_id or 1,
+                                    "appointment_date": target_date_str,
+                                    "appointment_time": req_time,
+                                    "notes": "Booked via AI Assistant"
+                                }
+                            }]
+                        }
+                    return {
+                        "content": f"Thank you, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
+                        "tool_calls": []
+                    }
+
+            elif awaiting_input == "phone":
+                if phone_match:
+                    effective_phone = phone_match.group(1).replace(" ", "").replace("-", "")
+                    if effective_name and target_date_str and req_time:
+                        return {
+                            "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {req_time}...",
+                            "tool_calls": [{
+                                "name": "book_appointment",
+                                "arguments": {
+                                    "customer_name": effective_name,
+                                    "customer_phone": effective_phone,
+                                    "doctor_id": doc_id or 1,
+                                    "service_id": svc_id or 1,
+                                    "appointment_date": target_date_str,
+                                    "appointment_time": req_time,
+                                    "notes": "Booked via AI Assistant"
+                                }
+                            }]
+                        }
+                    return {
+                        "content": "Thank you. Please provide your full name to complete and confirm your booking.",
+                        "tool_calls": []
+                    }
+
+            elif awaiting_input == "time_choice":
+                if time_token:
+                    req_time = time_token
+                    if effective_name and effective_phone and target_date_str:
+                        return {
+                            "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {time_token}...",
+                            "tool_calls": [{
+                                "name": "book_appointment",
+                                "arguments": {
+                                    "customer_name": effective_name,
+                                    "customer_phone": effective_phone,
+                                    "doctor_id": doc_id or 1,
+                                    "service_id": svc_id or 1,
+                                    "appointment_date": target_date_str,
+                                    "appointment_time": time_token,
+                                    "notes": "Booked via AI Assistant"
+                                }
+                            }]
+                        }
+                    elif effective_name and not effective_phone:
+                        return {
+                            "content": f"Thanks, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
+                            "tool_calls": []
+                        }
+                    else:
+                        svc_str = f" for {svc_name}" if svc_name else ""
+                        return {
+                            "content": f"I have selected the {_fmt_time_ampm(time_token)} slot on {target_date_str or 'the requested date'} with {doc_name or 'Dr. Ahmed Khan'}{svc_str}. To complete and confirm your booking, please provide your full name and contact phone number.",
+                            "tool_calls": []
+                        }
 
         # 3. Explicit Human Handoff Request
         if any(w in user_text for w in ["human", "receptionist", "speak to someone", "representative", "real person", "manager", "staff"]):
@@ -576,7 +819,6 @@ class MockAdapter(BaseLLMAdapter):
             }
 
         # 4. Informational Request Priority (Doctor Inquiry, Services Inquiry, Clinic Info Inquiry)
-        # Check Doctor Inquiry first (e.g. "tell me doctors name", "who are your doctors", "how many doctors", "are doctor available")
         has_doc_term = any(w in user_text for w in ["doctor", "doctors", "dentist", "dentists"])
         has_inquiry_term = any(w in user_text for w in ["tell", "show", "list", "who", "which", "what", "how", "many", "count", "available", "name", "names", "info", "information", "detail", "details", "about"])
         is_doctor_inquiry = (has_doc_term and has_inquiry_term) or any(p in user_text for p in [
@@ -591,7 +833,6 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": [{"name": "get_doctors", "arguments": {}}]
             }
 
-        # Check Services Inquiry (e.g. "what services do you offer", "how much is cleaning")
         is_service_inquiry = any(w in user_text for w in ["which service", "what service", "what services", "list service", "list services", "treatment", "treatments", "price", "prices", "cost", "costs", "charge", "charges", "what do you offer", "how much"])
         if is_service_inquiry:
             return {
@@ -599,7 +840,6 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": [{"name": "get_services", "arguments": {}}]
             }
 
-        # Check Clinic Info Inquiry
         is_clinic_info_inquiry = any(w in user_text for w in ["address", "location", "located", "where is", "where are", "timing", "hours", "contact", "phone number", "clinic info", "directions"])
         if is_clinic_info_inquiry:
             return {
@@ -676,43 +916,34 @@ class MockAdapter(BaseLLMAdapter):
                     "content": f"The {time_token} slot is not available for {doc_name} on {effective_date}. The available slots on that day are: {slots_preview}. Please choose one of the available times or let me know if you would like to check another date.",
                     "tool_calls": []
                 }
-            if not doc_slots:
-                return {
-                    "content": f"Checking open slots for {doc_name} on {effective_date}...",
-                    "tool_calls": [{
-                        "name": "check_availability",
-                        "arguments": {
-                            "date": effective_date,
-                            "doctor_id": doc_id,
-                            "service_id": svc_id
-                        }
-                    }]
-                }
 
             effective_time = time_token
+            svc_str = f" for {svc_name}" if svc_name else ""
+            if effective_name and not effective_phone:
+                return {
+                    "content": f"Thanks, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
+                    "tool_calls": []
+                }
             return {
-                "content": f"I have selected the {effective_time} slot on {effective_date} with {doc_name} for {svc_name}. To complete and confirm your booking, please provide your full name and contact phone number.",
+                "content": f"I have selected the {_fmt_time_ampm(effective_time)} slot on {effective_date} with {doc_name}{svc_str}. To complete and confirm your booking, please provide your full name and contact phone number.",
                 "tool_calls": []
             }
 
-        # Case C: Both name and phone are available (either from current turn or pending state) -> proceed to book
-        if (effective_phone and effective_name):
-            if not effective_date:
-                return {
-                    "content": f"Thank you, {effective_name}. Which date would you like to book your appointment for?",
-                    "tool_calls": []
-                }
-            valid_time_token = time_token if (time_token and (not doc_slots or time_token in doc_slots)) else None
-            chosen_time = valid_time_token or req_time or (doc_slots[0] if doc_slots else "09:00")
+        # Case C: Both name and phone are available -> proceed to book
+        if effective_phone and effective_name and (req_time or time_token or target_date_str) and effective_date:
+            effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
+            effective_doc_name = doc_name or (doctor_roster[0]["name"] if doctor_roster else "our practicing dentist")
+            effective_svc_id = svc_id or (service_roster[0]["id"] if service_roster else 1)
+            chosen_time = time_token or req_time or (doc_slots[0] if doc_slots else "09:00")
             return {
-                "content": f"Booking your appointment with {doc_name} for {effective_date} at {chosen_time}...",
+                "content": f"Booking your appointment with {effective_doc_name} for {effective_date} at {chosen_time}...",
                 "tool_calls": [{
                     "name": "book_appointment",
                     "arguments": {
                         "customer_name": effective_name,
                         "customer_phone": effective_phone,
-                        "doctor_id": doc_id,
-                        "service_id": svc_id,
+                        "doctor_id": effective_doc_id,
+                        "service_id": effective_svc_id,
                         "appointment_date": effective_date,
                         "appointment_time": chosen_time,
                         "notes": "Booked via AI Assistant"
@@ -720,15 +951,28 @@ class MockAdapter(BaseLLMAdapter):
                 }]
             }
 
-        # Case D: Name provided but phone still missing in booking context -> ask specifically for phone
-        if effective_name and not effective_phone and (req_time or time_token or workflow_state in ["CHECKING_AVAILABILITY", "COLLECTING_INFO"]):
+        # Direct name stated by user in booking context (e.g. "Name is Haroon", "My name is Ali")
+        if cand_name and not phone_match and not is_question:
+            if not req_time and not time_token:
+                return {
+                    "content": f"Thank you, {cand_name}! Please select your preferred time slot and provide your contact phone number to complete and confirm your booking.",
+                    "tool_calls": []
+                }
+            if not effective_phone:
+                return {
+                    "content": f"Thank you, {cand_name}. Please provide your contact phone number to complete and confirm your booking.",
+                    "tool_calls": []
+                }
+
+        # Case D: Name provided but phone still missing in booking context -> ask specifically for phone ONLY when slot & date are selected
+        if effective_name and not effective_phone and (req_time or time_token) and effective_date:
             return {
                 "content": f"Thank you, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
                 "tool_calls": []
             }
 
-        # Case E: Phone provided but name still missing in booking context -> ask specifically for name
-        if effective_phone and not effective_name and (req_time or time_token or workflow_state in ["CHECKING_AVAILABILITY", "COLLECTING_INFO"]):
+        # Case E: Phone provided but name still missing in booking context -> ask specifically for name ONLY when slot & date are selected
+        if effective_phone and not effective_name and (req_time or time_token) and effective_date:
             return {
                 "content": "Thank you. Please provide your full name to complete and confirm your booking.",
                 "tool_calls": []
@@ -747,13 +991,51 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": []
             }
 
-        if any(w in user_text for w in ["weather", "sports", "match", "joke", "news", "movie", "song", "code", "python", "capital", "president", "prime minister", "who won"]):
+        # Doctor Selection
+        matched_doc_any = _fuzzy_match_roster(user_text, doctor_roster)
+        if matched_doc_any and not is_question:
+            doc_id = matched_doc_any["id"]
+            doc_name = matched_doc_any["name"]
+            if target_date_str:
+                return {
+                    "content": f"Checking open slots for {doc_name} on {target_date_str}...",
+                    "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
+                }
             return {
-                "content": "I'm the AI receptionist for SmileCare Dental Clinic! While I'm focused specifically on dental healthcare, doctor schedules, and appointment bookings, I'd be happy to assist you with any teeth cleaning, checkup, or dental service. How can I help with your smile today?",
+                "content": f"{doc_name} selected. Which date would you prefer?",
                 "tool_calls": []
             }
 
-        # 6. Booking intent or explicit date provided in active booking context -> Check availability if date is known, or ask for date
+        # Service Selection (e.g. "For Braces i want to applied", "teeth whitening", "i need braces", "root canal", "consultation", "tooth hurts")
+        matched_svc_any = _fuzzy_match_roster(user_text, service_roster)
+        if matched_svc_any and not is_question:
+            svc_id = matched_svc_any["id"]
+            svc_name = matched_svc_any["name"]
+            if target_date_str:
+                effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
+                return {
+                    "content": f"Checking open slots for {svc_name} on {target_date_str}...",
+                    "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": effective_doc_id, "service_id": svc_id}}]
+                }
+            if doc_id:
+                return {
+                    "content": f"Great! I have selected {svc_name} with {doc_name}. Which date would you like to book your appointment for?",
+                    "tool_calls": []
+                }
+            else:
+                return {
+                    "content": f"You selected {svc_name}. Which doctor would you prefer?",
+                    "tool_calls": []
+                }
+        elif any(w in user_text for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup"]):
+            consultation_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else {"id": 1, "name": "Dental Checkup & Consultation", "price": 2000})
+            fee = consultation_svc.get("price", 2000.0)
+            return {
+                "content": f"No problem. We can book a consultation. The consultation fee is PKR {fee:,.0f}. Which doctor would you prefer?",
+                "tool_calls": []
+            }
+
+        # 6. Booking intent or explicit date provided in active booking context -> Check availability if date is known, or ask for service/doctor/date
         if _has_booking_intent(user_text) or (explicit_date_given and target_date_str and (workflow_state in ["CHECKING_AVAILABILITY", "COLLECTING_INFO", "START"] or conv_state.get("intent") in ["BOOK_APPOINTMENT", "UNKNOWN"])):
             if explicit_date_given and target_date_str:
                 return {
@@ -762,25 +1044,26 @@ class MockAdapter(BaseLLMAdapter):
                         "name": "check_availability",
                         "arguments": {
                             "date": target_date_str,
-                            "doctor_id": doc_id,
+                            "doctor_id": doc_id or 1,
                             "service_id": svc_id
                         }
                     }]
                 }
             else:
-                if "ahmed" in user_text:
+                if not svc_id:
+                    greeting = f"Hello {effective_name}! " if effective_name else "Hello! "
                     return {
-                        "content": "Sure! I'd be happy to help you book an appointment with Dr. Ahmed Khan. Which date would you like to visit us?",
+                        "content": f"{greeting}Which dental service or treatment would you like to book? (If you are not sure what treatment you need, we can book a general consultation.)",
                         "tool_calls": []
                     }
-                elif "sara" in user_text:
+                elif not doc_id:
                     return {
-                        "content": "Sure! I'd be happy to help you book an appointment with Dr. Sara Malik. Which date would you like to visit us?",
+                        "content": "Which doctor would you prefer for your appointment? (Our dentists are Dr. Ahmed Khan and Dr. Sara Malik)",
                         "tool_calls": []
                     }
                 else:
                     return {
-                        "content": "Sure! I'd be happy to help you book a dental appointment. Which doctor would you prefer, and what date would you like to visit us?",
+                        "content": f"Which date would you like to book your appointment with {doc_name}?",
                         "tool_calls": []
                     }
 
@@ -902,7 +1185,6 @@ class GeminiAdapter(BaseLLMAdapter):
             temperature=0.2
         )
 
-        import time
         max_retries = 3
         response = None
         for attempt in range(max_retries):
@@ -927,23 +1209,25 @@ class GeminiAdapter(BaseLLMAdapter):
         # Check for tool calls
         tool_calls = []
         text_content = ""
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                if part.function_call:
-                    ts_hex = (
-                        part.thought_signature.hex()
-                        if getattr(part, "thought_signature", None)
-                        else None
-                    )
-                    tool_calls.append({
-                        "id": getattr(part.function_call, "id", None) or f"call_{len(tool_calls)}",
-                        "name": part.function_call.name,
-                        "arguments": dict(part.function_call.args) if part.function_call.args else {},
-                        "thought_signature": ts_hex
-                    })
-                if part.text:
-                    text_content += part.text
-
+        if response and getattr(response, "candidates", None) and response.candidates:
+            first_candidate = response.candidates[0]
+            if getattr(first_candidate, "content", None) and getattr(first_candidate.content, "parts", None):
+                for part in first_candidate.content.parts:
+                    if getattr(part, "function_call", None):
+                        fc = part.function_call
+                        ts_hex = (
+                            part.thought_signature.hex()
+                            if getattr(part, "thought_signature", None)
+                            else None
+                        )
+                        tool_calls.append({
+                            "id": getattr(fc, "id", None) or f"call_{len(tool_calls)}",
+                            "name": fc.name,
+                            "arguments": dict(fc.args) if fc.args else {},
+                            "thought_signature": ts_hex
+                        })
+                    if getattr(part, "text", None):
+                        text_content += part.text
 
         return {
             "content": text_content.strip(),
@@ -1025,23 +1309,26 @@ class GroqAdapter(BaseLLMAdapter):
             temperature=0.2
         )
 
-        choice = response.choices[0].message
         tool_calls = []
-        if choice.tool_calls:
-            for tc in choice.tool_calls:
-                args = {}
-                try:
-                    args = json.loads(tc.function.arguments)
-                except Exception:
-                    pass
-                tool_calls.append({
-                    "id": tc.id,
-                    "name": tc.function.name,
-                    "arguments": args
-                })
+        text_content = ""
+        if response and getattr(response, "choices", None) and response.choices:
+            choice = response.choices[0].message
+            text_content = choice.content or ""
+            if getattr(choice, "tool_calls", None) and choice.tool_calls:
+                for tc in choice.tool_calls:
+                    args = {}
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except Exception:
+                        pass
+                    tool_calls.append({
+                        "id": getattr(tc, "id", None) or f"call_{len(tool_calls)}",
+                        "name": getattr(tc.function, "name", ""),
+                        "arguments": args
+                    })
 
         return {
-            "content": choice.content or "",
+            "content": text_content,
             "tool_calls": tool_calls
         }
 

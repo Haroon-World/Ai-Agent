@@ -1,11 +1,12 @@
 import json
 import re
 import uuid
+from datetime import datetime, date as dt_date, timedelta as dt_td
 from typing import Dict, Any, List, Optional
-from models import db, Conversation, Message, Customer, Doctor, Service
+from models import db, Business, Conversation, Message, Customer, Doctor, Service
 from ai.tools import CANONICAL_TOOLS, ToolDispatcher
 from ai.prompts import build_system_prompt
-from ai.llm_client import LLMClient, _extract_name, _fuzzy_match_roster
+from ai.llm_client import LLMClient, _extract_name, _fuzzy_match_roster, resolve_date_string
 
 
 
@@ -104,14 +105,20 @@ def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
             )
         if last_tool_msg and last_tool_msg.content:
             data = json.loads(last_tool_msg.content)
-            if isinstance(data, dict) and "results" in data:
-                for r in data.get("results", []):
-                    d_id = str(r.get("doctor_id"))
-                    slots = r.get("available_slots", [])
-                    last_offered_slots[d_id] = slots
-                    for s in slots:
-                        if s not in all_offered_slots:
-                            all_offered_slots.append(s)
+            if isinstance(data, dict):
+                if "available_slots" in data:
+                    top_slots = data.get("available_slots", []) or []
+                    all_offered_slots.extend(top_slots)
+                    if data.get("doctor_id"):
+                        last_offered_slots[str(data["doctor_id"])] = top_slots
+                if "results" in data:
+                    for r in data.get("results", []):
+                        d_id = str(r.get("doctor_id"))
+                        slots = r.get("available_slots", [])
+                        last_offered_slots[d_id] = slots
+                        for s in slots:
+                            if s not in all_offered_slots:
+                                all_offered_slots.append(s)
     except Exception:
         pass
 
@@ -238,107 +245,325 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     # 1. Resolve Doctor from DB for current business_id — fuzzy-matched so
     # spelling variants/typos (e.g. "dr ahmad" for "Dr. Ahmed Khan") still
     # resolve correctly instead of requiring an exact substring match.
-    if not conv.selected_doctor_id or "doctor" in text_lower or "dr" in text_lower:
-        doctors = Doctor.query.filter_by(business_id=conv.business_id, is_active=True).all()
-        doctor_roster = [{"id": d.id, "name": d.name} for d in doctors]
-        matched_doc = _fuzzy_match_roster(user_content, doctor_roster)
-        if matched_doc:
-            conv.selected_doctor_id = matched_doc["id"]
+    doctors = Doctor.query.filter_by(business_id=conv.business_id, is_active=True).all()
+    doctor_roster = [{"id": d.id, "name": d.name} for d in doctors]
+    matched_doc = _fuzzy_match_roster(user_content, doctor_roster)
+    if matched_doc:
+        conv.selected_doctor_id = matched_doc["id"]
+        if conv.awaiting_input == "doctor_choice":
+            conv.awaiting_input = "date_choice" if not conv.requested_date else None
 
     # 2. Resolve Service from DB for current business_id — same fuzzy
     # matching, so a typo'd or partially-remembered service name resolves
     # instead of silently failing to update state.
-    services = Service.query.filter_by(business_id=conv.business_id).all()
+    services = Service.query.filter_by(business_id=conv.business_id, is_active=True).all()
     service_roster = [{"id": s.id, "name": s.name} for s in services]
     matched_svc = _fuzzy_match_roster(user_content, service_roster)
     if matched_svc:
         conv.selected_service_id = matched_svc["id"]
+        if conv.awaiting_input == "service_choice":
+            conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
+    elif not conv.selected_service_id and any(w in text_lower for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup", "consult"]):
+        consult_svc = Service.query.filter(
+            Service.business_id == conv.business_id,
+            Service.is_active == True,
+            (Service.name.ilike("%consultation%") | Service.name.ilike("%checkup%"))
+        ).first() or (services[0] if services else None)
+        if consult_svc:
+            conv.selected_service_id = consult_svc.id
+            if conv.awaiting_input in [None, "service_choice"]:
+                conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
 
-    # 3. Resolve Date (tomorrow, kal, today, aaj, ISO dates YYYY-MM-DD)
-    from datetime import date, timedelta
-    date_match = re.search(r'(\d{4}-\d{2}-\d{2})', user_content)
-    if date_match:
-        conv.requested_date = date_match.group(1)
-    elif "tomorrow" in text_lower or "kal" in text_lower:
-        conv.requested_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-    elif "today" in text_lower or "aaj" in text_lower:
-        conv.requested_date = date.today().strftime("%Y-%m-%d")
+    # 3. Resolve Date using robust date resolver (relative & explicit formats)
+    parsed_date = resolve_date_string(user_content, business_id=conv.business_id)
+    if parsed_date:
+        conv.requested_date = parsed_date
+        if conv.awaiting_input == "date_choice":
+            conv.awaiting_input = None
 
     # 4. Resolve Time (only if not a question query like "is there any slot after 12")
     if not _is_question_query(user_content):
         time_token = _extract_time_token(user_content)
         if time_token:
             conv.requested_time = time_token
+            if not conv.pending_customer_name:
+                conv.awaiting_input = "name"
+            elif not conv.pending_customer_phone:
+                conv.awaiting_input = "phone"
+            else:
+                conv.awaiting_input = "confirmation"
 
     # 5. Resolve Customer Phone
     phone_match = re.search(r'\b(03\d{2}[- ]?\d{7}|\+92\d{10}|03\d{9})\b', user_content)
     if phone_match:
         clean_phone = phone_match.group(1).replace(" ", "").replace("-", "")
         conv.pending_customer_phone = clean_phone
+        if not conv.pending_customer_name:
+            conv.awaiting_input = "name"
+        else:
+            conv.awaiting_input = "confirmation"
 
     # 6. Resolve Customer Name (if not a question query, doctor name, or service name)
     doctors_for_name_check = Doctor.query.filter_by(business_id=conv.business_id).all()
-    services_for_name_check = Service.query.filter_by(business_id=conv.business_id).all()
+    services_for_name_check = Service.query.filter_by(business_id=conv.business_id, is_active=True).all()
     _roster_names_for_exclusion = [d.name for d in doctors_for_name_check] + [s.name for s in services_for_name_check]
     cand_name = _extract_name(user_content, roster_names=_roster_names_for_exclusion)
     if cand_name and not _is_question_query(user_content):
         conv.pending_customer_name = cand_name
+        if conv.requested_time:
+            if not conv.pending_customer_phone:
+                conv.awaiting_input = "phone"
+            else:
+                conv.awaiting_input = "confirmation"
+
+    # 7. Intent and change triggers
+    if "change" in text_lower or "modify" in text_lower or "reset" in text_lower:
+        if "doctor" in text_lower:
+            conv.selected_doctor_id = None
+            conv.requested_time = None
+        elif "date" in text_lower:
+            conv.requested_date = None
+            conv.requested_time = None
+        elif "time" in text_lower or "slot" in text_lower:
+            conv.requested_time = None
+        elif "service" in text_lower:
+            conv.selected_service_id = None
+            conv.requested_time = None
+        else:
+            conv.requested_time = None
+
+    # 8. Cancel trigger
+    if any(k in text_lower for k in ["cancel booking", "cancel appointment", "cancel my booking"]):
+        conv.workflow_state = "START"
+        conv.intent = "UNKNOWN"
+        conv.awaiting_input = None
+        conv.requested_time = None
+        conv.requested_date = None
+        conv.selected_doctor_id = None
+        conv.selected_service_id = None
+        conv.pending_customer_name = None
+        conv.pending_customer_phone = None
+
+    # Update intent/state when customer wants appointment or gives parameters
+    if (
+        conv.selected_service_id or
+        conv.selected_doctor_id or
+        conv.requested_date or
+        conv.requested_time or
+        any(w in text_lower for w in ["appointment", "book", "reserve", "consultation", "checkup", "visit"])
+    ):
+        if conv.intent in [None, "UNKNOWN"]:
+            conv.intent = "BOOK_APPOINTMENT"
+        if conv.workflow_state in [None, "START"]:
+            conv.workflow_state = "COLLECTING_INFO"
+        if not conv.selected_service_id and not conv.awaiting_input:
+            conv.awaiting_input = "service_choice"
 
     db.session.flush()
 
 
 def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
     """
-    Build structured UI action payload for frontend rendering based on conversation state and DB records.
+    Build structured UI action payload for frontend rendering following the guided flow:
+    Service -> Doctor -> Date -> Real Time Slots -> Confirmation
     """
-    # 1. Doctor selection
-    if not conv.selected_doctor_id and conv.intent == "BOOK_APPOINTMENT":
+    if conv.status == "HUMAN" or conv.workflow_state == "BOOKED":
+        return None
+
+    def _fmt_ampm(t_str: str) -> str:
+        try:
+            h, m = map(int, str(t_str).split(":"))
+            ap = "AM" if h < 12 else "PM"
+            h12 = h if (1 <= h <= 12) else (12 if h % 12 == 0 else h % 12)
+            return f"{h12:02d}:{m:02d} {ap}"
+        except Exception:
+            return str(t_str)
+
+    # 1. Final Booking Confirmation Card
+    if (
+        conv.selected_doctor_id and
+        conv.requested_date and
+        conv.requested_time and
+        conv.pending_customer_name and
+        conv.pending_customer_phone and
+        conv.workflow_state != "BOOKED"
+    ):
+        doc = db.session.get(Doctor, conv.selected_doctor_id)
+        svc = db.session.get(Service, conv.selected_service_id) if conv.selected_service_id else Service.query.filter_by(business_id=conv.business_id, is_active=True).first()
+        
+        try:
+            d_obj = datetime.strptime(conv.requested_date, "%Y-%m-%d")
+            formatted_date = d_obj.strftime("%A, %B %d, %Y")
+        except Exception:
+            formatted_date = conv.requested_date
+
+        formatted_time = _fmt_ampm(conv.requested_time)
+
+        return {
+            "type": "booking_confirmation",
+            "interactive_type": "button",
+            "title": "Review & Confirm Your Appointment",
+            "details": {
+                "service_name": svc.name if svc else "Dental Consultation",
+                "service_price": f"PKR {svc.price:,.0f}" if (svc and svc.price) else "PKR 2,000",
+                "service_duration": f"{svc.duration} mins" if svc else "30 mins",
+                "doctor_name": doc.name if doc else "Our Practicing Dentist",
+                "doctor_specialization": doc.specialization if doc else "General Dentistry",
+                "date": conv.requested_date,
+                "formatted_date": formatted_date,
+                "time": conv.requested_time,
+                "formatted_time": formatted_time,
+                "customer_name": conv.pending_customer_name,
+                "customer_phone": conv.pending_customer_phone
+            },
+            "actions": [
+                {"id": "action_confirm", "title": "Confirm Booking", "label": "✅ Confirm Booking", "value": "Confirm Appointment", "primary": True},
+                {"id": "action_change", "title": "Change Details", "label": "✏️ Change", "value": "I want to change my appointment details", "primary": False},
+                {"id": "action_cancel", "title": "Cancel", "label": "❌ Cancel", "value": "Cancel booking", "primary": False}
+            ]
+        }
+
+    # 2. Service Selection (Step 1 of Flow)
+    if not conv.selected_service_id and (conv.intent == "BOOK_APPOINTMENT" or conv.awaiting_input == "service_choice" or conv.workflow_state in ["START", "COLLECTING_INFO", "CHECKING_AVAILABILITY"]):
+        services = Service.query.filter_by(business_id=conv.business_id, is_active=True).all()
+        if services:
+            business = db.session.get(Business, conv.business_id)
+            consultation_fee = (getattr(business, 'consultation_fee', 2000.0) if business else 2000.0) or 2000.0
+            options = [
+                {
+                    "id": f"svc_{s.id}",
+                    "name": s.name,
+                    "title": s.name,
+                    "label": s.name,
+                    "value": s.name,
+                    "duration": s.duration,
+                    "price": s.price,
+                    "price_formatted": f"PKR {s.price:,.0f}" if s.price else "",
+                    "description": s.description or f"{s.duration} mins"
+                }
+                for s in services
+            ]
+            options.append({
+                "id": "svc_consultation",
+                "name": "I don't know / I need a consultation",
+                "title": "I don't know / I need a consultation",
+                "label": "🩺 I don't know / I need a consultation",
+                "value": "I don't know, I need a consultation",
+                "duration": 30,
+                "price": consultation_fee,
+                "price_formatted": f"PKR {consultation_fee:,.0f}",
+                "description": "General oral checkup & examination"
+            })
+            return {
+                "type": "service_selection",
+                "interactive_type": "list",
+                "title": "Select a Dental Service",
+                "options": options
+            }
+
+    # 3. Doctor Selection (Step 2 of Flow)
+    if not conv.selected_doctor_id and (conv.intent == "BOOK_APPOINTMENT" or conv.awaiting_input == "doctor_choice" or conv.workflow_state in ["COLLECTING_INFO", "CHECKING_AVAILABILITY"]):
         doctors = Doctor.query.filter_by(business_id=conv.business_id, is_active=True).all()
         if doctors:
             return {
                 "type": "doctor_selection",
-                "title": "Select a Doctor",
+                "interactive_type": "list",
+                "title": "Choose Your Doctor",
                 "options": [
                     {
-                        "id": d.id,
+                        "id": f"doc_{d.id}",
                         "name": d.name,
+                        "title": d.name,
+                        "label": d.name,
+                        "value": d.name,
                         "specialization": d.specialization,
+                        "description": d.specialization or "General Dentistry",
                         "working_days": d.working_days
                     }
                     for d in doctors
                 ]
             }
 
-    # 2. Service selection
-    if not conv.selected_service_id and conv.intent == "BOOK_APPOINTMENT":
-        services = Service.query.filter_by(business_id=conv.business_id).all()
-        if services:
-            return {
-                "type": "service_selection",
-                "title": "Select a Service",
-                "options": [
-                    {
-                        "id": s.id,
-                        "name": s.name,
-                        "duration": s.duration,
-                        "price": s.price,
-                        "description": s.description
-                    }
-                    for s in services
-                ]
-            }
-
-    # 3. Date selection
-    if not conv.requested_date and conv.intent == "BOOK_APPOINTMENT":
-        from datetime import date, timedelta
+    # 4. Date Selection (Step 3 of Flow)
+    if not conv.requested_date and (conv.intent == "BOOK_APPOINTMENT" or conv.awaiting_input in ["date_choice", "date"] or conv.workflow_state in ["COLLECTING_INFO", "CHECKING_AVAILABILITY"]):
+        from datetime import date as dt_date, timedelta as dt_td
+        today = dt_date.today()
+        date_options = []
+        for i in range(1, 6):
+            target_d = today + dt_td(days=i)
+            label = "Tomorrow" if i == 1 else target_d.strftime("%a, %b %d")
+            date_options.append({
+                "id": f"date_{target_d.strftime('%Y%m%d')}",
+                "title": label,
+                "label": label,
+                "value": target_d.strftime("%Y-%m-%d"),
+                "day": target_d.strftime("%A"),
+                "display": f"{label} ({target_d.strftime('%A')})"
+            })
         return {
             "type": "date_selection",
-            "title": "Select a Date",
-            "options": [
-                {"label": "Today", "value": date.today().strftime("%Y-%m-%d")},
-                {"label": "Tomorrow", "value": (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")}
-            ]
+            "interactive_type": "quick_reply",
+            "title": "Choose an Appointment Date",
+            "options": date_options,
+            "allow_custom_date": True
         }
+
+    # 5. Time Slot Selection (Step 4 of Flow)
+    if not conv.requested_time and conv.selected_doctor_id and conv.requested_date:
+        slots = []
+        last_tool = Message.query.filter_by(conversation_id=conv.id, role="tool", tool_name="check_availability").order_by(Message.created_at.desc()).first()
+        if last_tool and last_tool.content:
+            try:
+                data = json.loads(last_tool.content)
+                slots = data.get("available_slots") or data.get("next_available_slots") or []
+            except Exception:
+                pass
+
+        if not slots:
+            try:
+                from services.booking_service import BookingService
+                avail_res = BookingService.check_availability(
+                    business_id=conv.business_id,
+                    date_str=conv.requested_date,
+                    doctor_id=conv.selected_doctor_id,
+                    service_id=conv.selected_service_id
+                )
+                slots = avail_res.get("available_slots", [])
+            except Exception:
+                pass
+
+        if slots:
+            doc = db.session.get(Doctor, conv.selected_doctor_id)
+            time_options = []
+            for s in slots:
+                try:
+                    h = int(s.split(":")[0])
+                    period = "Morning" if h < 12 else "Afternoon"
+                except Exception:
+                    period = "Morning"
+                time_options.append({
+                    "id": f"slot_{s.replace(':', '')}",
+                    "title": _fmt_ampm(s),
+                    "label": _fmt_ampm(s),
+                    "value": s,
+                    "period": period,
+                    "description": f"{period} Slot"
+                })
+
+            try:
+                d_obj = datetime.strptime(conv.requested_date, "%Y-%m-%d")
+                formatted_d = d_obj.strftime("%A, %B %d, %Y")
+            except Exception:
+                formatted_d = conv.requested_date
+
+            return {
+                "type": "time_slot_selection",
+                "interactive_type": "list",
+                "title": f"Available Time Slots on {formatted_d}",
+                "doctor_name": doc.name if doc else "",
+                "date": conv.requested_date,
+                "options": time_options
+            }
 
     return None
 
@@ -355,83 +580,77 @@ class Agent:
         """
         conv = db.session.get(Conversation, conversation_id)
         if not conv:
-            return {"error": f"Conversation #{conversation_id} not found."}
+            raise ValueError(f"Conversation {conversation_id} not found.")
 
-        # Save user message first
-        user_msg = Message(conversation_id=conv.id, role="user", content=user_content)
-        db.session.add(user_msg)
-        db.session.flush()
-
-        # Strict Server-Side Check: If conversation is in HUMAN mode, AI does not auto-reply
+        # Human receptionist override: if status is HUMAN, bypass AI completely
         if conv.status == "HUMAN":
-            db.session.commit()
             return {
                 "conversation_id": conv.id,
                 "status": "HUMAN",
-                "content": "Our human staff has taken over this conversation and will reply shortly.",
-                "tool_calls": [],
-                "workflow_state": conv.workflow_state
+                "content": "Our human staff has taken over this conversation and will reply shortly. Please wait for their reply or call our reception directly.",
+                "executed_tools": [],
+                "ui_action": None
             }
 
-        # 1. Resolve parameters from current user message dynamically using conv.business_id
+        # 1. Persist user message to DB
+        user_msg = Message(
+            conversation_id=conv.id,
+            role="user",
+            content=user_content
+        )
+        db.session.add(user_msg)
+        db.session.commit()
+
+        # 2. Intelligently extract booking parameters from user text & update state
         _resolve_workflow_input(conv, user_content)
 
-        # 2. Build structured conversation state dict
+        # 3. Build enriched context and query LLM
         state_dict = _build_state_dict(conv)
-        all_offered = state_dict.get("all_offered_slots", [])
-
-        # Build dynamic system prompt from business DB data
-        system_prompt = build_system_prompt(self.business_id)
-
-        # Inject persisted conversation state as structured text context (for Gemini/Groq)
+        base_prompt = build_system_prompt(self.business_id)
         state_context = _build_state_context(conv)
-        enriched_system_prompt = system_prompt + "\n\n" + state_context
+        system_prompt = f"{base_prompt}\n\n{state_context}"
 
-        # Retrieve last 12 messages for conversational history
-        past_messages = (
+        # Fetch visible history
+        history_msgs = (
             Message.query
             .filter_by(conversation_id=conv.id)
-            .order_by(Message.created_at.desc())
-            .limit(12)
+            .order_by(Message.created_at.asc())
             .all()
         )
-        past_messages.reverse()
 
         formatted_messages = []
-        for m in past_messages:
+        for m in history_msgs:
             if m.role == "tool":
                 formatted_messages.append({
                     "role": "tool",
                     "tool_name": m.tool_name or "tool",
-                    "tool_call_id": m.tool_call_id or "call_0",
+                    "tool_call_id": m.tool_call_id or f"call_{m.id}",
                     "content": m.content
                 })
             else:
-                formatted_messages.append({"role": m.role, "content": m.content})
+                formatted_messages.append({
+                    "role": m.role,
+                    "content": m.content
+                })
 
-        # Dispatcher for controlled tool execution
         dispatcher = ToolDispatcher(business_id=self.business_id, conversation_id=conv.id)
+        executed_tools = []
+        tool_results = []
+        iteration = 0
+        max_iterations = 5
 
-        # Initial LLM call (passing both enriched system prompt and structured state_dict)
+        # Get completion from adapter
         response = self.llm_client.get_completion(
-            system_prompt=enriched_system_prompt,
+            system_prompt=system_prompt,
             messages=formatted_messages,
             tools=CANONICAL_TOOLS,
             conversation_state=state_dict
         )
 
-        executed_tools = []
-        tool_results = []
-
-        # Tool execution loop (max 5 iterations to prevent infinite loops)
-        max_tool_iterations = 5
-        iteration = 0
-
-
-        while response.get("tool_calls") and iteration < max_tool_iterations:
+        # Tool execution loop
+        while response.get("tool_calls") and iteration < max_iterations:
             iteration += 1
 
-            # If provider returned an assistant message with tool_calls, append it to history
             if response.get("tool_calls"):
                 formatted_messages.append({
                     "role": "assistant",
@@ -442,23 +661,18 @@ class Agent:
             for tc in response["tool_calls"]:
                 tool_name = tc.get("name")
                 tool_args = tc.get("arguments", {})
-                # Carry the real tool_call_id from the provider response
                 tool_call_id = tc.get("id", f"call_{iteration}")
 
-                # Auto-inject idempotency key for booking attempts
                 if tool_name == "book_appointment" and not tool_args.get("idempotency_key"):
                     tool_args["idempotency_key"] = f"conv-{conv.id}-attempt-{iteration}-{uuid.uuid4().hex[:8]}"
 
                 executed_tools.append({"name": tool_name, "args": tool_args})
 
-                # Update structured conversation state based on tool arguments
                 self._update_conversation_state(conv, tool_name, tool_args)
 
-                # Execute backend business tool
                 result = dispatcher.execute(tool_name, tool_args)
                 tool_results.append({"tool": tool_name, "result": result})
 
-                # Persist tool message with IDs for Groq/OpenAI protocol round-trips
                 tool_msg_content = json.dumps(result)
                 tool_msg = Message(
                     conversation_id=conv.id,
@@ -470,7 +684,6 @@ class Agent:
                 db.session.add(tool_msg)
                 db.session.flush()
 
-                # Add tool response to context for next LLM turn
                 formatted_messages.append({
                     "role": "tool",
                     "tool_name": tool_name,
@@ -478,11 +691,9 @@ class Agent:
                     "content": tool_msg_content
                 })
 
-            # Update state context and state dict after tool execution
             state_dict = _build_state_dict(conv)
             enriched_system_prompt = system_prompt + "\n\n" + _build_state_context(conv)
 
-            # Re-query LLM with tool results to get natural language synthesis
             response = self.llm_client.get_completion(
                 system_prompt=enriched_system_prompt,
                 messages=formatted_messages,
@@ -495,16 +706,17 @@ class Agent:
             "Thank you for contacting SmileCare Dental Clinic. How else may I assist you?"
         )
 
-        # Save assistant response
+        ui_act = _build_ui_action(conv)
+
+        # Save assistant response with persistent interactive_data
         asst_msg = Message(
             conversation_id=conv.id,
             role="assistant",
-            content=final_content
+            content=final_content,
+            interactive_data=json.dumps(ui_act) if ui_act else None
         )
         db.session.add(asst_msg)
         db.session.commit()
-
-        ui_act = _build_ui_action(conv)
 
         return {
             "conversation_id": conv.id,

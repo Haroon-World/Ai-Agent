@@ -51,7 +51,7 @@
                     </td>
                     <td>
                         {% if appt.status == 'CONFIRMED' %}
-                            <button class="btn btn-sm btn-danger" onclick="cancelAppointment({{ appt.id }})">Cancel</button>
+                            <button class="btn btn-sm btn-danger" onclick="cancelAppointment('{{ appt.id }}')">Cancel</button>
                         {% else %}
                             <span class="text-muted">—</span>
                         {% endif %}
@@ -74,17 +74,24 @@
 async function cancelAppointment(appointmentId) {
     if (!confirm(`Are you sure you want to cancel appointment #${appointmentId}?`)) return;
     try {
-        const res = await fetch('/api/appointments/cancel', {
+        const res = await fetch('/api/admin/appointments/cancel', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ appointment_id: appointmentId, reason: 'Cancelled by Admin Staff' })
+            body: JSON.stringify({ appointment_id: parseInt(appointmentId), reason: 'Cancelled by Admin Staff' })
         });
+        
+        const contentType = res.headers.get("content-type") || "";
+        if (!contentType.includes("application/json")) {
+            alert(`Server returned non-JSON response (status ${res.status}). Please verify that your admin session is active.`);
+            return;
+        }
+
         const data = await res.json();
         if (data.success) {
-            alert(data.message);
+            alert(data.message || 'Appointment cancelled successfully.');
             window.location.reload();
         } else {
-            alert('Error: ' + data.error);
+            alert('Error: ' + (data.error || 'Failed to cancel appointment.'));
         }
     } catch (e) {
         alert('Network error: ' + e.message);
