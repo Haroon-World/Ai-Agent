@@ -27,11 +27,35 @@ def _is_question_query(text: str) -> bool:
     return any(qp in lower for qp in question_prefixes)
 
 
+_URDU_ROMAN_NUMBERS = {
+    "ek": 1, "aik": 1, "ایک": 1, "۱": 1,
+    "do": 2, "doo": 2, "دو": 2, "۲": 2,
+    "teen": 3, "tin": 3, "تین": 3, "۳": 3,
+    "chaar": 4, "char": 4, "چار": 4, "۴": 4,
+    "paanch": 5, "panch": 5, "پانچ": 5, "۵": 5,
+    "che": 6, "chay": 6, "chhey": 6, "چھ": 6, "۶": 6,
+    "saat": 7, "sat": 7, "سات": 7, "۷": 7,
+    "aath": 8, "ath": 8, "آٹھ": 8, "۸": 8,
+    "nau": 9, "no": 9, "نو": 9, "۹": 9,
+    "das": 10, "دس": 10, "۱۰": 10,
+    "gyarah": 11, "gyara": 11, "gyaarah": 11, "گیارہ": 11, "گہرہ": 11, "گیرہ": 11, "۱۱": 11,
+    "barah": 12, "bara": 12, "baarah": 12, "بارہ": 12, "۱۲": 12
+}
+
+
 def _extract_time_token(text: str) -> Optional[str]:
-    """Extract standard HH:MM time string from user text supporting ':', '.', 'am/pm', and bare numbers after prepositions like 'after 12'."""
+    """
+    Extract standard HH:MM time string from user text supporting:
+    - 24-hour and 12-hour: 14:00, 2:00 PM, 2:30 pm, 02:00 PM
+    - Spoken English/Roman Urdu: 2 PM, 2 pm, 2 baje, do baje, 10 am, subah 10 baje
+    - Urdu script: دو بجے, ۲ بجے, دن دو بجے, دوپہر ۲ بجے, صبح ۱۰ بجے, شام ۴ بجے
+    - Prepositions: at 2, around 2, after 12, before 2, ko 2
+    """
     if not text:
         return None
-    # Match standard HH:MM or HH.MM (e.g. 9:30, 09:30, 12.00, 12.00pm, 14:00)
+    lower = text.lower().strip()
+
+    # 1. Match standard HH:MM or HH.MM (e.g. 9:30, 09:30, 14:00, 2:00 PM, 2.00pm)
     m = re.search(r'\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b', text, re.IGNORECASE)
     if m:
         h, mn = int(m.group(1)), int(m.group(2))
@@ -41,25 +65,53 @@ def _extract_time_token(text: str) -> Optional[str]:
         elif ampm == "am" and h == 12:
             h = 0
         return f"{h:02d}:{mn:02d}"
-    # Match spoken forms like 10 am, 2 pm, 12 pm, 10 baje, 10 bje
-    m = re.search(r'\b(\d{1,2})\s*(baje|bje|bjay|am|pm)\b', text, re.IGNORECASE)
+
+    # 2. Match H am / H pm (e.g. 10 am, 2 pm, 12 pm)
+    m = re.search(r'\b(\d{1,2})\s*(am|pm)\b', text, re.IGNORECASE)
     if m:
         h = int(m.group(1))
-        unit = m.group(2).lower()
-        if unit == "pm" and h < 12:
+        ampm = m.group(2).lower()
+        if ampm == "pm" and h < 12:
             h += 12
-        elif unit == "am" and h == 12:
+        elif ampm == "am" and h == 12:
             h = 0
-        elif unit in ["baje", "bje", "bjay"] and 1 <= h <= 7:
-            h += 12
         return f"{h:02d}:00"
-    # Match bare number after time prepositions like "after 12", "before 2", "at 10"
-    m = re.search(r'\b(?:after|before|at|around|from|past)\s+(\d{1,2})\b', text, re.IGNORECASE)
+
+    # 3. Match number/word + baje / بجے / بجی / o'clock (e.g. 2 baje, do baji, دو بجی, دو بجے, دن دو بجی)
+    num_pattern = r'(\d{1,2}|ek|aik|do|doo|teen|tin|chaar|char|paanch|panch|che|chay|chhey|saat|sat|aath|ath|nau|no|das|gyarah|gyara|gyaarah|barah|bara|baarah|ایک|دو|تین|چار|پانچ|چھ|سات|آٹھ|نو|دس|گیارہ|گہرہ|گیرہ|بارہ|[۱-۹]|۱۰|۱۱|۱۲)'
+    baje_pattern = r'(?:baje|bje|bjay|baji|bajy|bajeh|o\'?clock|بجے|بجی)'
+    prefix_pattern = r'(?:(?:din|dopahar|shaam|raat|subah|دن|دوپہر|شام|رات|صبح)(?:\s+(?:ko|ke|ki|کو|کے|کی))?\s+)?'
+    m = re.search(prefix_pattern + num_pattern + r'\s*' + baje_pattern, text, re.IGNORECASE)
     if m:
-        h = int(m.group(1))
-        if 1 <= h <= 7:
-            h += 12
-        return f"{h:02d}:00"
+        token = m.group(1).lower()
+        h = int(token) if token.isdigit() else _URDU_ROMAN_NUMBERS.get(token)
+        if h is not None:
+            is_pm = any(w in lower for w in ["pm", "dopahar", "shaam", "raat", "دوپہر", "شام", "رات", "دن"])
+            is_am = any(w in lower for w in ["am", "subah", "صبح"])
+            if is_pm and h < 12:
+                h += 12
+            elif is_am and h == 12:
+                h = 0
+            elif not is_pm and not is_am and 1 <= h <= 7:
+                h += 12
+            return f"{h:02d}:00"
+
+    # 4. Match bare number/word after prepositions like "at 2", "after 12", "ko 2", "ki 2"
+    m = re.search(r'\b(?:after|before|at|around|from|past|ko|ke|ki|pe|par|کو|پر|کے|کی)\s+' + num_pattern + r'\b', text, re.IGNORECASE)
+    if m:
+        token = m.group(1).lower()
+        h = int(token) if token.isdigit() else _URDU_ROMAN_NUMBERS.get(token)
+        if h is not None:
+            is_pm = any(w in lower for w in ["pm", "dopahar", "shaam", "raat", "دوپہر", "شام", "رات", "دن"])
+            is_am = any(w in lower for w in ["am", "subah", "صبح"])
+            if is_pm and h < 12:
+                h += 12
+            elif is_am and h == 12:
+                h = 0
+            elif not is_pm and not is_am and 1 <= h <= 7:
+                h += 12
+            return f"{h:02d}:00"
+
     return None
 
 
@@ -272,16 +324,23 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
             conv.selected_service_id = matched_svc["id"]
             if conv.awaiting_input == "service_choice":
                 conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
-    elif not conv.selected_service_id and any(w in text_lower for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup", "consult"]):
-        consult_svc = Service.query.filter(
-            Service.business_id == conv.business_id,
-            Service.is_active == True,
-            (Service.name.ilike("%consultation%") | Service.name.ilike("%checkup%"))
-        ).first() or (services[0] if services else None)
-        if consult_svc:
-            conv.selected_service_id = consult_svc.id
-            if conv.awaiting_input in [None, "service_choice"]:
-                conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
+    elif not conv.selected_service_id:
+        consultation_keywords = [
+            "dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain",
+            "hurting", "problem", "consultation", "checkup", "consult", "check up", "general appointment",
+            "dant", "dard", "masla", "pata nahi", "nahi pata", "maloom nahi", "check karwana", "check krwana",
+            "چیک اپ", "چیکپ", "مشورہ", "معائنہ", "دانت", "درد", "پروبلم", "مسئلہ", "نہیں پتا", "نہیں معلوم"
+        ]
+        if any(w in text_lower for w in consultation_keywords):
+            consult_svc = Service.query.filter(
+                Service.business_id == conv.business_id,
+                Service.is_active == True,
+                (Service.name.ilike("%consultation%") | Service.name.ilike("%checkup%"))
+            ).first() or (services[0] if services else None)
+            if consult_svc:
+                conv.selected_service_id = consult_svc.id
+                if conv.awaiting_input in [None, "service_choice"]:
+                    conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
 
     # 3. Resolve Date using robust date resolver (relative & explicit formats)
     parsed_date = resolve_date_string(user_content, business_id=conv.business_id)
@@ -295,27 +354,45 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         time_token = _extract_time_token(user_content)
         if time_token:
             conv.requested_time = time_token
-            if not conv.pending_customer_name:
-                conv.awaiting_input = "name"
-            elif not conv.pending_customer_phone:
-                conv.awaiting_input = "phone"
-            else:
-                conv.awaiting_input = "confirmation"
+            # Validate availability if doctor and date are known
+            if conv.selected_doctor_id and conv.requested_date:
+                try:
+                    from services.booking_service import BookingService
+                    avail = BookingService.check_availability(
+                        business_id=conv.business_id,
+                        date_str=conv.requested_date,
+                        doctor_id=conv.selected_doctor_id,
+                        service_id=conv.selected_service_id
+                    )
+                    avail_slots = avail.get("available_slots", [])
+                    if time_token not in avail_slots:
+                        # Slot is unavailable; reset requested_time so UI action can show alternative slots
+                        conv.requested_time = None
+                        conv.awaiting_input = "time_choice"
+                        conv.workflow_state = "CHECKING_AVAILABILITY"
+                except Exception:
+                    pass
+
+            if conv.requested_time:
+                if not conv.pending_customer_name:
+                    conv.awaiting_input = "name"
+                elif not conv.pending_customer_phone:
+                    conv.awaiting_input = "phone"
+                else:
+                    conv.awaiting_input = "confirmation"
 
     # 5. Resolve Customer Phone
     phone_match = re.search(r'\b(03\d{2}[- ]?\d{7}|\+92\d{10}|03\d{9})\b', user_content)
     if phone_match:
-        clean_phone = phone_match.group(1).replace(" ", "").replace("-", "")
-        conv.pending_customer_phone = clean_phone
-        if not conv.pending_customer_name:
-            conv.awaiting_input = "name"
-        else:
-            conv.awaiting_input = "confirmation"
+        conv.pending_customer_phone = phone_match.group(1).replace(" ", "").replace("-", "")
+        if conv.requested_time:
+            if not conv.pending_customer_name:
+                conv.awaiting_input = "name"
+            else:
+                conv.awaiting_input = "confirmation"
 
-    # 6. Resolve Customer Name (if not a question query, doctor name, or service name)
-    doctors_for_name_check = Doctor.query.filter_by(business_id=conv.business_id).all()
-    services_for_name_check = Service.query.filter_by(business_id=conv.business_id, is_active=True).all()
-    _roster_names_for_exclusion = [d.name for d in doctors_for_name_check] + [s.name for s in services_for_name_check]
+    # 6. Resolve Customer Name
+    _roster_names_for_exclusion = [d.name for d in doctors] + [s.name for s in services]
     cand_name = _extract_name(user_content, roster_names=_roster_names_for_exclusion)
     if cand_name and not _is_question_query(user_content):
         conv.pending_customer_name = cand_name
@@ -333,12 +410,12 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         elif ("date" in text_lower or "day" in text_lower) and not parsed_date:
             conv.requested_date = None
             conv.requested_time = None
-        elif "time" in text_lower or "slot" in text_lower:
+        elif ("time" in text_lower or "slot" in text_lower) and not time_token:
             conv.requested_time = None
         elif "service" in text_lower and not matched_svc:
             conv.selected_service_id = None
             conv.requested_time = None
-        elif not matched_doc and not matched_svc and not parsed_date:
+        elif not matched_doc and not matched_svc and not parsed_date and not time_token:
             conv.requested_time = None
 
     # 8. Cancel trigger
@@ -353,16 +430,20 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         conv.pending_customer_name = None
         conv.pending_customer_phone = None
 
-    # Default service or doctor if date/time are specified and one of them was not explicitly selected
-    if conv.selected_doctor_id and (conv.requested_date or conv.requested_time) and not conv.selected_service_id:
+    # Default consultation service or doctor only if the full instant booking payload (name, phone, date, time) is present
+    if conv.pending_customer_name and conv.pending_customer_phone and conv.requested_date and conv.requested_time:
+        if not conv.selected_service_id:
+            def_svc = Service.query.filter_by(business_id=conv.business_id, is_active=True).first()
+            if def_svc:
+                conv.selected_service_id = def_svc.id
+        if not conv.selected_doctor_id:
+            def_doc = Doctor.query.filter_by(business_id=conv.business_id, is_active=True).first()
+            if def_doc:
+                conv.selected_doctor_id = def_doc.id
+    elif conv.selected_doctor_id and (conv.requested_date or conv.requested_time) and not conv.selected_service_id:
         def_svc = Service.query.filter_by(business_id=conv.business_id, is_active=True).first()
         if def_svc:
             conv.selected_service_id = def_svc.id
-
-    if conv.selected_service_id and (conv.requested_date or conv.requested_time) and not conv.selected_doctor_id:
-        def_doc = Doctor.query.filter_by(business_id=conv.business_id, is_active=True).first()
-        if def_doc:
-            conv.selected_doctor_id = def_doc.id
 
     # Update intent/state when customer wants appointment or gives parameters
     if (
@@ -372,7 +453,7 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         conv.requested_time or
         conv.pending_customer_name or
         conv.pending_customer_phone or
-        any(w in text_lower for w in ["appointment", "book", "reserve", "consultation", "checkup", "visit"])
+        any(w in text_lower for w in ["appointment", "book", "reserve", "consultation", "checkup", "visit", "اپائنٹمنٹ", "چیک اپ", "بک"])
     ):
         if conv.intent in [None, "UNKNOWN"]:
             conv.intent = "BOOK_APPOINTMENT"
@@ -383,7 +464,7 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         if conv.workflow_state != "BOOKED":
             if not conv.selected_service_id and not conv.selected_doctor_id:
                 conv.awaiting_input = "service_choice"
-            elif not conv.selected_doctor_id and conv.selected_service_id:
+            elif not conv.selected_doctor_id:
                 conv.awaiting_input = "doctor_choice"
             elif not conv.requested_date:
                 conv.awaiting_input = "date_choice"
@@ -523,8 +604,9 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
 
     # 4. Date Selection (Step 3 of Flow)
     if not conv.requested_date and (conv.intent == "BOOK_APPOINTMENT" or conv.awaiting_input in ["date_choice", "date"] or conv.workflow_state in ["COLLECTING_INFO", "CHECKING_AVAILABILITY"]):
-        from datetime import date as dt_date, timedelta as dt_td
-        today = dt_date.today()
+        from services.booking_service import _get_business_tz
+        tz = _get_business_tz(conv.business_id)
+        today = datetime.now(tz).date()
         date_options = []
         for i in range(1, 6):
             target_d = today + dt_td(days=i)
@@ -772,8 +854,9 @@ class Agent:
         """
         if tool_name == "check_availability":
             conv.intent = "BOOK_APPOINTMENT"
-            conv.workflow_state = "CHECKING_AVAILABILITY"
-            conv.awaiting_input = "time_choice"
+            if not conv.requested_time:
+                conv.workflow_state = "CHECKING_AVAILABILITY"
+                conv.awaiting_input = "time_choice"
             if args.get("date"):
                 conv.requested_date = str(args["date"])
             if args.get("doctor_id"):
@@ -832,10 +915,12 @@ class Agent:
             conv.awaiting_input = None
 
         elif tool_name == "get_doctors":
-            conv.awaiting_input = "doctor_choice"
+            if not conv.selected_doctor_id:
+                conv.awaiting_input = "doctor_choice"
 
         elif tool_name == "get_services":
-            conv.awaiting_input = "service_choice"
+            if not conv.selected_service_id:
+                conv.awaiting_input = "service_choice"
 
         elif tool_name == "get_clinic_info":
             conv.awaiting_input = None

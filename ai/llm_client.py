@@ -19,31 +19,30 @@ try:
 except ImportError:
     Groq = None  # type: ignore
 
+WEEKDAY_MAP = {
+    "monday": 0, "mon": 0, "somwar": 0, "peer": 0, "پیر": 0, "سوموار": 0,
+    "tuesday": 1, "tue": 1, "mangal": 1, "منگل": 1,
+    "wednesday": 2, "wed": 2, "budh": 2, "بدھ": 2,
+    "thursday": 3, "thu": 3, "thurs": 3, "jumeraat": 3, "jumerat": 3, "جمعرات": 3,
+    "friday": 4, "fri": 4, "jummah": 4, "juma": 4, "jumma": 4, "جمعہ": 4,
+    "saturday": 5, "sat": 5, "hafta": 5, "ہفتہ": 5,
+    "sunday": 6, "sun": 6, "itwar": 6, "اتوار": 6
+}
 
 MONTH_MAP = {
     "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
     "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
-    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10, "oct": 10,
-    "november": 11, "nov": 11, "december": 12, "dec": 12
-}
-
-WEEKDAY_MAP = {
-    "monday": 0, "mon": 0,
-    "tuesday": 1, "tue": 1, "tues": 1,
-    "wednesday": 2, "wed": 2,
-    "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
-    "friday": 4, "fri": 4,
-    "saturday": 5, "sat": 5,
-    "sunday": 6, "sun": 6
+    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12
 }
 
 
 def resolve_date_string(user_content: str, business_id: int = 1) -> Optional[str]:
     """
-    Parse relative and explicit date references relative to clinic local timezone.
-    Supports: YYYY-MM-DD, today, tomorrow, day after tomorrow, parson, kal, aaj,
-    relative weekdays (monday..sunday, next monday), explicit dates (August 24, 24 August, etc.).
-    Returns YYYY-MM-DD string or None.
+    Parse a natural language date expression into 'YYYY-MM-DD'.
+    Handles ISO dates (2026-08-25), relative words (today, tomorrow, parson, kal, aaj, کل, آج, پرسوں),
+    weekdays (Friday, jummah, جمعہ), and explicit dates (August 28, 28th Aug).
+    Uses the configured clinic business timezone (Asia/Karachi).
     """
     if not user_content:
         return None
@@ -62,12 +61,12 @@ def resolve_date_string(user_content: str, business_id: int = 1) -> Optional[str
     if iso_match:
         return iso_match.group(1)
 
-    # 2. Relative keywords
-    if "day after tomorrow" in text_lower or "parson" in text_lower or "parso" in text_lower:
+    # 2. Relative keywords (English, Roman Urdu, and Urdu script)
+    if any(k in text_lower for k in ["day after tomorrow", "parson", "parso", "پرسوں", "پر چوتھ"]):
         return (today + timedelta(days=2)).strftime("%Y-%m-%d")
-    if "tomorrow" in text_lower or "kal" in text_lower:
+    if any(k in text_lower for k in ["tomorrow", "kal", "کل"]):
         return (today + timedelta(days=1)).strftime("%Y-%m-%d")
-    if "today" in text_lower or "aaj" in text_lower:
+    if any(k in text_lower for k in ["today", "aaj", "آج"]):
         return today.strftime("%Y-%m-%d")
 
     # 3. Explicit Month + Day (e.g. August 24, 24 August, Aug 24th)
@@ -97,13 +96,14 @@ def resolve_date_string(user_content: str, business_id: int = 1) -> Optional[str
         except ValueError:
             pass
 
-    # 4. Relative Weekdays (Monday..Sunday)
+    # 4. Relative Weekdays (Monday..Sunday, Roman Urdu & Urdu script)
     for day_word, target_weekday in WEEKDAY_MAP.items():
-        if re.search(r'\b' + re.escape(day_word) + r'\b', text_lower):
+        pattern = r'\b' + re.escape(day_word) + r'\b' if day_word.isascii() else r'(?:^|\s)' + re.escape(day_word) + r'(?:$|\s)'
+        if re.search(pattern, text_lower):
             days_ahead = (target_weekday - today.weekday()) % 7
-            if days_ahead == 0 and ("next" in text_lower or "coming" in text_lower):
+            if days_ahead == 0 and ("next" in text_lower or "coming" in text_lower or "اگلے" in text_lower):
                 days_ahead = 7
-            elif days_ahead == 0 and "today" not in text_lower:
+            elif days_ahead == 0 and not any(w in text_lower for w in ["today", "aaj", "آج"]):
                 days_ahead = 7
             return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
@@ -119,7 +119,8 @@ _NAME_PREFIX_RE = re.compile(r'^\s*(dr\.?|doctor)\s+', re.IGNORECASE)
 # iteration order rather than actually matching what the user said.
 _GENERIC_MATCH_STOPWORDS = {
     "dental", "and", "the", "for", "with", "clinic", "care", "treatment",
-    "services", "service", "appointment", "consultation", "dr", "doctor"
+    "services", "service", "appointment", "consultation", "dr", "doctor",
+    "tooth", "teeth", "dant", "daant", "problem", "masla", "issue"
 }
 
 
@@ -149,8 +150,18 @@ def _fuzzy_match_roster(user_text: str, roster: List[Dict[str, Any]], threshold:
         return None
 
     cleaned = _NAME_PREFIX_RE.sub('', user_text.lower().strip()).strip()
-    if not cleaned or not any(c.isalpha() for c in cleaned):
+    if not cleaned or not any(c.isalnum() for c in cleaned):
         return None
+
+    urdu_roster_map = {
+        "سارہ": "sara", "سارا": "sara", "احمد": "ahmed", "احسن": "ahsan", "خان": "khan",
+        "ڈاکٹر": "dr", "صفائی": "cleaning", "کلیننگ": "cleaning", "چیک اپ": "checkup",
+        "چیکپ": "checkup", "مشورہ": "consultation", "وائٹننگ": "whitening",
+        "بریسز": "braces", "روٹ کینال": "root canal", "دانت نکالنا": "extraction"
+    }
+    for u_word, e_trans in urdu_roster_map.items():
+        if u_word in cleaned:
+            cleaned += f" {e_trans}"
 
     best_entry = None
     best_score = 0.0
@@ -206,11 +217,35 @@ def _is_question_query(text: str) -> bool:
     return any(qp in lower for qp in question_prefixes)
 
 
+_URDU_ROMAN_NUMBERS = {
+    "ek": 1, "aik": 1, "ایک": 1, "۱": 1,
+    "do": 2, "doo": 2, "دو": 2, "۲": 2,
+    "teen": 3, "tin": 3, "تین": 3, "۳": 3,
+    "chaar": 4, "char": 4, "چار": 4, "۴": 4,
+    "paanch": 5, "panch": 5, "پانچ": 5, "۵": 5,
+    "che": 6, "chay": 6, "chhey": 6, "چھ": 6, "۶": 6,
+    "saat": 7, "sat": 7, "سات": 7, "۷": 7,
+    "aath": 8, "ath": 8, "آٹھ": 8, "۸": 8,
+    "nau": 9, "no": 9, "نو": 9, "۹": 9,
+    "das": 10, "دس": 10, "۱۰": 10,
+    "gyarah": 11, "gyara": 11, "gyaarah": 11, "گیارہ": 11, "گہرہ": 11, "گیرہ": 11, "۱۱": 11,
+    "barah": 12, "bara": 12, "baarah": 12, "بارہ": 12, "۱۲": 12
+}
+
+
 def _extract_time_str(text: str) -> Optional[str]:
-    """Extract standard HH:MM time string from user text supporting ':', '.', 'am/pm', and bare numbers after prepositions like 'after 12'."""
+    """
+    Extract standard HH:MM time string from user text supporting:
+    - 24-hour and 12-hour: 14:00, 2:00 PM, 2:30 pm, 02:00 PM
+    - Spoken English/Roman Urdu: 2 PM, 2 pm, 2 baje, do baje, 10 am, subah 10 baje
+    - Urdu script: دو بجے, ۲ بجے, دن دو بجے, دوپہر ۲ بجے, صبح ۱۰ بجے, شام ۴ بجے
+    - Prepositions: at 2, around 2, after 12, before 2, ko 2
+    """
     if not text:
         return None
-    # Match standard HH:MM or HH.MM with optional am/pm (e.g. 9:30, 09:30, 12.00, 12.00pm, 14:00)
+    lower = text.lower().strip()
+
+    # 1. Match standard HH:MM or HH.MM (e.g. 9:30, 09:30, 14:00, 2:00 PM, 2.00pm)
     m = re.search(r'\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b', text, re.IGNORECASE)
     if m:
         h, mn = int(m.group(1)), int(m.group(2))
@@ -220,7 +255,8 @@ def _extract_time_str(text: str) -> Optional[str]:
         elif ampm == "am" and h == 12:
             h = 0
         return f"{h:02d}:{mn:02d}"
-    # Match H am / H pm (e.g. 10 am, 2 pm, 12 pm)
+
+    # 2. Match H am / H pm (e.g. 10 am, 2 pm, 12 pm)
     m = re.search(r'\b(\d{1,2})\s*(am|pm)\b', text, re.IGNORECASE)
     if m:
         h = int(m.group(1))
@@ -230,39 +266,72 @@ def _extract_time_str(text: str) -> Optional[str]:
         elif ampm == "am" and h == 12:
             h = 0
         return f"{h:02d}:00"
-    # Match bare number after time prepositions like "after 12", "before 2", "at 10"
-    m = re.search(r'\b(?:after|before|at|around|from|past)\s+(\d{1,2})\b', text, re.IGNORECASE)
+
+    # 3. Match number/word + baje / بجے / بجی / o'clock (e.g. 2 baje, do baji, دو بجی, دو بجے, دن دو بجی)
+    num_pattern = r'(\d{1,2}|ek|aik|do|doo|teen|tin|chaar|char|paanch|panch|che|chay|chhey|saat|sat|aath|ath|nau|no|das|gyarah|gyara|gyaarah|barah|bara|baarah|ایک|دو|تین|چار|پانچ|چھ|سات|آٹھ|نو|دس|گیارہ|گہرہ|گیرہ|بارہ|[۱-۹]|۱۰|۱۱|۱۲)'
+    baje_pattern = r'(?:baje|bje|bjay|baji|bajy|bajeh|o\'?clock|بجے|بجی)'
+    prefix_pattern = r'(?:(?:din|dopahar|shaam|raat|subah|دن|دوپہر|شام|رات|صبح)(?:\s+(?:ko|ke|ki|کو|کے|کی))?\s+)?'
+    m = re.search(prefix_pattern + num_pattern + r'\s*' + baje_pattern, text, re.IGNORECASE)
     if m:
-        h = int(m.group(1))
-        if 1 <= h <= 7:
-            h += 12
-        return f"{h:02d}:00"
+        token = m.group(1).lower()
+        h = int(token) if token.isdigit() else _URDU_ROMAN_NUMBERS.get(token)
+        if h is not None:
+            is_pm = any(w in lower for w in ["pm", "dopahar", "shaam", "raat", "دوپہر", "شام", "رات", "دن"])
+            is_am = any(w in lower for w in ["am", "subah", "صبح"])
+            if is_pm and h < 12:
+                h += 12
+            elif is_am and h == 12:
+                h = 0
+            elif not is_pm and not is_am and 1 <= h <= 7:
+                h += 12
+            return f"{h:02d}:00"
+
+    # 4. Match bare number/word after prepositions like "at 2", "after 12", "ko 2", "ki 2"
+    m = re.search(r'\b(?:after|before|at|around|from|past|ko|ke|ki|pe|par|کو|پر|کے|کی)\s+' + num_pattern + r'\b', text, re.IGNORECASE)
+    if m:
+        token = m.group(1).lower()
+        h = int(token) if token.isdigit() else _URDU_ROMAN_NUMBERS.get(token)
+        if h is not None:
+            is_pm = any(w in lower for w in ["pm", "dopahar", "shaam", "raat", "دوپہر", "شام", "رات", "دن"])
+            is_am = any(w in lower for w in ["am", "subah", "صبح"])
+            if is_pm and h < 12:
+                h += 12
+            elif is_am and h == 12:
+                h = 0
+            elif not is_pm and not is_am and 1 <= h <= 7:
+                h += 12
+            return f"{h:02d}:00"
+
     return None
 
 
 def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Optional[str]:
     """
     Extract person name from customer booking text.
-
-    roster_names (optional): real doctor/service names for this business.
-    When the "entire text is a name" fallback heuristic would fire, it is
-    checked against this roster first — a bare reply that actually matches
-    a doctor or service (e.g. "ahmad", a spelling variant of "Ahmed Khan")
-    must never be treated as the customer's own name, regardless of the
-    current conversation state. This does NOT apply to the explicit "my
-    name is X" pattern above, since a deliberate statement of intent should
-    still be honored even in the rare case it happens to coincide with a
-    doctor's name.
+    Supports English ("My name is Ali"), Roman Urdu ("Mera naam Ali hai"), and Urdu script ("میرا نام علی ہے").
     """
     if not text:
         return None
-    m = re.search(r'(?:my\s+name\s+is\s+|name\s+is\s+|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|name\s*:\s*|for\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', text, re.IGNORECASE)
+
+    # Urdu script name matching (e.g. میرا نام علی ہے)
+    m_urdu = re.search(r'(?:میرا\s+نام\s+|نام\s+ہے\s+|نام\s*:\s*)([\u0600-\u06FF\w]+)', text)
+    if m_urdu:
+        raw_urdu = m_urdu.group(1).strip()
+        urdu_name_map = {
+            "علی": "Ali", "ہارون": "Haroon", "محمد": "Muhammad", "طارق": "Tariq",
+            "عمر": "Umar", "احمد": "Ahmed", "سارہ": "Sara", "حمزہ": "Hamza",
+            "عثمان": "Usman", "حسن": "Hassan", "بلال": "Bilal", "زید": "Zaid"
+        }
+        return urdu_name_map.get(raw_urdu, raw_urdu)
+
+    m = re.search(r'(?:my\s+name\s+is\s+|name\s+is\s+|mera\s+naam\s+|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|name\s*:\s*|for\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', text, re.IGNORECASE)
     if m:
         raw = m.group(1)
-        name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b|\bdate\b|\bfor\b|\bwith\b|\bi\s+need\b|\bi\s+want\b|\band\b', raw, flags=re.IGNORECASE)[0].strip()
+        name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b|\bdate\b|\bfor\b|\bwith\b|\bi\s+need\b|\bi\s+want\b|\band\b|\bhai\b|\bhein\b', raw, flags=re.IGNORECASE)[0].strip()
         name = re.sub(r'^(?:a\s+|an\s+|the\s+)?(?:cleaning|checkup|consultation|appointment|booking)\s+(?:for\s+)?', '', name, flags=re.IGNORECASE).strip()
         if name and name.lower() not in ["patient", "a", "the", "an", "cleaning", "checkup", "appointment", "doctor", "dr", "tomorrow", "today", "me", "us", "him", "her"]:
             return name.title()
+
     # Check if the entire text consists of a person's name (1-4 alphabetic words)
     words = text.strip().split()
     if 1 <= len(words) <= 4 and all(w.replace(".", "").replace("-", "").isalpha() for w in words):
@@ -280,11 +349,6 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
         ]
         if any(nw in lower_txt.split() or lower_txt == nw for nw in non_name_words):
             return None
-        # Dynamic roster check (replaces the old hardcoded "sara"/"ahmed"/
-        # "khan"/"malik" list, which broke on any spelling variant like
-        # "ahmad"): if this bare reply fuzzy-matches a real doctor or
-        # service name for this business, it's almost certainly a
-        # selection, not the customer stating their own name.
         if roster_names:
             roster_entries = [{"id": i, "name": n} for i, n in enumerate(roster_names)]
             if _fuzzy_match_roster(text, roster_entries):
@@ -656,7 +720,13 @@ class MockAdapter(BaseLLMAdapter):
 
         if awaiting_input and not is_topic_change:
             # Check for "I don't know / consultation / toothache" first
-            if any(w in user_text for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup", "consult"]):
+            consultation_keywords = [
+                "dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain",
+                "hurting", "problem", "consultation", "checkup", "consult", "check up", "general appointment",
+                "dant", "dard", "masla", "pata nahi", "nahi pata", "maloom nahi", "check karwana", "check krwana",
+                "چیک اپ", "چیکپ", "مشورہ", "معائنہ", "دانت", "درد", "پروبلم", "مسئلہ", "نہیں پتا", "نہیں معلوم"
+            ]
+            if any(w in user_text.lower() for w in consultation_keywords):
                 consultation_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else {"id": 1, "name": "Dental Checkup & Consultation", "price": 2000})
                 svc_id = consultation_svc["id"]
                 svc_name = consultation_svc["name"]
@@ -747,9 +817,10 @@ class MockAdapter(BaseLLMAdapter):
                     svc_id = matched_svc_here["id"]
                     svc_name = matched_svc_here["name"]
                     if target_date_str:
+                        effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
                         return {
                             "content": f"Checking open slots for {svc_name} on {target_date_str}...",
-                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id or 1, "service_id": svc_id}}]
+                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": effective_doc_id, "service_id": svc_id}}]
                         }
                     if doc_id:
                         return {
@@ -790,6 +861,17 @@ class MockAdapter(BaseLLMAdapter):
                                     "notes": "Booked via AI Assistant"
                                 }
                             }]
+                        }
+                    elif target_date_str and (req_time or time_token):
+                        chosen_time = time_token or req_time
+                        if effective_name and not effective_phone:
+                            return {
+                                "content": f"Thanks, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
+                                "tool_calls": []
+                            }
+                        return {
+                            "content": f"I have selected the {_fmt_time_ampm(chosen_time)} slot on {target_date_str} with {doc_name or 'Dr. Sara Malik'} for {svc_name}. To complete and confirm your booking, please provide your full name and contact phone number.",
+                            "tool_calls": []
                         }
                     elif target_date_str:
                         effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
@@ -888,6 +970,12 @@ class MockAdapter(BaseLLMAdapter):
 
             elif awaiting_input == "time_choice":
                 if time_token:
+                    offered = conv_state.get("all_offered_slots") or []
+                    if offered and time_token not in offered:
+                        return {
+                            "content": f"The requested time {time_token} is not available. Please choose from our available appointment slots: {', '.join(offered)}.",
+                            "tool_calls": []
+                        }
                     req_time = time_token
                     if effective_name and effective_phone and target_date_str:
                         return {
@@ -939,7 +1027,8 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": [{"name": "get_doctors", "arguments": {}}]
             }
 
-        is_service_inquiry = any(w in user_text for w in ["which service", "what service", "what services", "list service", "list services", "treatment", "treatments", "price", "prices", "cost", "costs", "charge", "charges", "what do you offer", "how much"])
+        is_dont_know_treatment = any(phrase in user_text for phrase in ["dont know", "don't know", "not sure", "unsure", "pata nahi", "nahi pata", "maloom nahi"])
+        is_service_inquiry = not is_dont_know_treatment and any(w in user_text for w in ["which service", "what service", "what services", "list service", "list services", "treatment", "treatments", "price", "prices", "cost", "costs", "charge", "charges", "what do you offer", "how much"])
         if is_service_inquiry:
             return {
                 "content": "Let me fetch our dental services and pricing for you.",

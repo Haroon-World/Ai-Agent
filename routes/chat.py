@@ -118,7 +118,8 @@ def send_message():
         return jsonify({"success": False, "error": "Message text is required"}), 400
 
     conv, is_new = get_or_create_conversation(business_id, conversation_id, visitor_id=visitor_id)
-    agent = Agent(business_id=business_id)
+    llm_provider = current_app.config.get("LLM_PROVIDER", Config.LLM_PROVIDER)
+    agent = Agent(business_id=business_id, llm_provider=llm_provider)
     result = agent.process_message(conversation_id=conv.id, user_content=message_text)
 
     return jsonify({
@@ -175,7 +176,8 @@ def send_voice():
         return jsonify({"success": False, "error": "Could not transcribe audio content"}), 400
 
     conv, is_new = get_or_create_conversation(business_id, conversation_id, visitor_id=visitor_id)
-    agent = Agent(business_id=business_id)
+    llm_provider = current_app.config.get("LLM_PROVIDER", Config.LLM_PROVIDER)
+    agent = Agent(business_id=business_id, llm_provider=llm_provider)
     result = agent.process_message(conversation_id=conv.id, user_content=transcript)
 
     user_msg = Message.query.filter_by(conversation_id=conv.id, role="user").order_by(Message.created_at.desc()).first()

@@ -8,6 +8,23 @@ const handoffBanner = document.getElementById('handoffBanner');
 const statusDot = document.getElementById('statusDot');
 const agentModeLabel = document.getElementById('agentModeLabel');
 
+const SCROLL_BOTTOM_THRESHOLD = 80;
+let lastRenderedMessageCount = 0;
+let lastRenderedStatus = '';
+
+function isUserNearBottom(threshold = SCROLL_BOTTOM_THRESHOLD) {
+    if (!chatMessages) return true;
+    const distanceToBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight;
+    return distanceToBottom <= threshold;
+}
+
+function scrollToBottom(force = false) {
+    if (!chatMessages) return;
+    if (force || isUserNearBottom()) {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+}
+
 // Initialize Chat on load
 document.addEventListener('DOMContentLoaded', () => {
     if (conversationId) {
@@ -34,7 +51,8 @@ async function initNewConversation() {
         if (data.success) {
             conversationId = data.conversation_id;
             localStorage.setItem('ai_business_conv_id', conversationId);
-            renderMessages(data.messages);
+            lastRenderedStatus = data.status;
+            renderMessages(data.messages, true);
             updateStatusUI(data.status);
         }
     } catch (e) {
@@ -48,7 +66,8 @@ async function loadHistory(convId) {
         const res = await fetch(`/api/chat/history/${convId}`);
         const data = await res.json();
         if (data.success) {
-            renderMessages(data.messages);
+            lastRenderedStatus = data.status;
+            renderMessages(data.messages, true);
             updateStatusUI(data.status);
         } else {
             initNewConversation();
@@ -64,8 +83,15 @@ async function syncHistorySilently(convId) {
         const res = await fetch(`/api/chat/history/${convId}`);
         const data = await res.json();
         if (data.success) {
-            renderMessages(data.messages);
-            updateStatusUI(data.status);
+            const msgs = data.messages || [];
+            const hasNewMessages = msgs.length !== lastRenderedMessageCount;
+            const hasStatusChange = data.status !== lastRenderedStatus;
+
+            if (hasNewMessages || hasStatusChange) {
+                lastRenderedStatus = data.status;
+                renderMessages(msgs, false);
+                updateStatusUI(data.status);
+            }
         }
     } catch (e) {
         // silent
@@ -84,7 +110,12 @@ function updateStatusUI(status) {
     }
 }
 
-function renderMessages(messages) {
+function renderMessages(messages, forceScroll = false) {
+    if (!chatMessages) return;
+
+    const wasNearBottom = isUserNearBottom();
+    const prevScrollTop = chatMessages.scrollTop;
+
     chatMessages.innerHTML = '';
     const lastAssistantIdx = messages.map(m => m.role).lastIndexOf('assistant');
     messages.forEach((m, idx) => {
@@ -92,11 +123,18 @@ function renderMessages(messages) {
             appendMessageBubble(m.role, m.content, m.created_at);
             // Render interactive UI controls ONLY for the current active assistant message
             if (m.role === 'assistant' && (m.interactive_data || m.ui_action) && idx === lastAssistantIdx) {
-                renderUIAction(m.interactive_data || m.ui_action, true);
+                renderUIAction(m.interactive_data || m.ui_action, true, false);
             }
         }
     });
-    scrollToBottom();
+
+    lastRenderedMessageCount = messages.length;
+
+    if (forceScroll || wasNearBottom) {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    } else {
+        chatMessages.scrollTop = prevScrollTop;
+    }
 }
 
 function appendMessageBubble(role, content, timestamp) {
@@ -117,7 +155,6 @@ function appendMessageBubble(role, content, timestamp) {
     row.appendChild(bubble);
     row.appendChild(meta);
     chatMessages.appendChild(row);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
     return bubble;
 }
 
@@ -144,15 +181,13 @@ async function handleSendMessage(e) {
     const text = chatInput.value.trim();
     if (!text) return;
 
-    // Disable any active interactive options from previous turns
-    document.querySelectorAll('.ui-action-wrapper:not(.ui-action-disabled)').forEach(w => {
-        w.classList.add('ui-action-disabled');
-    });
+    // Remove any interactive UI action wrappers from previous turns immediately
+    document.querySelectorAll('.ui-action-wrapper').forEach(w => w.remove());
 
-    // Append user message immediately to UI
+    // Append user message immediately to UI and scroll to bottom
     appendMessageBubble('user', text);
     chatInput.value = '';
-    scrollToBottom();
+    scrollToBottom(true);
 
     // Show typing / thinking state
     const thinkingRow = document.createElement('div');
@@ -160,7 +195,7 @@ async function handleSendMessage(e) {
     thinkingRow.id = 'thinkingBubble';
     thinkingRow.innerHTML = '<div class="message-bubble"><em>SmileCare AI is checking clinic records... ⏳</em></div>';
     chatMessages.appendChild(thinkingRow);
-    scrollToBottom();
+    scrollToBottom(true);
 
     try {
         const res = await fetch('/api/chat/send', {
@@ -177,30 +212,34 @@ async function handleSendMessage(e) {
         if (thinkingElem) thinkingElem.remove();
 
         if (data.success) {
+            const wasNear = isUserNearBottom();
             appendMessageBubble('assistant', data.reply);
+            // Ensure no stale UI action wrappers exist before rendering new action
+            document.querySelectorAll('.ui-action-wrapper').forEach(w => w.remove());
             if (data.ui_action) {
-                renderUIAction(data.ui_action, true);
+                renderUIAction(data.ui_action, true, wasNear);
+            }
+            if (wasNear) {
+                scrollToBottom(true);
             }
             updateStatusUI(data.status);
         } else {
             appendMessageBubble('assistant', `⚠️ Error: ${data.error || 'Something went wrong.'}`);
+            scrollToBottom();
         }
     } catch (err) {
         const thinkingElem = document.getElementById('thinkingBubble');
         if (thinkingElem) thinkingElem.remove();
         appendMessageBubble('assistant', '⚠️ Connection error. Please try sending again.');
+        scrollToBottom();
     }
-    scrollToBottom();
 }
 
-function renderUIAction(uiAction, isCurrent = true) {
+function renderUIAction(uiAction, isCurrent = true, shouldScroll = true) {
     if (!uiAction) return;
 
-    if (isCurrent) {
-        document.querySelectorAll('.ui-action-wrapper:not(.ui-action-disabled)').forEach(w => {
-            w.classList.add('ui-action-disabled');
-        });
-    }
+    // Always remove existing ui-action wrappers to ensure only one active UI control exists
+    document.querySelectorAll('.ui-action-wrapper').forEach(w => w.remove());
 
     // 1. Final Booking Confirmation Card
     if (uiAction.type === 'booking_confirmation' && uiAction.details) {
@@ -269,7 +308,9 @@ function renderUIAction(uiAction, isCurrent = true) {
 
         wrapper.appendChild(card);
         chatMessages.appendChild(wrapper);
-        scrollToBottom();
+        if (shouldScroll) {
+            scrollToBottom();
+        }
         return;
     }
 
@@ -450,7 +491,9 @@ function renderUIAction(uiAction, isCurrent = true) {
     }
 
     chatMessages.appendChild(wrapper);
-    scrollToBottom();
+    if (shouldScroll) {
+        scrollToBottom();
+    }
 }
 
 function sendQuickPrompt(promptText) {
@@ -466,16 +509,12 @@ async function resetChat() {
         if (data.success) {
             conversationId = data.conversation_id;
             localStorage.setItem('ai_business_conv_id', conversationId);
-            renderMessages(data.messages);
+            renderMessages(data.messages, true);
             updateStatusUI('AI');
         }
     } catch (e) {
         console.error('Reset error:', e);
     }
-}
-
-function scrollToBottom() {
-    chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
 // Voice Recording Handling
@@ -537,6 +576,7 @@ async function sendVoiceBlob(blob, mimeType) {
         formData.append('conversation_id', conversationId);
     }
 
+    document.querySelectorAll('.ui-action-wrapper').forEach(w => w.remove());
     const pendingBubble = appendMessageBubble('user', '🎙️ Transcribing your voice message...', new Date().toISOString());
     btnSend.disabled = true;
 
@@ -567,8 +607,10 @@ async function sendVoiceBlob(blob, mimeType) {
                 appendMessageBubble('user', transcriptLabel, new Date().toISOString());
             }
 
+            const wasNear = isUserNearBottom();
             const replyBubble = appendMessageBubble('assistant', data.reply, new Date().toISOString());
-            if (data.ui_action) renderUIAction(data.ui_action);
+            if (data.ui_action) renderUIAction(data.ui_action, true, wasNear);
+            if (wasNear) scrollToBottom(true);
             updateStatusUI(data.status);
 
             // Speak the reply back as a voice note, since the customer
