@@ -766,6 +766,7 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
                 "options": options
             }
 
+
     return None
 
 

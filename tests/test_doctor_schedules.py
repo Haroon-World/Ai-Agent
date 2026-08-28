@@ -5,11 +5,18 @@ from models import db, Business, Doctor, Service, Appointment, Conversation
 from services.booking_service import BookingService
 from ai.agent import Agent
 
+from config.config import Config
+
 class TestDoctorSchedulesAndTypoIntent(unittest.TestCase):
     def setUp(self):
-        self.app = create_app()
-        self.app.config["TESTING"] = True
-        self.app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
+        class TestConfig(Config):
+            SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+            SQLALCHEMY_TRACK_MODIFICATIONS = False
+            TESTING = True
+            SECRET_KEY = "test-secret"
+            LLM_PROVIDER = "mock"
+
+        self.app = create_app(TestConfig)
         self.client = self.app.test_client()
 
         self.app_context = self.app.app_context()

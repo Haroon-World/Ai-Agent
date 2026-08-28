@@ -2363,6 +2363,7 @@ class GeminiAdapter(BaseLLMAdapter):
         )
 
         max_retries = 3
+        max_wait_cap = 5.0
         response = None
         for attempt in range(max_retries):
             try:
