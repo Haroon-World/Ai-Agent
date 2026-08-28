@@ -25,12 +25,17 @@ class Doctor(db.Model):
 
     def to_dict(self):
         schedules_list = [s.to_dict() for s in sorted(self.schedules, key=lambda x: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].index(x.day_of_week) if x.day_of_week in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] else 99)] if self.schedules else []
+        if self.schedules:
+            active_sched_days = [s.day_of_week for s in sorted(self.schedules, key=lambda x: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].index(x.day_of_week) if x.day_of_week in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] else 99) if s.is_available]
+            working_days_list = active_sched_days
+        else:
+            working_days_list = [d.strip() for d in (self.working_days or "").split(",") if d.strip()]
         return {
             "id": self.id,
             "business_id": self.business_id,
             "name": self.name,
             "specialization": self.specialization,
-            "working_days": self.working_days.split(",") if self.working_days else [],
+            "working_days": working_days_list,
             "start_time": self.start_time,
             "end_time": self.end_time,
             "slot_interval": self.slot_interval or 30,

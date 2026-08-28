@@ -183,6 +183,8 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
         svc.price = 2500.0
         self.business.consultation_fee = 2500.0
         db.session.commit()
+        from services.booking_service import RequestCache
+        RequestCache.clear()
 
         # Prompt building and AI dynamic reading
         from ai.prompts import build_system_prompt

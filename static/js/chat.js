@@ -207,7 +207,13 @@ async function handleSendMessage(e) {
             })
         });
 
-        const data = await res.json();
+        let data;
+        try {
+            data = await res.json();
+        } catch (parseErr) {
+            data = { success: false, error: 'Server response could not be parsed.' };
+        }
+
         const thinkingElem = document.getElementById('thinkingBubble');
         if (thinkingElem) thinkingElem.remove();
 
@@ -224,13 +230,13 @@ async function handleSendMessage(e) {
             }
             updateStatusUI(data.status);
         } else {
-            appendMessageBubble('assistant', `⚠️ Error: ${data.error || 'Something went wrong.'}`);
+            appendMessageBubble('assistant', `⚠️ ${data.error || 'Something went wrong. Please try again.'}`);
             scrollToBottom();
         }
     } catch (err) {
         const thinkingElem = document.getElementById('thinkingBubble');
         if (thinkingElem) thinkingElem.remove();
-        appendMessageBubble('assistant', '⚠️ Connection error. Please try sending again.');
+        appendMessageBubble('assistant', '⚠️ Connection error. Please check your connection and try again.');
         scrollToBottom();
     }
 }

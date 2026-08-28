@@ -117,21 +117,29 @@ def send_message():
     if not message_text:
         return jsonify({"success": False, "error": "Message text is required"}), 400
 
-    conv, is_new = get_or_create_conversation(business_id, conversation_id, visitor_id=visitor_id)
-    llm_provider = current_app.config.get("LLM_PROVIDER", Config.LLM_PROVIDER)
-    agent = Agent(business_id=business_id, llm_provider=llm_provider)
-    result = agent.process_message(conversation_id=conv.id, user_content=message_text)
+    try:
+        conv, is_new = get_or_create_conversation(business_id, conversation_id, visitor_id=visitor_id)
+        llm_provider = current_app.config.get("LLM_PROVIDER", Config.LLM_PROVIDER)
+        agent = Agent(business_id=business_id, llm_provider=llm_provider)
+        result = agent.process_message(conversation_id=conv.id, user_content=message_text)
 
-    return jsonify({
-        "success": True,
-        "conversation_id": conv.id,
-        "status": result.get("status"),
-        "workflow_state": result.get("workflow_state"),
-        "reply": result.get("content"),
-        "executed_tools": result.get("executed_tools", []),
-        "ui_action": result.get("ui_action"),
-        "session_reset": is_new
-    })
+        return jsonify({
+            "success": True,
+            "conversation_id": conv.id,
+            "status": result.get("status"),
+            "workflow_state": result.get("workflow_state"),
+            "reply": result.get("content"),
+            "executed_tools": result.get("executed_tools", []),
+            "ui_action": result.get("ui_action"),
+            "metrics": result.get("metrics"),
+            "session_reset": is_new
+        })
+    except Exception as e:
+        current_app.logger.error(f"[Chat Send Error]: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": "We encountered an issue processing your request. Please try again."
+        }), 500
 
 
 @chat_bp.route("/api/chat/reset", methods=["POST"])
@@ -195,6 +203,7 @@ def send_voice():
         "input_mode": "voice",
         "executed_tools": result.get("executed_tools", []),
         "ui_action": result.get("ui_action"),
+        "metrics": result.get("metrics"),
         "session_reset": is_new,
         "stt_provider": stt_provider,
         "mock_transcription": stt_provider == "mock"

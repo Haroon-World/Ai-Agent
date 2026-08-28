@@ -5,18 +5,87 @@ from sqlalchemy.exc import IntegrityError
 from models import db, Business, Doctor, Service, Customer, Appointment, DoctorSchedule, DoctorLeave
 from services.reminder_service import ReminderService
 
+import threading
+from flask import has_request_context, g
+from sqlalchemy.orm import joinedload
+
 # Fallback timezone used only when no business record is found
 _DEFAULT_TZ = "Asia/Karachi"
+
+_thread_local_cache = threading.local()
+
+class RequestCache:
+    """Request-scoped cache falling back to thread-local cache outside Flask requests."""
+    @staticmethod
+    def get(key: str) -> Any:
+        if has_request_context():
+            return getattr(g, f"_req_cache_{key}", None)
+        local_dict = getattr(_thread_local_cache, "data", None)
+        return local_dict.get(key) if local_dict else None
+
+    @staticmethod
+    def set(key: str, value: Any):
+        if has_request_context():
+            setattr(g, f"_req_cache_{key}", value)
+            return
+        if not hasattr(_thread_local_cache, "data") or _thread_local_cache.data is None:
+            _thread_local_cache.data = {}
+        _thread_local_cache.data[key] = value
+
+    @staticmethod
+    def clear():
+        if not has_request_context():
+            _thread_local_cache.data = {}
+
+
+def _get_business_info(business_id: int) -> Dict[str, Any]:
+    cache_key = f"biz_info_{business_id}"
+    info = RequestCache.get(cache_key)
+    if info is None:
+        biz = db.session.get(Business, business_id)
+        if biz:
+            info = {
+                "id": biz.id,
+                "name": biz.name,
+                "address": biz.address,
+                "phone": biz.phone,
+                "timezone": biz.timezone or _DEFAULT_TZ,
+                "opening_hours": biz.opening_hours,
+                "policies": biz.policies or "Standard clinic policies apply.",
+                "consultation_fee": getattr(biz, "consultation_fee", 2000.0) or 2000.0
+            }
+        else:
+            info = {
+                "id": business_id,
+                "name": "SmileCare Dental Clinic",
+                "address": "Plot 42-B, Main Boulevard, Gulberg III, Lahore",
+                "phone": "+92 42 35789000",
+                "timezone": _DEFAULT_TZ,
+                "opening_hours": "09:00 AM - 05:00 PM",
+                "policies": "Standard clinic policies apply.",
+                "consultation_fee": 2000.0
+            }
+        RequestCache.set(cache_key, info)
+    return info
+
+
+def _get_business(business_id: int) -> Optional[Business]:
+    return db.session.get(Business, business_id)
 
 
 def _get_business_tz(business_id: int) -> ZoneInfo:
     """Return the ZoneInfo for the given business, falling back to Asia/Karachi."""
-    try:
-        biz = db.session.get(Business, business_id)
-        tz_name = (biz.timezone if biz and biz.timezone else _DEFAULT_TZ)
-    except Exception:
-        tz_name = _DEFAULT_TZ
-    return ZoneInfo(tz_name)
+    cache_key = f"biz_tz_{business_id}"
+    tz = RequestCache.get(cache_key)
+    if tz is None:
+        info = _get_business_info(business_id)
+        tz_name = info.get("timezone") or _DEFAULT_TZ
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo(_DEFAULT_TZ)
+        RequestCache.set(cache_key, tz)
+    return tz
 
 
 def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, business_id: int) -> Tuple[List[str], str]:
@@ -106,7 +175,7 @@ class BookingService:
     @staticmethod
     def get_clinic_info(business_id: int) -> Dict[str, Any]:
         """Fetch clinic details, opening hours, policies and contact info."""
-        business = db.session.get(Business, business_id)
+        business = _get_business(business_id)
         if not business:
             return {"error": f"Business with ID {business_id} not found"}
         return business.to_dict()
@@ -114,14 +183,24 @@ class BookingService:
     @staticmethod
     def get_services(business_id: int) -> List[Dict[str, Any]]:
         """Fetch all dental services offered by the business."""
-        services = Service.query.filter_by(business_id=business_id).all()
-        return [s.to_dict() for s in services]
+        cache_key = f"services_dict_{business_id}"
+        svcs = RequestCache.get(cache_key)
+        if svcs is None:
+            services = Service.query.filter_by(business_id=business_id).all()
+            svcs = [s.to_dict() for s in services]
+            RequestCache.set(cache_key, svcs)
+        return svcs
 
     @staticmethod
     def get_doctors(business_id: int) -> List[Dict[str, Any]]:
         """Fetch all doctors for the business."""
-        doctors = Doctor.query.filter_by(business_id=business_id).all()
-        return [d.to_dict() for d in doctors]
+        cache_key = f"doctors_dict_{business_id}"
+        docs = RequestCache.get(cache_key)
+        if docs is None:
+            doctors = Doctor.query.filter_by(business_id=business_id).options(joinedload(Doctor.schedules)).all()
+            docs = [d.to_dict() for d in doctors]
+            RequestCache.set(cache_key, docs)
+        return docs
 
     @staticmethod
     def check_availability(
@@ -396,6 +475,14 @@ class BookingService:
                     }
             except Exception:
                 pass
+
+        # --- Authoritative Generated Availability Check ---
+        avail_slots, _ = _get_slots_for_doctor_on_date(doctor, target_date, service.duration, business_id)
+        if appointment_time not in avail_slots:
+            return {
+                "success": False,
+                "error": f"The slot {appointment_time} is not available for Dr. {doctor.name} on {appointment_date}."
+            }
 
         try:
             # --- Customer deduplication ---

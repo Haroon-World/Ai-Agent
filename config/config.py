@@ -21,13 +21,22 @@ class Config:
     SQLALCHEMY_DATABASE_URI = db_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
+    @staticmethod
+    def _clean_key(val: str, prefix: str = "") -> str:
+        if not val:
+            return ""
+        s = val.strip().strip("'").strip('"')
+        if prefix and s.startswith(prefix + "="):
+            s = s[len(prefix) + 1:].strip().strip("'").strip('"')
+        return s
+
     # LLM Settings
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock").lower()
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_API_KEY = _clean_key(os.getenv("GEMINI_API_KEY", ""), "GEMINI_API_KEY")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama3-70b-8192")
+    GROQ_API_KEY = _clean_key(os.getenv("GROQ_API_KEY", ""), "GROQ_API_KEY")
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
     
     # STT & TTS Settings
     STT_PROVIDER = os.getenv("STT_PROVIDER", "mock").lower()

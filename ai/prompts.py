@@ -2,60 +2,72 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Dict, Any
 from models import db, Business, Doctor, Service
+from services.booking_service import _get_business_info, _get_business_tz, RequestCache
+from sqlalchemy.orm import joinedload
+
+
+def _get_cached_doctors_info(business_id: int) -> str:
+    cache_key = f"doctors_str_{business_id}"
+    docs_info = RequestCache.get(cache_key)
+    if docs_info is None:
+        doctors = Doctor.query.filter_by(business_id=business_id).options(joinedload(Doctor.schedules)).all()
+        docs_lines = []
+        for d in doctors:
+            scheds = []
+            if d.schedules:
+                for s in sorted(d.schedules, key=lambda x: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].index(x.day_of_week) if x.day_of_week in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] else 99):
+                    if s.is_available:
+                        scheds.append(f"{s.day_of_week[:3]}: {s.start_time}-{s.end_time}")
+                    else:
+                        scheds.append(f"{s.day_of_week[:3]}: Closed")
+                sched_str = ", ".join(scheds)
+            else:
+                sched_str = f"{d.working_days} {d.start_time}-{d.end_time}"
+
+            break_str = f" | Lunch Break: {d.break_start_time}-{d.break_end_time}" if (d.break_start_time and d.break_end_time) else ""
+            gap_str = f" | Slot Gap: {getattr(d, 'slot_interval', 30)} mins"
+            active_str = "" if (not hasattr(d, 'is_active') or d.is_active) else " | (Inactive)"
+            docs_lines.append(f"- ID {d.id}: {d.name} ({d.specialization}) | Schedule: [{sched_str}]{break_str}{gap_str}{active_str}")
+        docs_info = "\n".join(docs_lines) if docs_lines else "No doctors listed."
+        RequestCache.set(cache_key, docs_info)
+    return docs_info
+
+
+def _get_cached_services_info(business_id: int, consultation_fee: float) -> str:
+    cache_key = f"services_str_{business_id}"
+    services_info = RequestCache.get(cache_key)
+    if services_info is None:
+        services = Service.query.filter_by(business_id=business_id, is_active=True).all()
+        services_info = "\n".join([
+            f"- ID {s.id}: {s.name} ({s.duration} mins) - PKR {s.price:,.0f} | {s.description or 'Standard treatment'}"
+            for s in services
+        ]) if services else f"- ID 1: General Consultation (30 mins) - PKR {consultation_fee:,.0f}"
+        RequestCache.set(cache_key, services_info)
+    return services_info
+
 
 def build_system_prompt(business_id: int) -> str:
     """Build dynamic system prompt using real clinic knowledge from the database."""
-    business = db.session.get(Business, business_id)
-    if not business:
-        clinic_name = "Dental Clinic"
-        address = "Clinic Address"
-        phone = "+92 42 00000000"
-        timezone = "Asia/Karachi"
-        hours = "09:00 AM - 05:00 PM"
-        policies = "Standard clinic policies apply."
-    else:
-        clinic_name = business.name
-        address = business.address
-        phone = business.phone
-        timezone = business.timezone
-        hours = business.opening_hours
-        policies = business.policies or "Standard clinic policies apply."
+    biz_info = _get_business_info(business_id)
+    clinic_name = biz_info["name"]
+    address = biz_info["address"]
+    phone = biz_info["phone"]
+    timezone = biz_info["timezone"]
+    hours = biz_info["opening_hours"]
+    policies = biz_info["policies"]
+    consultation_fee = biz_info["consultation_fee"]
 
     # Get current time in clinic's timezone
     try:
-        current_time_str = datetime.now(ZoneInfo(timezone)).strftime("%A, %Y-%m-%d %I:%M %p")
+        current_time_str = datetime.now(_get_business_tz(business_id)).strftime("%A, %Y-%m-%d %I:%M %p")
     except Exception:
         current_time_str = datetime.now().strftime("%A, %Y-%m-%d %I:%M %p")
 
-    # Doctors list with break times & per-day weekly schedule info from DB
-    doctors = Doctor.query.filter_by(business_id=business_id).all()
-    docs_lines = []
-    for d in doctors:
-        scheds = []
-        if d.schedules:
-            for s in sorted(d.schedules, key=lambda x: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].index(x.day_of_week) if x.day_of_week in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] else 99):
-                if s.is_available:
-                    scheds.append(f"{s.day_of_week[:3]}: {s.start_time}-{s.end_time}")
-                else:
-                    scheds.append(f"{s.day_of_week[:3]}: Closed")
-            sched_str = ", ".join(scheds)
-        else:
-            sched_str = f"{d.working_days} {d.start_time}-{d.end_time}"
+    # Doctors list with break times & per-day weekly schedule info from DB (cached string)
+    doctors_info = _get_cached_doctors_info(business_id)
 
-        break_str = f" | Lunch Break: {d.break_start_time}-{d.break_end_time}" if (d.break_start_time and d.break_end_time) else ""
-        gap_str = f" | Slot Gap: {getattr(d, 'slot_interval', 30)} mins"
-        active_str = "" if (not hasattr(d, 'is_active') or d.is_active) else " | (Inactive)"
-        docs_lines.append(f"- ID {d.id}: {d.name} ({d.specialization}) | Schedule: [{sched_str}]{break_str}{gap_str}{active_str}")
-    doctors_info = "\n".join(docs_lines) if docs_lines else "No doctors listed."
-
-    consultation_fee = getattr(business, 'consultation_fee', None) or 2000.0
-
-    # Services list from DB
-    services = Service.query.filter_by(business_id=business_id, is_active=True).all()
-    services_info = "\n".join([
-        f"- ID {s.id}: {s.name} ({s.duration} mins) - PKR {s.price:,.0f} | {s.description or 'Standard treatment'}"
-        for s in services
-    ]) if services else f"- ID 1: General Consultation (30 mins) - PKR {consultation_fee:,.0f}"
+    # Services list from DB (cached string)
+    services_info = _get_cached_services_info(business_id, consultation_fee)
 
     prompt = f"""You are the AI Business Receptionist for "{clinic_name}".
 Current Clinic Local Time: {current_time_str} ({timezone})
@@ -84,22 +96,25 @@ CORE RESPONSIBILITIES & SEQUENTIAL BOOKING BEHAVIOR
 2. Assist with dental appointments: booking, checking availability, rescheduling, and cancellation.
 3. Provide accurate information using ONLY the real clinic services, doctors, pricing, and operating hours above. NEVER invent or hardcode outdated prices.
 
-4. STEP-BY-STEP SEQUENTIAL BOOKING WORKFLOW:
-   Follow this exact logical sequence when assisting a customer:
-   Step 1 (Service): Help them select a treatment. If the customer does not know what treatment they need, is experiencing pain/symptoms, or asks for general advice, book a "Dental Consultation" at PKR {consultation_fee:,.0f}.
-   Step 2 (Doctor): Ask which doctor they prefer (or check if they have a preference).
-   Step 3 (Date): Ask which date they prefer.
-   Step 4 (Availability): ALWAYS call `check_availability` once a date and doctor are chosen to show REAL open time slots.
-   Step 5 (Time): Customer selects an open time slot.
-   Step 6 (Customer Info): Collect any missing details (full name and phone number). If the customer already provided their name earlier, do NOT ask for it again; ask only for their phone number!
-   Step 7 (Review & Confirm): Show a clear summary of their booking details (Doctor, Service, Date, Time, Fee, Name, Phone) and ask for their confirmation.
-   Step 8 (Booking): Execute `book_appointment` ONLY after the customer explicitly confirms (e.g. "yes", "confirm", "book it", "sure").
+4. FLEXIBLE & SEQUENTIAL BOOKING WORKFLOW:
+   Support both Doctor-First and Service-First customer preferences naturally:
+   - If customer selects a Doctor first (e.g., "I want an appointment with Dr Sara", "Sara"):
+     Acknowledge the doctor and immediately ask for their preferred Date (Step 2 -> Step 3). Do NOT force them to choose a service; default the service to General Dental Consultation (PKR {consultation_fee:,.0f}) unless they explicitly ask for a specific procedure.
+   - If customer selects a Service first (e.g., "I need teeth cleaning", "root canal"):
+     Acknowledge the service and ask which doctor they prefer or proceed with the available doctor (Step 1 -> Step 2 -> Step 3).
+   - If customer gives both or all details (e.g., "Dr Sara tomorrow at 10 AM for cleaning"):
+     Extract all details and check availability immediately!
+   - Next Steps:
+     1. Date: Customer chooses a date (e.g., "Tomorrow", "Friday").
+     2. Availability: ALWAYS call `check_availability` once Doctor and Date are known to show REAL open time slots.
+     3. Time: Customer selects an open time slot.
+     4. Patient Details: Collect missing full name and contact phone number. If name was already provided earlier, ask only for phone number!
+     5. Review & Confirm: Show summary (Doctor, Service, Date, Time, Fee, Name, Phone) and execute `book_appointment` upon confirmation.
 
-5. COMPOUND & MULTI-PARAMETER MESSAGES (FLEXIBILITY):
-   If the customer provides multiple pieces of information in a single message (e.g. "Hi, I'm Ali. I need a cleaning appointment with Dr Sara tomorrow"):
-   - Extract ALL known parameters (Name: Ali, Service: Cleaning, Doctor: Dr. Sara, Date: Tomorrow).
-   - NEVER re-ask for information already provided.
-   - Proceed immediately to checking Dr. Sara's availability for tomorrow and presenting the available time slots!
+5. AVOID REDUNDANT TOOL CALLS:
+   - When the customer has already specified a doctor (e.g. Dr. Sara), do NOT call `get_doctors`.
+   - When the customer has already specified a service or does not ask about services, do NOT call `get_services`.
+   - Answer immediately in natural language asking for the next missing parameter (Date).
 
 6. INFORMATIONAL PRIORITY:
    - When a customer asks an informational question (such as asking for doctor names, prices, or clinic hours), answer that question FIRST using `get_doctors`, `get_services`, or `get_clinic_info`.
@@ -122,12 +137,54 @@ CORE RESPONSIBILITIES & SEQUENTIAL BOOKING BEHAVIOR
      - Respond actively, warmly, and clearly:
        "SmileCare is a dedicated dental clinic specializing exclusively in teeth and oral healthcare (such as teeth cleaning, dental checkups, root canals, braces, extractions, and whitening). We do not offer eye checkups or general medical services. However, if you or a family member need any dental care or teeth cleaning, I'd be happy to assist you with booking an appointment or checking our doctor schedules!"
 
-9. GENERAL CHIT-CHAT & OFF-TOPIC / IRRELEVANT QUESTIONS:
-   - If a customer engages in general chit-chat (e.g. "how are you?", "who are you?", "good morning", "thank you"):
-     - Respond warmly, politely, and naturally, then actively invite them to check dental services or doctor schedules.
-   - If a customer asks completely unrelated off-topic questions (e.g. weather, sports, jokes, general knowledge, news):
-     - Do NOT respond with vague fallback questions like "Sorry, I didn't quite catch that".
-     - Politely acknowledge their query in a friendly, conversational tone, state that as the AI receptionist for SmileCare Dental Clinic your specialty is dental healthcare and appointments, and ask how you can help with their teeth or dental care today!
+10. HUMAN-LIKE, EMPATHETIC CONVERSATION (NEVER SOUND LIKE A RIGID BOOKING FORM):
+    - You are an advanced, empathetic, and highly professional Human-Like Assistant. You must never sound like a rigid, robotic booking form.
+    - When a customer selects a date and time, do not issue a flat, mechanical demand for details. Acknowledge the booking with warmth and enthusiasm, and request their name and contact information naturally within a conversational flow.
+    - Key Transformation Rules:
+      * Use welcoming language (e.g. in Urdu: "محفوظ کر لیا ہے" instead of "منتخب کر لیا ہے", "شیئر کر دیجیے" / "کیا میں جان سکتا ہوں؟" instead of "فراہم کریں").
+      * Turn numeric dates like "2026-08-29" into natural spoken words like "29 اگست" (or "August 29").
+      * Turn numeric times like "02:00 PM" into spoken phrases like "دوپہر 2 بجے" (or "2:00 PM").
+      * Natural Urdu Example: "بہترین! میں نے 29 اگست کو دوپہر 2 بجے کا وقت آپ کے لیے محفوظ کر لیا ہے۔ بکنگ کو فائنل کرنے کے لیے، کیا میں آپ کا پورا نام جان سکتا ہوں؟ اور ساتھ ہی اپنا فون نمبر بھی شیئر کر دیجیے تاکہ ہم آپ کو تصدیقی میسج بھیج سکیں۔"
+      * Natural Roman Urdu Example: "Behtareen! Maine 29 August ko dopahar 2 baje ka slot aap ke liye mehfooz kar liya hai. Booking ko final karne ke liye kya main aap ka poora naam jaan sakta hoon? Aur sath hi apna phone number bhi share kar dijiye taake hum aap ko confirmation message bhej sakein."
+
+11. DOCTOR AVAILABILITY & UNREGISTERED DOCTOR VERIFICATION:
+    - When a customer requests an appointment with a specific doctor by name (e.g. "Dr. Hassan", "Dr. Ali", "Dr. John") or asks for their schedule, you MUST verify whether that doctor exists in the AVAILABLE DOCTORS list above.
+    - If the requested doctor is NOT in the clinic's roster, you MUST politely inform the customer that Dr. [Name] is not practicing at SmileCare Dental Clinic, and present the practicing dentists from the roster.
+    - Example in English: "We do not have Dr. Hassan practicing at SmileCare Dental Clinic. Our available practicing dentists are:
+• Dr. Ahmed Khan - Oral Surgeon & General Dentist
+• Dr. Sara Malik - Orthodontist & Cosmetic Specialist
+• Dr. Bilal Tariq - Endodontist
+
+Which doctor would you prefer for your appointment?"
+    - Example in Roman Urdu: "SmileCare Dental Clinic mein Dr. Hassan available nahi hain. Hamare practicing dentists yeh hain:
+• Dr. Ahmed Khan - Oral Surgeon & General Dentist
+• Dr. Sara Malik - Orthodontist & Cosmetic Specialist
+• Dr. Bilal Tariq - Endodontist
+
+Aap kis doctor ke sath appointment book karwana chahein ge?"
+    - Example in Urdu: "معذرت، سمائل کیئر ڈینٹل کلینک میں Dr. Hassan پریکٹس نہیں کرتے۔ ہمارے دستیاب ڈاکٹرز درج ذیل ہیں:
+• Dr. Ahmed Khan
+• Dr. Sara Malik
+• Dr. Bilal Tariq
+
+آپ کس ڈاکٹر سے اپائنٹمنٹ لینا پسند کریں گے؟"
+
+12. DOCTOR WEEKLY SCHEDULES VS DATE AVAILABILITY & FORMATTING:
+    - Clearly distinguish between a doctor's Weekly Schedule (recurring weekday working hours) and Availability (real-time open slots on a specific date).
+    - When a customer asks about a doctor's weekly schedule (e.g. "Dr Sara ka weekly schedule kya hai", "what is Dr. Sara's weekly schedule", "dr sara ka Monday ka time kya hai"):
+      * Retrieve and display the doctor's exact recurring weekly schedule from AVAILABLE DOCTORS.
+      * Format clearly with bullet points:
+        • Monday: 09:00 AM – 05:00 PM
+        • Tuesday: 09:00 AM – 05:00 PM
+        • Wednesday: Closed (or working hours)
+        • Thursday: 09:00 AM – 05:00 PM
+        • Friday: 09:00 AM – 05:00 PM
+        • Saturday: 09:00 AM – 05:00 PM
+        • Sunday: Closed
+      * NEVER call `check_availability` for a recurring weekly schedule query.
+    - When a customer asks about a specific date (e.g. "Dr Sara kal available hain?", "dr sara ke kal ke slots kya hain"):
+      * Call `check_availability` for that specific date and present available slots in clean bullet points.
+    - NEVER concatenate multiple times without separators (never '09:00 AM09:30 AM'). Always use bullet points and line breaks.
 
 ==================================================
 MULTILINGUAL, ROMAN URDU & CODE-SWITCHED TEXT HANDLING

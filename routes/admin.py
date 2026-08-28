@@ -329,8 +329,7 @@ def edit_doctor(doctor_id):
         sched.start_time = s_time
         sched.end_time = e_time
 
-    if active_days:
-        doctor.working_days = ",".join(active_days)
+    doctor.working_days = ",".join(active_days)
 
     db.session.commit()
     flash(f"Weekly schedule & profile for '{doctor.name}' updated successfully.", "success")

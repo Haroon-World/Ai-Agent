@@ -58,8 +58,9 @@ class TestHybridUIAndStateHardening(unittest.TestCase):
 
         agent = Agent(business_id=1, llm_provider="mock")
 
-        # Turn 1: Specify booking details on working day (Monday 2026-08-24)
-        msg1 = "Mujhe Dr Sara ke sath 2026-08-24 ko cleaning ki appointment chahiye, 10 baje."
+        # Turn 1: Specify booking details on working day (tomorrow)
+        target_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        msg1 = f"Mujhe Dr Sara ke sath {target_date} ko cleaning ki appointment chahiye, 10 baje."
         r1 = agent.process_message(conv.id, msg1)
         self.assertEqual(r1["status"], "AI")
 

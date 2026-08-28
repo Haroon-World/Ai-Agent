@@ -130,7 +130,7 @@ class TestEndToEndSuite(unittest.TestCase):
     def test_reschedule_and_cancellation(self):
         """Test appointment rescheduling and cancellation workflows."""
         biz_id = Config.DEFAULT_BUSINESS_ID
-        target_date = (date.today() + timedelta(days=3)).strftime("%Y-%m-%d")
+        target_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
 
         book_res = BookingService.book_appointment(
             business_id=biz_id,
@@ -145,7 +145,7 @@ class TestEndToEndSuite(unittest.TestCase):
         appt_id = book_res["appointment_id"]
 
         # Reschedule
-        new_date = (date.today() + timedelta(days=4)).strftime("%Y-%m-%d")
+        new_date = (date.today() + timedelta(days=2)).strftime("%Y-%m-%d")
         reschedule_res = BookingService.reschedule_appointment(
             business_id=biz_id,
             appointment_id=appt_id,

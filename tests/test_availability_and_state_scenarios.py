@@ -117,13 +117,14 @@ class TestAvailabilityAndStateScenarios(unittest.TestCase):
         self.assertNotEqual(conv_db.requested_date, "2026-08-23", "Must overwrite previous Sunday date")
 
     def test_6_bare_time_slot_selection(self):
+        future_working_date = (datetime.now(ZoneInfo("Asia/Karachi")).date() + timedelta(days=7)).strftime("%Y-%m-%d")
         conv = Conversation(
             business_id=self.biz_id,
             status="AI",
             intent="BOOK_APPOINTMENT",
             selected_doctor_id=2,
             selected_service_id=1,
-            requested_date="2026-08-24",
+            requested_date=future_working_date,
             awaiting_input="time_choice"
         )
         db.session.add(conv)
@@ -170,7 +171,13 @@ class TestAvailabilityAndStateScenarios(unittest.TestCase):
         self.assertTrue(all("11:00" <= s < "15:00" for s in slots), f"All slots must fall within 11:00-15:00: {slots}")
 
     def test_9_doctor_leave_date_blocks_slots(self):
-        leave_date = "2026-08-24"
+        # Find next Monday for doctor leave
+        today = datetime.now(ZoneInfo("Asia/Karachi")).date()
+        days_to_mon = (0 - today.weekday()) % 7
+        if days_to_mon == 0:
+            days_to_mon = 7
+        leave_date = (today + timedelta(days=days_to_mon)).strftime("%Y-%m-%d")
+
         leave = DoctorLeave(doctor_id=2, leave_date=leave_date, is_all_day=True, reason="Vacation")
         db.session.add(leave)
         db.session.commit()
@@ -181,7 +188,13 @@ class TestAvailabilityAndStateScenarios(unittest.TestCase):
         self.assertTrue(avail["is_closed"])
 
     def test_10_existing_appointment_blocks_slot(self):
-        target_date = "2026-08-25"
+        # Find next Tuesday for appointment blocking test
+        today = datetime.now(ZoneInfo("Asia/Karachi")).date()
+        days_to_tue = (1 - today.weekday()) % 7
+        if days_to_tue == 0:
+            days_to_tue = 7
+        target_date = (today + timedelta(days=days_to_tue)).strftime("%Y-%m-%d")
+
         # Create customer & appointment at 10:00
         cust = Customer(business_id=self.biz_id, name="Test Patient", phone="03001112233")
         db.session.add(cust)

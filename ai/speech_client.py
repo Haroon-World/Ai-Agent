@@ -57,9 +57,16 @@ class GroqWhisperAdapter(BaseSTTAdapter):
             filename = f"speech_input.{ext}"
             file_payload = (filename, audio_bytes, mime_type)
 
+            whisper_prompt = (
+                "Dr. Sara Malik, Dr. Ahmed Khan, SmileCare, appointment, checkup, consultation, cleaning, scaling, "
+                "whitening, root canal, daant, dard, kal, aaj, parso, subah, dopahar, sham, baje, بجے, "
+                "ڈاکٹر سارا, ڈاکٹر احمد, اپائنٹمنٹ, مشورہ, چیک اپ, دانت, درد, کل, آج"
+            )
+
             transcription = client.audio.transcriptions.create(
                 file=file_payload,
                 model=self.model,
+                prompt=whisper_prompt,
                 response_format="json"
             )
 
@@ -75,17 +82,69 @@ class GroqWhisperAdapter(BaseSTTAdapter):
             raise RuntimeError(f"Groq Whisper STT failed: {str(e)}")
 
 
+class GeminiSTTAdapter(BaseSTTAdapter):
+    """Speech-to-Text adapter using Gemini API audio understanding."""
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
+        self.api_key = api_key or Config.GEMINI_API_KEY
+        self.model = model or getattr(Config, "GEMINI_MODEL", "gemini-3.6-flash")
+
+    def transcribe(self, audio_bytes: bytes, mime_type: str = "audio/webm") -> str:
+        if not audio_bytes or len(audio_bytes) == 0:
+            raise ValueError("Empty audio payload received")
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY is not configured for GeminiSTTAdapter")
+
+        try:
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=self.api_key)
+
+            response = client.models.generate_content(
+                model=self.model,
+                contents=[
+                    types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+                    "Transcribe this audio verbatim. If the speaker speaks Urdu script, Roman Urdu, English, or a mix, transcribe exactly what is spoken in that same format without reordering, translating, or adding quotes."
+                ]
+            )
+            if response.text:
+                return response.text.strip().strip('"').strip("'")
+            raise RuntimeError("No transcription text returned by Gemini")
+        except Exception as e:
+            logger.error(f"Gemini STT Error: {str(e)}")
+            raise RuntimeError(f"Gemini STT failed: {str(e)}")
+
+
 class STTClient:
     """Factory client for Speech-to-Text provider selection."""
     def __init__(self, stt_provider: Optional[str] = None, preset_transcript: Optional[str] = None):
         self.stt_provider = (stt_provider or Config.STT_PROVIDER or "mock").lower()
-        if self.stt_provider == "groq":
+        if self.stt_provider == "gemini":
+            self.adapter = GeminiSTTAdapter()
+        elif self.stt_provider == "groq":
             self.adapter = GroqWhisperAdapter()
         else:
             self.adapter = MockSTTAdapter(preset_transcript=preset_transcript)
 
     def transcribe(self, audio_bytes: bytes, mime_type: str = "audio/webm") -> str:
-        return self.adapter.transcribe(audio_bytes, mime_type=mime_type)
+        try:
+            return self.adapter.transcribe(audio_bytes, mime_type=mime_type)
+        except Exception as primary_err:
+            logger.warning(f"[STTClient Warning]: Primary STT provider '{self.stt_provider}' failed: {primary_err}")
+            # Resilient fallback: If Groq failed, try Gemini
+            if self.stt_provider == "groq" and Config.GEMINI_API_KEY:
+                try:
+                    logger.info("Attempting STT fallback using GeminiSTTAdapter...")
+                    return GeminiSTTAdapter().transcribe(audio_bytes, mime_type=mime_type)
+                except Exception as fallback_err:
+                    logger.warning(f"Gemini STT fallback also failed: {fallback_err}")
+            # If Gemini failed, try Groq
+            elif self.stt_provider == "gemini" and Config.GROQ_API_KEY:
+                try:
+                    logger.info("Attempting STT fallback using GroqWhisperAdapter...")
+                    return GroqWhisperAdapter().transcribe(audio_bytes, mime_type=mime_type)
+                except Exception as fallback_err:
+                    logger.warning(f"Groq Whisper fallback also failed: {fallback_err}")
+            raise primary_err
 
 
 class BaseTTSAdapter(ABC):

@@ -86,7 +86,7 @@ class TestTranscriptScenarioFixes(unittest.TestCase):
         self.assertTrue("confirmed" in res4["content"].lower() or "appointment id" in res4["content"].lower())
 
         # Verify appointment saved in database!
-        appts = Appointment.query.filter_by(business_id=1).all()
+        appts = Appointment.query.filter_by(business_id=1).order_by(Appointment.id.desc()).all()
         self.assertGreaterEqual(len(appts), 1)
         self.assertEqual(appts[0].customer.name, "Haroon")
         self.assertEqual(appts[0].customer.phone, "03197155071")
