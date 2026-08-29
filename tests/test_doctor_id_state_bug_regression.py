@@ -1,4 +1,4 @@
-﻿"""
+"""
 Regression test for doctor_id state divergence bug.
 
 BUG SUMMARY
@@ -140,6 +140,76 @@ class TestDoctorIdStateBugRegression(unittest.TestCase):
             "%d (Dr. Sara Malik), but got %s." % (
                 self.dr_sara_id, conv_after_msg2.selected_doctor_id
             )
+        )
+
+    def test_plain_doctor_name_statement_rewrites_selection_after_awaiting_input_moves_past_doctor_choice(self):
+        """
+        Scenario C regression: once a doctor is selected and check_availability
+        runs, awaiting_input moves to 'time_choice' (past 'doctor_choice').
+        A bare doctor-name statement sent at that point (e.g. "ahmad") must
+        still be recognised as a re-selection and update selected_doctor_id.
+
+        Previously, the _resolve_workflow_input guard
+            if not conv.selected_doctor_id or is_explicit_change or awaiting == "doctor_choice"
+        was too narrow: once awaiting_input moved past "doctor_choice" and a
+        doctor was already set, plain name statements were silently dropped.
+
+        The fix adds condition (d): allow overwrite when the message is NOT
+        phrased as a question, so bare name statements always re-select while
+        information questions ("does dr ahmed have experience...") do not.
+        """
+        from datetime import date, timedelta
+        from unittest.mock import patch
+
+        # Use a known clinic-open weekday so check_availability returns slots
+        # and moves awaiting_input to time_choice / date_choice.
+        today = date.today()
+        days_ahead = (0 - today.weekday()) % 7  # next Monday
+        if days_ahead == 0:
+            days_ahead = 7
+        weekday_str = (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+        conv = Conversation(business_id=self.biz_id, status="AI")
+        db.session.add(conv)
+        db.session.commit()
+        conv_id = conv.id
+
+        # Step 1: establish a date, see doctors, pick Sara — this triggers
+        # check_availability and moves awaiting_input past "doctor_choice".
+        with patch("ai.agent.resolve_date_string", return_value=weekday_str):
+            self.agent.process_message(conv_id, "I'd like to book for tomorrow")
+        self.agent.process_message(conv_id, "tell me what doctors are available")
+        self.agent.process_message(conv_id, "dr sara")
+
+        conv_mid = db.session.get(Conversation, conv_id)
+        self.assertEqual(
+            conv_mid.selected_doctor_id, self.dr_sara_id,
+            "Dr. Sara should be selected at this point."
+        )
+        self.assertNotEqual(
+            conv_mid.awaiting_input, "doctor_choice",
+            "awaiting_input must have moved past doctor_choice before the key assertion."
+        )
+
+        # Step 2: send a bare doctor-name statement — must re-select Ahmed.
+        resp = self.agent.process_message(conv_id, "ahmad")
+        conv_after = db.session.get(Conversation, conv_id)
+
+        self.assertEqual(
+            conv_after.selected_doctor_id,
+            self.dr_ahmed_id,
+            "Bare name 'ahmad' must re-select Dr. Ahmed Khan (id %d) even after "
+            "awaiting_input has moved past doctor_choice. Got: %s" % (
+                self.dr_ahmed_id, conv_after.selected_doctor_id
+            )
+        )
+        self.assertIsNone(
+            conv_after.pending_customer_name,
+            "'ahmad' must never be captured as the customer's own name."
+        )
+        self.assertNotIn(
+            "Thank you, Ahmad", resp.get("content", ""),
+            "'ahmad' must not be treated as the patient's name at any stage."
         )
 
 

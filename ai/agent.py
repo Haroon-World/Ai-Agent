@@ -335,11 +335,26 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         db.session.flush()
         return
 
+    # Shared question-detection for the roster guards below.
+    # Condition (d): allow a roster match to overwrite state when the message
+    # is NOT phrased as a question.  _is_question_query() catches "?"-terminated
+    # messages and known inquiry prefixes; the regex additionally catches
+    # question-verb openers ("does", "is", "are", "has", "have", "did", "do",
+    # "can", "could", "would", "will") that _is_question_query's prefix list
+    # does not cover.  Together they distinguish a bare selection ("ahmad") from
+    # an information query ("does dr ahmed have experience with kids").
+    _msg_is_question = _is_question_query(user_content) or bool(
+        re.match(
+            r'^(does|is|are|was|were|has|have|can|could|would|will|do|did)\s',
+            user_content.lower().strip()
+        )
+    )
+
     # 1. Resolve Doctor using cached roster
     doctor_roster = BookingService.get_doctors(conv.business_id)
     matched_doc = _fuzzy_match_roster(user_content, doctor_roster)
     if matched_doc:
-        if not conv.selected_doctor_id or is_explicit_change or conv.awaiting_input == "doctor_choice":
+        if not conv.selected_doctor_id or is_explicit_change or conv.awaiting_input == "doctor_choice" or not _msg_is_question:
             if conv.selected_doctor_id and conv.selected_doctor_id != matched_doc["id"]:
                 conv.requested_time = None
             conv.selected_doctor_id = matched_doc["id"]
@@ -356,7 +371,7 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     service_roster = BookingService.get_services(conv.business_id)
     matched_svc = _fuzzy_match_roster(user_content, service_roster)
     if matched_svc:
-        if not conv.selected_service_id or is_explicit_change or conv.awaiting_input == "service_choice":
+        if not conv.selected_service_id or is_explicit_change or conv.awaiting_input == "service_choice" or not _msg_is_question:
             if conv.selected_service_id and conv.selected_service_id != matched_svc["id"]:
                 conv.requested_time = None
             conv.selected_service_id = matched_svc["id"]
