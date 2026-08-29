@@ -172,5 +172,10 @@ class TestWhatsAppInteractionArchitecture(unittest.TestCase):
         self.assertEqual(res2['status'], 'HUMAN')
         self.assertIn('human staff', res2['content'].lower())
 
+        # Customer message must be persisted to DB
+        msg2 = Message.query.filter_by(conversation_id=conv.id, content='Hello?').first()
+        self.assertIsNotNone(msg2)
+        self.assertEqual(msg2.role, 'user')
+
 if __name__ == '__main__':
     unittest.main()

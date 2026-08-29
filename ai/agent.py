@@ -3,7 +3,7 @@ import re
 import uuid
 import time
 import threading
-from datetime import datetime, date as dt_date, timedelta as dt_td
+from datetime import datetime, timezone, date as dt_date, timedelta as dt_td
 from typing import Dict, Any, List, Optional
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
@@ -810,6 +810,16 @@ class Agent:
         if not conv:
             raise ValueError(f"Conversation {conversation_id} not found.")
 
+        # 1. Persist user message to DB unconditionally & update conversation timestamp
+        user_msg = Message(
+            conversation_id=conv.id,
+            role="user",
+            content=user_content
+        )
+        conv.updated_at = datetime.now(timezone.utc)
+        db.session.add(user_msg)
+        db.session.commit()
+
         # Human receptionist override: if status is HUMAN, bypass AI completely
         if conv.status == "HUMAN":
             total_turn_ms = (time.perf_counter() - t_start) * 1000.0
@@ -828,15 +838,6 @@ class Agent:
                     "total_turn_ms": round(total_turn_ms, 2)
                 }
             }
-
-        # 1. Persist user message to DB
-        user_msg = Message(
-            conversation_id=conv.id,
-            role="user",
-            content=user_content
-        )
-        db.session.add(user_msg)
-        db.session.commit()
 
         # 2. Intelligently extract booking parameters from user text & update state (using cached rosters)
         _resolve_workflow_input(conv, user_content)

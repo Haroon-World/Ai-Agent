@@ -217,6 +217,11 @@ class TestEndToEndSuite(unittest.TestCase):
         self.assertEqual(len(subsequent_resp.get("executed_tools", [])), 0)
         self.assertIn("human staff", subsequent_resp["content"].lower())
 
+        # Customer message must still be saved to the database
+        saved_customer_msg = Message.query.filter_by(conversation_id=conv.id, content="Hello? Anyone there?").first()
+        self.assertIsNotNone(saved_customer_msg, "Customer message sent during HUMAN status must be persisted in DB")
+        self.assertEqual(saved_customer_msg.role, "user")
+
         # Staff replies
         staff_reply = HandoffService.admin_reply(conv.id, "Hello! I am Dr. Ahmed's assistant. How can I help you?")
         self.assertTrue(staff_reply["success"])
@@ -230,6 +235,45 @@ class TestEndToEndSuite(unittest.TestCase):
         resume_resp = agent.process_message(conv.id, "Where is your clinic located?")
         self.assertEqual(resume_resp["status"], "AI")
         self.assertIn("smilecare", resume_resp["content"].lower())
+
+    def test_customer_message_persisted_during_active_human_handoff(self):
+        """
+        Regression test: When conversation status is HUMAN, customer messages
+        must be persisted as Message(role='user') in the database and update conv.updated_at
+        so staff can see them in admin conversations view.
+        """
+        biz_id = Config.DEFAULT_BUSINESS_ID
+        agent = Agent(business_id=biz_id, llm_provider="mock")
+
+        conv = Conversation(business_id=biz_id, status="AI")
+        db.session.add(conv)
+        db.session.commit()
+
+        # Step 1: Trigger handoff
+        agent.process_message(conv.id, "I want to talk to a human receptionist")
+        conv_db = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_db.status, "HUMAN")
+
+        # Step 2: Admin replies once
+        staff_res = HandoffService.admin_reply(conv.id, "Hello! I am here to help. What is your issue?")
+        self.assertTrue(staff_res["success"])
+
+        old_updated_at = conv_db.updated_at
+
+        # Step 3: Customer sends a second message while in HUMAN mode
+        msg_text = "My tooth is aching very badly since yesterday."
+        resp = agent.process_message(conv.id, msg_text)
+        self.assertEqual(resp["status"], "HUMAN")
+
+        # Step 4: Verify message exists in database with role='user'
+        saved_msg = Message.query.filter_by(conversation_id=conv.id, content=msg_text).first()
+        self.assertIsNotNone(saved_msg, "Customer message sent during HUMAN status must be saved to DB")
+        self.assertEqual(saved_msg.role, "user")
+        self.assertEqual(saved_msg.conversation_id, conv.id)
+
+        # Step 5: Verify conv.updated_at was updated
+        db.session.refresh(conv_db)
+        self.assertGreaterEqual(conv_db.updated_at, old_updated_at)
 
     def test_admin_auth_and_protected_routes(self):
         """Test admin authentication session protection."""
