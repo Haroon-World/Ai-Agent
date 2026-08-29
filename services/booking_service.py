@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, time
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional, Tuple, Any
@@ -91,6 +92,29 @@ def _get_business_tz(business_id: int) -> ZoneInfo:
     return tz
 
 
+def _parse_time_str(t_str: Any, default: Tuple[int, int] = (9, 0)) -> Tuple[int, int]:
+    """Robustly parse time strings in 24-hour ('17:00', '23:30') or 12-hour ('11:30 PM', '9:00 AM') format."""
+    if not t_str:
+        return default
+    t_clean = str(t_str).strip().lower()
+    is_pm = "pm" in t_clean
+    is_am = "am" in t_clean
+    clean_num = re.sub(r'[^\d:]', '', t_clean)
+    parts = clean_num.split(":")
+    if not parts or not parts[0]:
+        return default
+    try:
+        h = int(parts[0])
+        m = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+        if is_pm and h < 12:
+            h += 12
+        elif is_am and h == 12:
+            h = 0
+        return (h, m)
+    except Exception:
+        return default
+
+
 def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, business_id: int) -> Tuple[List[str], str]:
     """Calculate available time slots for a doctor on target_date. Returns (slots, unavailability_message)."""
     if hasattr(doc, "is_active") and not doc.is_active:
@@ -107,11 +131,8 @@ def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, 
     if not is_day_available:
         return [], f"{doc.name} is closed / not practicing on {day_name}s."
 
-    try:
-        start_h, start_m = map(int, start_time_str.split(":"))
-        end_h, end_m = map(int, end_time_str.split(":"))
-    except Exception:
-        start_h, start_m, end_h, end_m = 9, 0, 17, 0
+    start_h, start_m = _parse_time_str(start_time_str, default=(9, 0))
+    end_h, end_m = _parse_time_str(end_time_str, default=(17, 0))
 
     leaves = DoctorLeave.query.filter_by(doctor_id=doc.id, leave_date=date_str).all()
     if any(l.is_all_day for l in leaves):
@@ -121,8 +142,8 @@ def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, 
     for l in leaves:
         if not l.is_all_day and l.start_time and l.end_time:
             try:
-                l_sh, l_sm = map(int, l.start_time.split(":"))
-                l_eh, l_em = map(int, l.end_time.split(":"))
+                l_sh, l_sm = _parse_time_str(l.start_time)
+                l_eh, l_em = _parse_time_str(l.end_time)
                 blocked_ranges.append((l_sh * 60 + l_sm, l_eh * 60 + l_em))
             except Exception:
                 pass
@@ -136,7 +157,7 @@ def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, 
 
     for a in booked_appts:
         try:
-            ah, am = map(int, a.appointment_time.split(":"))
+            ah, am = _parse_time_str(a.appointment_time)
             a_start = ah * 60 + am
             svc_dur = a.service.duration if a.service else 30
             blocked_ranges.append((a_start, a_start + svc_dur))
@@ -145,8 +166,8 @@ def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, 
 
     if getattr(doc, "break_start_time", None) and getattr(doc, "break_end_time", None):
         try:
-            b_sh, b_sm = map(int, doc.break_start_time.split(":"))
-            b_eh, b_em = map(int, doc.break_end_time.split(":"))
+            b_sh, b_sm = _parse_time_str(doc.break_start_time)
+            b_eh, b_em = _parse_time_str(doc.break_end_time)
             b_start_min = b_sh * 60 + b_sm
             b_end_min = b_eh * 60 + b_em
             if b_start_min < b_end_min:
@@ -222,15 +243,24 @@ class BookingService:
         if not date_str:
             return {"success": False, "error": "Date is required in YYYY-MM-DD format"}
 
-        try:
-            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        except ValueError:
-            return {"success": False, "error": "Invalid date format. Please use YYYY-MM-DD"}
-
-        # Validate date is not in the past — compare against clinic's local date
         tz = _get_business_tz(business_id)
         now_dt = datetime.now(tz)
         today = now_dt.date()
+
+        clean_date_str = str(date_str).strip().lower()
+        if clean_date_str in ["today", "aaj", "آج"]:
+            target_date = today
+            date_str = today.strftime("%Y-%m-%d")
+        elif clean_date_str in ["tomorrow", "kal"]:
+            target_date = today + timedelta(days=1)
+            date_str = target_date.strftime("%Y-%m-%d")
+        else:
+            try:
+                target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                return {"success": False, "error": "Invalid date format. Please use YYYY-MM-DD"}
+
+        # Validate date is not in the past — compare against clinic's local date
         if target_date < today:
             return {"success": False, "error": f"The date {date_str} is in the past. Please select a future date."}
 
@@ -265,7 +295,7 @@ class BookingService:
                 filtered_slots = []
                 for s in slots:
                     try:
-                        sh, sm = map(int, s.split(":"))
+                        sh, sm = _parse_time_str(s)
                         slot_dt = datetime.combine(target_date, time(sh, sm), tzinfo=tz)
                         if slot_dt >= cutoff_dt:
                             filtered_slots.append(s)
@@ -404,15 +434,27 @@ class BookingService:
             return {"success": False, "error": f"Service with ID {service_id} not found."}
 
         # --- Validate Date & Day of Week ---
-        try:
-            target_date = datetime.strptime(appointment_date, "%Y-%m-%d").date()
-            day_name = target_date.strftime("%A")
-        except ValueError:
-            return {"success": False, "error": "Invalid appointment_date format. Use YYYY-MM-DD."}
+        tz = _get_business_tz(business_id)
+        now_dt = datetime.now(tz)
+        today = now_dt.date()
+
+        clean_appt_date = str(appointment_date).strip().lower()
+        if clean_appt_date in ["today", "aaj", "آج"]:
+            target_date = today
+            appointment_date = today.strftime("%Y-%m-%d")
+        elif clean_appt_date in ["tomorrow", "kal"]:
+            target_date = today + timedelta(days=1)
+            appointment_date = target_date.strftime("%Y-%m-%d")
+        else:
+            try:
+                target_date = datetime.strptime(appointment_date, "%Y-%m-%d").date()
+            except ValueError:
+                return {"success": False, "error": "Invalid appointment_date format. Use YYYY-MM-DD."}
+
+        day_name = target_date.strftime("%A")
 
         # Past-date revalidation
-        tz = _get_business_tz(business_id)
-        if target_date < datetime.now(tz).date():
+        if target_date < today:
             return {"success": False, "error": f"The date {appointment_date} is in the past."}
 
         # --- Revalidate DoctorSchedule ---
@@ -428,17 +470,17 @@ class BookingService:
             }
 
         # --- Revalidate Working Hours ---
-        try:
-            req_time = datetime.strptime(appointment_time, "%H:%M").time()
-            start_time = datetime.strptime(start_time_str, "%H:%M").time()
-            end_time = datetime.strptime(end_time_str, "%H:%M").time()
-        except (ValueError, TypeError):
+        req_h, req_m = _parse_time_str(appointment_time, default=(-1, -1))
+        start_h, start_m = _parse_time_str(start_time_str, default=(9, 0))
+        end_h, end_m = _parse_time_str(end_time_str, default=(17, 0))
+
+        if req_h < 0 or req_m < 0:
             return {"success": False, "error": "Invalid time format. Use HH:MM."}
 
-        req_start_m = req_time.hour * 60 + req_time.minute
+        req_start_m = req_h * 60 + req_m
         req_end_m = req_start_m + service.duration
-        start_m = start_time.hour * 60 + start_time.minute
-        end_m = end_time.hour * 60 + end_time.minute
+        start_m = start_h * 60 + start_m
+        end_m = end_h * 60 + end_m
 
         if not (start_m <= req_start_m and req_end_m <= end_m):
             return {
@@ -459,8 +501,8 @@ class BookingService:
                 }
             if l.start_time and l.end_time:
                 try:
-                    l_sh, l_sm = map(int, l.start_time.split(":"))
-                    l_eh, l_em = map(int, l.end_time.split(":"))
+                    l_sh, l_sm = _parse_time_str(l.start_time)
+                    l_eh, l_em = _parse_time_str(l.end_time)
                     l_start = l_sh * 60 + l_sm
                     l_end = l_eh * 60 + l_em
                     if req_start_m < l_end and req_end_m > l_start:
@@ -479,18 +521,18 @@ class BookingService:
             status="CONFIRMED"
         ).all()
 
-        for existing_appt in booked_appts:
+        for a in booked_appts:
             try:
-                ex_h, ex_m = map(int, existing_appt.appointment_time.split(":"))
+                ex_h, ex_m = _parse_time_str(a.appointment_time)
                 ex_start_m = ex_h * 60 + ex_m
-                ex_svc_dur = existing_appt.service.duration if existing_appt.service else 30
+                ex_svc_dur = a.service.duration if a.service else 30
                 ex_end_m = ex_start_m + ex_svc_dur
                 if req_start_m < ex_end_m and req_end_m > ex_start_m:
                     return {
                         "success": False,
                         "error": (
                             f"The requested slot at {appointment_time} overlaps an existing "
-                            f"{ex_svc_dur}-minute appointment at {existing_appt.appointment_time}. "
+                            f"{ex_svc_dur}-minute appointment at {a.appointment_time}. "
                             "Please choose a different time."
                         )
                     }

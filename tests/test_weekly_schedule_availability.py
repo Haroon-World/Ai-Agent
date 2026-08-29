@@ -469,6 +469,107 @@ class TestWeeklyScheduleAndAvailabilityEngine(unittest.TestCase):
         self.assertEqual(legacy_dict["end_time"], "14:00", "Legacy doctor must return its end_time")
         self.assertEqual(legacy_dict["weekly_schedule"], [])
 
+    def test_20_today_availability_with_evening_schedule_returns_remaining_slots(self):
+        """
+        20. Regression: When a doctor works until late evening (e.g. 11:30 PM) on a working day
+        and it is currently mid-evening (e.g. 6:30 PM), checking availability for today
+        must NOT return zero slots. It must return all valid remaining slots after 6:30 PM (+ 15-min lead buffer),
+        while excluding already-passed slots (09:00-18:30).
+        """
+        from services.booking_service import RequestCache
+
+        biz_id = 1
+        # Create doctor with Saturday schedule 09:00 - 23:30 (11:30 PM)
+        evening_doc = Doctor(
+            business_id=biz_id,
+            name="Dr. Evening Surgeon",
+            specialization="Oral Surgery",
+            working_days="Saturday",
+            start_time="09:00",
+            end_time="23:30",
+            slot_interval=30,
+            is_active=True
+        )
+        db.session.add(evening_doc)
+        db.session.flush()
+
+        sched_sat = DoctorSchedule(
+            doctor_id=evening_doc.id,
+            day_of_week="Saturday",
+            is_available=True,
+            start_time="09:00",
+            end_time="23:30"
+        )
+        db.session.add(sched_sat)
+        db.session.commit()
+
+        # Freeze clock to Saturday August 29, 2026 at 18:30 PKT (6:30 PM)
+        with freezegun.freeze_time("2026-08-29 18:30:00+05:00"):
+            RequestCache.clear()
+
+            # 1. Direct check with explicit date
+            res = BookingService.check_availability(biz_id, doctor_id=evening_doc.id, date_str="2026-08-29")
+            self.assertTrue(res["success"])
+            self.assertFalse(res["is_closed"])
+            self.assertIsNone(res["next_available_date"])
+
+            # Valid remaining slots: 19:00 to 23:00 (cutoff is 18:45)
+            self.assertIn("19:00", res["available_slots"])
+            self.assertIn("20:00", res["available_slots"])
+            self.assertIn("23:00", res["available_slots"])
+
+            # Past slots must be excluded
+            self.assertNotIn("09:00", res["available_slots"])
+            self.assertNotIn("12:00", res["available_slots"])
+            self.assertNotIn("18:00", res["available_slots"])
+            self.assertNotIn("18:30", res["available_slots"])
+
+            # 2. Check with relative date_str="today"
+            res_today = BookingService.check_availability(biz_id, doctor_id=evening_doc.id, date_str="today")
+            self.assertTrue(res_today["success"])
+            self.assertFalse(res_today["is_closed"])
+            self.assertEqual(res_today["available_slots"], res["available_slots"])
+
+    def test_21_today_availability_with_12hour_ampm_schedule_format(self):
+        """
+        21. Regression: When DoctorSchedule has start/end times in 12-hour format (e.g. '09:00 AM' - '11:30 PM'),
+        check_availability and book_appointment must parse them correctly without silently defaulting to 17:00.
+        """
+        from services.booking_service import RequestCache
+
+        biz_id = 1
+        ampm_doc = Doctor(
+            business_id=biz_id,
+            name="Dr. AM-PM Specialist",
+            specialization="General Dentistry",
+            working_days="Saturday",
+            start_time="09:00",
+            end_time="17:00",
+            slot_interval=30,
+            is_active=True
+        )
+        db.session.add(ampm_doc)
+        db.session.flush()
+
+        sched_sat = DoctorSchedule(
+            doctor_id=ampm_doc.id,
+            day_of_week="Saturday",
+            is_available=True,
+            start_time="09:00 AM",
+            end_time="11:30 PM"
+        )
+        db.session.add(sched_sat)
+        db.session.commit()
+
+        with freezegun.freeze_time("2026-08-29 18:30:00+05:00"):
+            RequestCache.clear()
+            res = BookingService.check_availability(biz_id, doctor_id=ampm_doc.id, date_str="2026-08-29")
+            self.assertTrue(res["success"])
+            self.assertFalse(res["is_closed"])
+            self.assertIn("19:00", res["available_slots"])
+            self.assertIn("23:00", res["available_slots"])
+            self.assertNotIn("09:00", res["available_slots"])
+
 
 if __name__ == "__main__":
     unittest.main()
