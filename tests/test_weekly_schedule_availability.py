@@ -1,6 +1,7 @@
 import os
 import unittest
 from datetime import date, timedelta
+import freezegun
 from app import create_app
 from config.config import Config
 from models import db, Business, Doctor, Service, Customer, Appointment, DoctorSchedule, DoctorLeave, Conversation
@@ -297,6 +298,41 @@ class TestWeeklyScheduleAndAvailabilityEngine(unittest.TestCase):
         """15. MockAdapter operates as a deterministic testing fallback."""
         agent = Agent(business_id=1, llm_provider="mock")
         self.assertEqual(agent.llm_client.provider, "mock")
+
+    def test_16_same_day_past_time_slots_filtered_with_lead_time_buffer(self):
+        """16. When checking availability for today, already-passed time slots are filtered out."""
+        # Dr. Ahmed is open on Monday 09:00 - 17:00. Freeze at 15:10 PKT on Monday 2026-08-31.
+        with freezegun.freeze_time("2026-08-31 15:10:00+05:00"):
+            res = BookingService.check_availability(1, doctor_id=1, date_str="2026-08-31")
+            self.assertTrue(res["success"])
+            # Cutoff with 15-min lead time is 15:25. Only slots >= 15:30 remain (15:30, 16:00, 16:30).
+            self.assertEqual(res["available_slots"], ["15:30", "16:00", "16:30"])
+            self.assertNotIn("09:00", res["available_slots"])
+            self.assertNotIn("14:30", res["available_slots"])
+            self.assertNotIn("15:00", res["available_slots"])
+
+    def test_17_same_day_after_closing_returns_zero_slots_and_next_available_date(self):
+        """17. When checking availability for today after closing hours, returns 0 slots with next available day."""
+        # Freeze at 18:00 PKT on Monday (after Dr. Ahmed's 17:00 closing)
+        with freezegun.freeze_time("2026-08-31 18:00:00+05:00"):
+            res = BookingService.check_availability(1, doctor_id=1, date_str="2026-08-31")
+            self.assertTrue(res["success"])
+            self.assertEqual(res["available_slots"], [])
+            self.assertTrue(res["is_closed"])
+            self.assertEqual(res["next_available_date"], "2026-09-01")
+            self.assertEqual(res["next_available_day"], "Tuesday")
+            self.assertIn("today", res["results"][0].get("message", "").lower())
+
+    def test_18_future_date_availability_unaffected_by_current_time(self):
+        """18. Checking availability for a future date is unaffected by current time of day."""
+        # Freeze at 18:00 PKT on Monday, but query Tuesday (tomorrow)
+        with freezegun.freeze_time("2026-08-31 18:00:00+05:00"):
+            res = BookingService.check_availability(1, doctor_id=1, date_str="2026-09-01")
+            self.assertTrue(res["success"])
+            self.assertIn("09:00", res["available_slots"])
+            self.assertIn("10:00", res["available_slots"])
+            self.assertIn("16:30", res["available_slots"])
+            self.assertFalse(res["is_closed"])
 
 if __name__ == "__main__":
     unittest.main()

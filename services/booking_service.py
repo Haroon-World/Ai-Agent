@@ -12,6 +12,9 @@ from sqlalchemy.orm import joinedload
 # Fallback timezone used only when no business record is found
 _DEFAULT_TZ = "Asia/Karachi"
 
+# Minimum lead time in minutes required for same-day bookings to prevent offering slots that are past or starting immediately
+SAME_DAY_LEAD_TIME_MINUTES = 15
+
 _thread_local_cache = threading.local()
 
 class RequestCache:
@@ -226,7 +229,8 @@ class BookingService:
 
         # Validate date is not in the past — compare against clinic's local date
         tz = _get_business_tz(business_id)
-        today = datetime.now(tz).date()
+        now_dt = datetime.now(tz)
+        today = now_dt.date()
         if target_date < today:
             return {"success": False, "error": f"The date {date_str} is in the past. Please select a future date."}
 
@@ -254,6 +258,23 @@ class BookingService:
         for doc in doctors:
             eff_duration = duration_override or getattr(doc, "slot_interval", None) or 30
             slots, msg = _get_slots_for_doctor_on_date(doc, target_date, eff_duration, business_id)
+
+            # Filter already-passed time slots when target_date is today
+            if target_date == today and slots:
+                cutoff_dt = now_dt + timedelta(minutes=SAME_DAY_LEAD_TIME_MINUTES)
+                filtered_slots = []
+                for s in slots:
+                    try:
+                        sh, sm = map(int, s.split(":"))
+                        slot_dt = datetime.combine(target_date, time(sh, sm), tzinfo=tz)
+                        if slot_dt >= cutoff_dt:
+                            filtered_slots.append(s)
+                    except Exception:
+                        pass
+                slots = filtered_slots
+                if not slots and not msg:
+                    msg = f"No more available slots for {doc.name} today."
+
             if not slots and msg:
                 results.append({
                     "doctor_id": doc.id,

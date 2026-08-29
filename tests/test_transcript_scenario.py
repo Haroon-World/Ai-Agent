@@ -1,5 +1,6 @@
 import unittest
 from datetime import date, timedelta
+import freezegun
 from app import create_app
 from models import db, Business, Doctor, Service, Conversation, Appointment
 from ai.agent import Agent
@@ -55,41 +56,42 @@ class TestTranscriptScenarioFixes(unittest.TestCase):
 
     def test_full_user_transcript_flow(self):
         """Recreate the exact 4-turn user conversation transcript and verify proper handling at each turn."""
-        conv = Conversation(business_id=1, status="AI")
-        db.session.add(conv)
-        db.session.commit()
+        with freezegun.freeze_time("2026-08-31 08:00:00+05:00"):
+            conv = Conversation(business_id=1, status="AI")
+            db.session.add(conv)
+            db.session.commit()
 
-        agent = Agent(business_id=1, llm_provider="mock")
+            agent = Agent(business_id=1, llm_provider="mock")
 
-        # Turn 1: Initial request
-        res1 = agent.process_message(conv.id, "Hi, I need to book a dental cleaning appointment for today.")
-        self.assertEqual(res1["status"], "AI")
-        self.assertIn("09:00", res1["content"])
+            # Turn 1: Initial request
+            res1 = agent.process_message(conv.id, "Hi, I need to book a dental cleaning appointment for today.")
+            self.assertEqual(res1["status"], "AI")
+            self.assertIn("09:00", res1["content"])
 
-        # Turn 2: Question about slots after 12
-        res2 = agent.process_message(conv.id, "is this slot available, if we want appointment after 12")
-        self.assertEqual(res2["status"], "AI")
-        # Must explicitly acknowledge the 12:00 request or list slots
-        self.assertTrue("12:00" in res2["content"] or "no available slots" in res2["content"].lower() or "09:00" in res2["content"])
-        self.assertNotIn("Sorry, I didn't quite catch that", res2["content"])
+            # Turn 2: Question about slots after 12
+            res2 = agent.process_message(conv.id, "is this slot available, if we want appointment after 12")
+            self.assertEqual(res2["status"], "AI")
+            # Must explicitly acknowledge the 12:00 request or list slots
+            self.assertTrue("12:00" in res2["content"] or "no available slots" in res2["content"].lower() or "09:00" in res2["content"])
+            self.assertNotIn("Sorry, I didn't quite catch that", res2["content"])
 
-        # Turn 3: Name input
-        res3 = agent.process_message(conv.id, "Name is Haroon")
-        self.assertEqual(res3["status"], "AI")
-        self.assertIn("Haroon", res3["content"])
-        self.assertTrue("phone" in res3["content"].lower() or "contact" in res3["content"].lower())
+            # Turn 3: Name input
+            res3 = agent.process_message(conv.id, "Name is Haroon")
+            self.assertEqual(res3["status"], "AI")
+            self.assertIn("Haroon", res3["content"])
+            self.assertTrue("phone" in res3["content"].lower() or "contact" in res3["content"].lower())
 
-        # Turn 4: Phone input -> MUST COMPLETE BOOKING SUCCESSFULLY!
-        res4 = agent.process_message(conv.id, "03197155071")
-        self.assertEqual(res4["status"], "AI")
-        self.assertNotIn("Sorry, I didn't quite catch that", res4["content"])
-        self.assertTrue("confirmed" in res4["content"].lower() or "appointment id" in res4["content"].lower())
+            # Turn 4: Phone input -> MUST COMPLETE BOOKING SUCCESSFULLY!
+            res4 = agent.process_message(conv.id, "03197155071")
+            self.assertEqual(res4["status"], "AI")
+            self.assertNotIn("Sorry, I didn't quite catch that", res4["content"])
+            self.assertTrue("confirmed" in res4["content"].lower() or "appointment id" in res4["content"].lower())
 
-        # Verify appointment saved in database!
-        appts = Appointment.query.filter_by(business_id=1).order_by(Appointment.id.desc()).all()
-        self.assertGreaterEqual(len(appts), 1)
-        self.assertEqual(appts[0].customer.name, "Haroon")
-        self.assertEqual(appts[0].customer.phone, "03197155071")
+            # Verify appointment saved in database!
+            appts = Appointment.query.filter_by(business_id=1).order_by(Appointment.id.desc()).all()
+            self.assertGreaterEqual(len(appts), 1)
+            self.assertEqual(appts[0].customer.name, "Haroon")
+            self.assertEqual(appts[0].customer.phone, "03197155071")
 
 if __name__ == "__main__":
     unittest.main()
