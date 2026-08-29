@@ -350,7 +350,7 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         _doc_mention_raw = _extract_doctor_mention(user_content)
         if _doc_mention_raw:
             conv.selected_doctor_id = None
-            conv.awaiting_input = "doctor_choice" 
+            conv.awaiting_input = "doctor_choice"
 
     # 2. Resolve Service using cached roster
     service_roster = BookingService.get_services(conv.business_id)
@@ -984,11 +984,12 @@ class Agent:
                 conv.awaiting_input = "time_choice"
             if args.get("date"):
                 conv.requested_date = str(args["date"])
-            if args.get("doctor_id"):
-                try:
-                    conv.selected_doctor_id = int(args["doctor_id"])
-                except Exception:
-                    pass
+            # NOTE: Do NOT set conv.selected_doctor_id from check_availability args.
+            # The LLM routinely fills doctor_id with a fallback default (e.g. "doc_id or 1")
+            # when no doctor has been selected yet; persisting that default silently
+            # corrupts state.  Doctor selection is handled exclusively by
+            # _resolve_workflow_input (runs before the LLM call) and by the
+            # explicit book_appointment path.
             if args.get("service_id"):
                 try:
                     conv.selected_service_id = int(args["service_id"])
