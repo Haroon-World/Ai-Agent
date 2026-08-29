@@ -901,10 +901,11 @@ class MockAdapter(BaseLLMAdapter):
                 for d in tool_data.get("doctors", []):
                     wk_days = d.get("working_days", [])
                     wk_str = ", ".join(wk_days) if isinstance(wk_days, list) else str(wk_days)
-                    start_str = _fmt_time_ampm(d.get("start_time", "09:00"))
-                    end_str = _fmt_time_ampm(d.get("end_time", "17:00"))
+                    start_str = _fmt_time_ampm(d.get("start_time")) if d.get("start_time") else None
+                    end_str = _fmt_time_ampm(d.get("end_time")) if d.get("end_time") else None
+                    hours_str = f", Hours: {start_str} – {end_str}" if (start_str and end_str) else ""
                     lunch_str = f" | Lunch: {_fmt_time_ampm(d['break_start_time'])}–{_fmt_time_ampm(d['break_end_time'])}" if (d.get("break_start_time") and d.get("break_end_time")) else ""
-                    doc_items.append(f"• **{d['name']}** - {d.get('specialization', 'Dentist')} (Working Days: {wk_str}, Hours: {start_str} – {end_str}{lunch_str})")
+                    doc_items.append(f"• **{d['name']}** - {d.get('specialization', 'Dentist')} (Working Days: {wk_str}{hours_str}{lunch_str})")
                 body = "\n\n".join(doc_items)
                 if lang == "urdu":
                     return {

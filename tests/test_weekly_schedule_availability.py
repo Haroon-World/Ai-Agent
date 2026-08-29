@@ -334,5 +334,141 @@ class TestWeeklyScheduleAndAvailabilityEngine(unittest.TestCase):
             self.assertIn("16:30", res["available_slots"])
             self.assertFalse(res["is_closed"])
 
+    def test_19_doctor_to_dict_omits_stale_flat_hours_when_per_day_schedules_exist(self):
+        """
+        19. Regression: Doctor.to_dict() must NOT expose the legacy 09:00–17:00 flat
+        columns as the current schedule when per-day DoctorSchedule entries exist with
+        different hours (e.g. 17:00–21:30).
+
+        Verifies:
+        1. Doctor.to_dict() returns start_time=None, end_time=None.
+        2. weekly_schedule contains the correct per-day Monday 17:00–21:30 entry.
+        3. BookingService.get_doctors() surfaces the same correct weekly_schedule.
+        4. The doctor-facing response does NOT contain the stale '09:00' / '17:00' hours.
+        5. Availability calculation still uses the real DoctorSchedule values.
+        6. A doctor WITHOUT per-day schedules still falls back to legacy start/end fields.
+        """
+        from services.booking_service import RequestCache
+        from ai.response_generator import _format_doctors
+
+        biz_id = 1
+
+        # -- Create isolated test doctor with intentionally stale legacy flat hours --
+        evening_doc = Doctor(
+            business_id=biz_id,
+            name="Dr. Evening Specialist",
+            specialization="Orthodontics",
+            working_days="Monday,Tuesday",  # legacy column — intentionally stale
+            start_time="09:00",             # legacy column — intentionally stale
+            end_time="17:00",               # legacy column — intentionally stale
+            slot_interval=30,
+            is_active=True,
+        )
+        db.session.add(evening_doc)
+        db.session.flush()
+
+        # Per-day schedules with evening hours (different from legacy 09:00–17:00)
+        sched_mon = DoctorSchedule(
+            doctor_id=evening_doc.id,
+            day_of_week="Monday",
+            is_available=True,
+            start_time="17:00",
+            end_time="21:30",
+        )
+        sched_tue = DoctorSchedule(
+            doctor_id=evening_doc.id,
+            day_of_week="Tuesday",
+            is_available=True,
+            start_time="17:00",
+            end_time="21:30",
+        )
+        db.session.add_all([sched_mon, sched_tue])
+        db.session.commit()
+        RequestCache.clear()
+
+        # 1. Doctor.to_dict() must return None for flat start_time / end_time
+        doc_dict = evening_doc.to_dict()
+        self.assertIsNone(
+            doc_dict["start_time"],
+            "start_time must be None when per-day DoctorSchedule entries exist"
+        )
+        self.assertIsNone(
+            doc_dict["end_time"],
+            "end_time must be None when per-day DoctorSchedule entries exist"
+        )
+
+        # 2. weekly_schedule must carry the correct 17:00–21:30 per-day hours
+        self.assertTrue(len(doc_dict["weekly_schedule"]) > 0)
+        mon_sched = next(
+            (s for s in doc_dict["weekly_schedule"] if s["day_of_week"] == "Monday"), None
+        )
+        self.assertIsNotNone(mon_sched, "weekly_schedule must include Monday")
+        self.assertEqual(mon_sched["start_time"], "17:00")
+        self.assertEqual(mon_sched["end_time"], "21:30")
+        self.assertTrue(mon_sched["is_available"])
+
+        # 3. BookingService.get_doctors() must return correct per-day schedule & None flat hours
+        doctors_list = BookingService.get_doctors(biz_id)
+        doc_entry = next((d for d in doctors_list if d["id"] == evening_doc.id), None)
+        self.assertIsNotNone(doc_entry, "Evening doctor must appear in get_doctors()")
+        self.assertIsNone(doc_entry["start_time"])
+        self.assertIsNone(doc_entry["end_time"])
+        mon_entry = next(
+            (s for s in doc_entry["weekly_schedule"] if s["day_of_week"] == "Monday"), None
+        )
+        self.assertIsNotNone(mon_entry)
+        self.assertEqual(mon_entry["start_time"], "17:00")
+        self.assertEqual(mon_entry["end_time"], "21:30")
+
+        # 4. Doctor-facing response must NOT surface the stale 09:00–17:00 hours
+        formatted = _format_doctors(
+            {"doctors": [doc_entry]},
+            lang="english",
+            user_text_lower="what is dr evening specialist schedule on monday",
+            conv_state={"selected_doctor_id": evening_doc.id},
+        )
+        self.assertNotIn(
+            "09:00 AM – 05:00 PM", formatted,
+            "Response must not show stale legacy 09:00–17:00 hours"
+        )
+        self.assertNotIn(
+            "09:00 AM", formatted,
+            "Response must not show stale legacy start time"
+        )
+        # Per-day schedule output should show 05:00 PM – 09:30 PM
+        self.assertIn("05:00 PM – 09:30 PM", formatted)
+
+        # 5. Availability calculation uses the real DoctorSchedule (17:00–21:30 on Monday)
+        monday_date = self._get_next_date_for_day("Monday")
+        res = BookingService.check_availability(
+            business_id=biz_id,
+            doctor_id=evening_doc.id,
+            date_str=monday_date,
+        )
+        self.assertTrue(res["success"])
+        self.assertIn("17:00", res["available_slots"], "Slots must start at 17:00")
+        self.assertNotIn("09:00", res["available_slots"], "09:00 must NOT appear in slots")
+
+        # 6. A doctor WITHOUT per-day schedules still uses legacy flat fields
+        legacy_doc = Doctor(
+            business_id=biz_id,
+            name="Dr. Legacy Only",
+            specialization="General Dentistry",
+            working_days="Monday,Tuesday",
+            start_time="08:00",
+            end_time="14:00",
+            slot_interval=30,
+            is_active=True,
+        )
+        db.session.add(legacy_doc)
+        db.session.commit()
+        RequestCache.clear()
+
+        legacy_dict = legacy_doc.to_dict()
+        self.assertEqual(legacy_dict["start_time"], "08:00", "Legacy doctor must return its start_time")
+        self.assertEqual(legacy_dict["end_time"], "14:00", "Legacy doctor must return its end_time")
+        self.assertEqual(legacy_dict["weekly_schedule"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

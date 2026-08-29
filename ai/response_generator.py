@@ -626,9 +626,12 @@ def _format_doctors(
     lines = []
     for d in doctors:
         wk_days = d.get("working_days", "Monday to Saturday")
-        st = _fmt_time_ampm(d.get("start_time", "09:00"))
-        et = _fmt_time_ampm(d.get("end_time", "17:00"))
-        lines.append(f"• **{d['name']}** - {d.get('specialization', 'General Dentistry')} (Working Days: {wk_days}, Hours: {st} – {et})")
+        if isinstance(wk_days, list):
+            wk_days = ", ".join(wk_days)
+        st = _fmt_time_ampm(d.get("start_time")) if d.get("start_time") else None
+        et = _fmt_time_ampm(d.get("end_time")) if d.get("end_time") else None
+        hours_part = f", Hours: {st} – {et}" if (st and et) else ""
+        lines.append(f"• **{d['name']}** - {d.get('specialization', 'General Dentistry')} (Working Days: {wk_days}{hours_part})")
 
     docs_body = "\n\n".join(lines)
     if lang == "urdu":
