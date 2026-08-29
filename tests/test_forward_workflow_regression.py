@@ -166,18 +166,21 @@ class TestForwardWorkflowRegression(unittest.TestCase):
         Input: 'My name is Ali and I want Dr Sara tomorrow at 2 PM because I have tooth pain.'
         Expected: name = Ali, doctor = Dr Sara, date = tomorrow, time = 14:00, service = consultation/extraction, missing = phone
         """
+        from tests.test_date_helpers import get_next_open_weekday
+        from unittest.mock import patch
+        expected_date = get_next_open_weekday(self.biz.id, doctor_id=self.doc2.id)
+
         conv = Conversation(business_id=self.biz.id, status="AI")
         db.session.add(conv)
         db.session.commit()
 
-        res = self.agent.process_message(conv.id, "My name is Ali and I want Dr Sara tomorrow at 2 PM because I have tooth pain.")
+        with patch("ai.agent.resolve_date_string", return_value=expected_date):
+            res = self.agent.process_message(conv.id, "My name is Ali and I want Dr Sara tomorrow at 2 PM because I have tooth pain.")
         conv_db = db.session.get(Conversation, conv.id)
 
         self.assertEqual(conv_db.pending_customer_name, "Ali")
         self.assertEqual(conv_db.selected_doctor_id, self.doc2.id)
-        tz = ZoneInfo("Asia/Karachi")
-        expected_tomorrow = (datetime.now(tz).date() + timedelta(days=1)).strftime("%Y-%m-%d")
-        self.assertEqual(conv_db.requested_date, expected_tomorrow)
+        self.assertEqual(conv_db.requested_date, expected_date)
         self.assertEqual(conv_db.requested_time, "14:00")
         self.assertIsNotNone(conv_db.selected_service_id)
         self.assertEqual(conv_db.awaiting_input, "phone")

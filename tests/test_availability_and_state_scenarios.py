@@ -117,7 +117,8 @@ class TestAvailabilityAndStateScenarios(unittest.TestCase):
         self.assertNotEqual(conv_db.requested_date, "2026-08-23", "Must overwrite previous Sunday date")
 
     def test_6_bare_time_slot_selection(self):
-        future_working_date = (datetime.now(ZoneInfo("Asia/Karachi")).date() + timedelta(days=7)).strftime("%Y-%m-%d")
+        from tests.test_date_helpers import get_next_open_weekday
+        future_working_date = get_next_open_weekday(self.biz_id, doctor_id=2)
         conv = Conversation(
             business_id=self.biz_id,
             status="AI",

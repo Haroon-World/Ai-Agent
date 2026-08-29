@@ -2,21 +2,38 @@ import unittest
 from datetime import datetime, date, timedelta
 from app import create_app
 from models import db, Business, Doctor, Service, Conversation, Message, Appointment, DoctorSchedule
+from config.config import Config
+from seed import seed_database
+from services.booking_service import BookingService, _get_business_tz, RequestCache
 from ai.agent import Agent
-from services.booking_service import BookingService, _get_business_tz
+
+
+
+class TestScheduleConfig(Config):
+    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    TESTING = True
+    SECRET_KEY = "test-secret-schedule"
+    LLM_PROVIDER = "mock"
+
 
 class TestWeeklyScheduleAndLanguageParity(unittest.TestCase):
     def setUp(self):
-        self.app = create_app()
-        self.app.config["TESTING"] = True
+        self.app = create_app(TestScheduleConfig)
         self.app_context = self.app.app_context()
         self.app_context.push()
+        db.create_all()
+        seed_database(self.app)
+        RequestCache.clear()
 
         self.agent = Agent(business_id=1, llm_provider="mock")
         self.tz = _get_business_tz(1)
         self.today = datetime.now(self.tz).date()
 
     def tearDown(self):
+        RequestCache.clear()
+        db.session.remove()
+        db.drop_all()
         self.app_context.pop()
 
     def test_case_1_roman_urdu_service_and_doctor_booking(self):
@@ -90,11 +107,13 @@ class TestWeeklyScheduleAndLanguageParity(unittest.TestCase):
         self.assertNotIn("check_availability", [t["name"] for t in res.get("executed_tools", [])])
 
     def test_case_6_tomorrow_slots_query(self):
+        from tests.test_date_helpers import patch_open_date
         conv = Conversation(business_id=1, status="AI", workflow_state="START")
         db.session.add(conv)
         db.session.commit()
 
-        res = self.agent.process_message(conv.id, "dr sara ke kal ke slots kya hain")
+        with patch_open_date(1, doctor_id=2):
+            res = self.agent.process_message(conv.id, "dr sara ke kal ke slots kya hain")
         content = res["content"]
 
         self.assertIn("•", content)

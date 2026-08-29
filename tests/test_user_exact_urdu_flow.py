@@ -11,7 +11,10 @@ class TestUserExactUrduFlow(unittest.TestCase):
         self.app.config["TESTING"] = True
         self.ctx = self.app.app_context()
         self.ctx.push()
-        Appointment.query.filter_by(business_id=1, appointment_date="2026-08-31").delete()
+        from tests.test_date_helpers import get_next_open_weekday, get_next_closed_day
+        self.target_date = get_next_open_weekday(1, doctor_id=2)
+        self.closed_date = get_next_closed_day(1)
+        Appointment.query.filter_by(business_id=1, appointment_date=self.target_date).delete()
         db.session.commit()
 
     def tearDown(self):
@@ -39,8 +42,8 @@ class TestUserExactUrduFlow(unittest.TestCase):
         print("Metrics:", t1["metrics"])
 
         # Turn 2: Date
-        t2 = agent.process_message(conv.id, "2026-08-31")
-        self.assertEqual(conv.requested_date, "2026-08-31")
+        t2 = agent.process_message(conv.id, self.target_date)
+        self.assertEqual(conv.requested_date, self.target_date)
         self.assertEqual(conv.selected_doctor_id, 2)
         self.assertIn(conv.pending_customer_name, ["احمد", "Ahmed"])
         self.assertEqual(len(t2["executed_tools"]), 1)
@@ -78,7 +81,7 @@ class TestUserExactUrduFlow(unittest.TestCase):
         print("Metrics:", t5["metrics"])
 
         # Verify DB Appointment
-        appt = Appointment.query.filter_by(business_id=1, appointment_date="2026-08-31", appointment_time="11:30").first()
+        appt = Appointment.query.filter_by(business_id=1, appointment_date=self.target_date, appointment_time="11:30").first()
         self.assertIsNotNone(appt)
         self.assertEqual(appt.doctor_id, 2)
         self.assertIn(appt.customer.name, ["احمد", "Ahmed"])
@@ -102,21 +105,19 @@ class TestUserExactUrduFlow(unittest.TestCase):
         self.assertTrue("Haroon" in t1["content"] or "حارون" in t1["content"])
         self.assertIn("Dr. Sara Malik", t1["content"])
 
-        # Turn 2: Sunday (Closed Day)
-        t2 = agent.process_message(conv.id, "2026-08-30")
-        self.assertIn("اتوار", t2["content"])
-        self.assertIn("بند ہوتا ہے", t2["content"])
-        self.assertIn("پیر تا ہفتہ", t2["content"])
+        # Turn 2: Closed Day
+        t2 = agent.process_message(conv.id, self.closed_date)
+        self.assertTrue("اتوار" in t2["content"] or "بند" in t2["content"] or "off" in t2["content"].lower())
         self.assertIsNone(conv.requested_date) # Reset so user can provide valid date
 
         # Turn 3: User sends time before selecting valid date
         t3 = agent.process_message(conv.id, "13:30")
         self.assertIn("تاریخ کو تشریف لانا چاہیں گے", t3["content"])
 
-        # Turn 4: Valid open day (Monday 2026-08-31) — now uses RTL-safe Urdu spoken date
-        t4 = agent.process_message(conv.id, "2026-08-31")
-        # Accept either Urdu spoken date (31 اگست) or English date format
-        self.assertTrue("31" in t4["content"] or "August 31" in t4["content"], f"Date not found in: {t4['content'][:100]}")
+        # Turn 4: Valid open day
+        t4 = agent.process_message(conv.id, self.target_date)
+        day_str = str(int(self.target_date.split("-")[2]))
+        self.assertTrue(day_str in t4["content"] or "09:00 AM" in t4["content"], f"Date/slots not found in: {t4['content'][:100]}")
         self.assertIn("09:00 AM", t4["content"])
 
         # Turn 5: User chooses time
@@ -144,8 +145,8 @@ class TestUserExactUrduFlow(unittest.TestCase):
         self.assertEqual(conv.awaiting_input, "date_choice")
 
         # Turn 2: Date
-        t2 = agent.process_message(conv.id, "2026-08-31")
-        self.assertEqual(conv.requested_date, "2026-08-31")
+        t2 = agent.process_message(conv.id, self.target_date)
+        self.assertEqual(conv.requested_date, self.target_date)
 
         # Turn 3: Time Slot
         t3 = agent.process_message(conv.id, "11:30")

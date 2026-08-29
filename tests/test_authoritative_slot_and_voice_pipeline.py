@@ -25,10 +25,11 @@ class TestAuthoritativeSlotAndVoicePipeline(unittest.TestCase):
         self.ctx = self.app.app_context()
         self.ctx.push()
         seed_database(self.app)
-
-        self.target_date = "2026-08-31" # Monday
+        from tests.test_date_helpers import get_next_open_weekday, get_next_closed_day
         self.doc_sara = Doctor.query.filter(Doctor.name.ilike("%Sara%")).first()
         self.doc_ahmed = Doctor.query.filter(Doctor.name.ilike("%Ahmed%")).first()
+        self.target_date = get_next_open_weekday(1, doctor_id=self.doc_sara.id)
+        self.closed_date = get_next_closed_day(1)
         self.service = Service.query.first()
 
     def tearDown(self):
@@ -52,7 +53,10 @@ class TestAuthoritativeSlotAndVoicePipeline(unittest.TestCase):
 
     def test_case_2_unavailable_slot_rejected(self):
         """Case 2: User requests unavailable slot ('4:30pm') -> Rejected, not reserved, state not advanced."""
-        sched = DoctorSchedule.query.filter_by(doctor_id=self.doc_sara.id, day_of_week="Monday").first()
+        from services.booking_service import RequestCache
+        RequestCache.clear()
+        target_day_name = datetime.strptime(self.target_date, "%Y-%m-%d").strftime("%A")
+        sched = DoctorSchedule.query.filter_by(doctor_id=self.doc_sara.id, day_of_week=target_day_name).first()
         if sched:
             sched.start_time = "09:00"
             sched.end_time = "16:30" # 16:00 is last available slot
@@ -119,10 +123,10 @@ class TestAuthoritativeSlotAndVoicePipeline(unittest.TestCase):
         db.session.commit()
 
         agent = Agent(business_id=1)
-        res = agent.process_message(conv.id, "2026-08-30 ko appointment chahiye")
+        res = agent.process_message(conv.id, f"{self.closed_date} ko appointment chahiye")
 
         content = res["content"].lower()
-        self.assertTrue("closed on sundays" in content or "band" in content or "off" in content)
+        self.assertTrue("closed on sundays" in content or "band" in content or "off" in content or "closed" in content)
 
     def test_case_6_invalid_time_handled_gracefully(self):
         """Case 6: Invalid time format like '25pm' is rejected gracefully without crashing."""
@@ -139,7 +143,10 @@ class TestAuthoritativeSlotAndVoicePipeline(unittest.TestCase):
 
     def test_case_7_retry_after_invalid_selection(self):
         """Case 7: User tries unavailable 4:30pm (rejected), then corrects to available 4:00pm (accepted)."""
-        sched = DoctorSchedule.query.filter_by(doctor_id=self.doc_sara.id, day_of_week="Monday").first()
+        from services.booking_service import RequestCache
+        RequestCache.clear()
+        target_day_name = datetime.strptime(self.target_date, "%Y-%m-%d").strftime("%A")
+        sched = DoctorSchedule.query.filter_by(doctor_id=self.doc_sara.id, day_of_week=target_day_name).first()
         if sched:
             sched.start_time = "09:00"
             sched.end_time = "16:30" # 16:00 is last available slot

@@ -87,11 +87,20 @@ class TestTimeSelectionUIRegression(unittest.TestCase):
                 is_active=True
             )
             db.session.add(self.svc2)
-        db.session.commit()
-
         self.agent = Agent(business_id=self.biz.id, llm_provider="mock")
+        self.tz = ZoneInfo("Asia/Karachi")
+        from tests.test_date_helpers import get_next_open_weekday, make_open_date_resolver
+        from unittest.mock import patch
+        self.tomorrow_str = get_next_open_weekday(self.biz.id)
+        resolver = make_open_date_resolver(self.tomorrow_str)
+        self._p_agent = patch("ai.agent.resolve_date_string", side_effect=resolver)
+        self._p_llm = patch("ai.llm_client.resolve_date_string", side_effect=resolver)
+        self._p_agent.start()
+        self._p_llm.start()
 
     def tearDown(self):
+        self._p_agent.stop()
+        self._p_llm.stop()
         db.session.remove()
         db.drop_all()
         self.ctx.pop()
@@ -108,8 +117,7 @@ class TestTimeSelectionUIRegression(unittest.TestCase):
         - no time selector
         - asks only for missing contact information (phone).
         """
-        tz = ZoneInfo("Asia/Karachi")
-        tomorrow_str = (datetime.now(tz).date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_str = self.tomorrow_str
 
         init_res = self.client.post("/api/chat/init")
         conv_id = init_res.get_json()["conversation_id"]
@@ -145,8 +153,7 @@ class TestTimeSelectionUIRegression(unittest.TestCase):
         - time = missing
         - time-slot selector is shown.
         """
-        tz = ZoneInfo("Asia/Karachi")
-        tomorrow_str = (datetime.now(tz).date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_str = self.tomorrow_str
 
         init_res = self.client.post("/api/chat/init")
         conv_id = init_res.get_json()["conversation_id"]
@@ -175,8 +182,7 @@ class TestTimeSelectionUIRegression(unittest.TestCase):
         - time = 14:00
         - no time selector.
         """
-        tz = ZoneInfo("Asia/Karachi")
-        tomorrow_str = (datetime.now(tz).date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_str = self.tomorrow_str
 
         init_res = self.client.post("/api/chat/init")
         conv_id = init_res.get_json()["conversation_id"]
@@ -205,8 +211,7 @@ class TestTimeSelectionUIRegression(unittest.TestCase):
         - user is informed that 2 PM is unavailable
         - alternative slots are shown.
         """
-        tz = ZoneInfo("Asia/Karachi")
-        tomorrow_str = (datetime.now(tz).date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_str = self.tomorrow_str
 
         # Book 14:00 slot to make it unavailable
         cust = Customer(business_id=self.biz.id, name="Booked Patient", phone="03009999999")
@@ -249,8 +254,7 @@ class TestTimeSelectionUIRegression(unittest.TestCase):
         TEST 5:
         After explicit 2 PM selection, history polling must not re-render the time selector.
         """
-        tz = ZoneInfo("Asia/Karachi")
-        tomorrow_str = (datetime.now(tz).date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_str = self.tomorrow_str
 
         init_res = self.client.post("/api/chat/init")
         conv_id = init_res.get_json()["conversation_id"]
@@ -275,8 +279,7 @@ class TestTimeSelectionUIRegression(unittest.TestCase):
         After selecting 2 PM, sending the phone number must complete the normal booking flow
         without asking for time again.
         """
-        tz = ZoneInfo("Asia/Karachi")
-        tomorrow_str = (datetime.now(tz).date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_str = self.tomorrow_str
 
         init_res = self.client.post("/api/chat/init")
         conv_id = init_res.get_json()["conversation_id"]

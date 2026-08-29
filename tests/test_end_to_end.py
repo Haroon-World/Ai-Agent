@@ -44,8 +44,9 @@ class TestEndToEndSuite(unittest.TestCase):
 
     def test_booking_service_and_double_booking_prevention(self):
         """Test booking transaction, reminders, and double booking rejection."""
+        from tests.test_date_helpers import get_next_open_weekday
         biz_id = Config.DEFAULT_BUSINESS_ID
-        tomorrow = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow = get_next_open_weekday(biz_id)
 
         # Check availability
         avail = BookingService.check_availability(business_id=biz_id, doctor_id=1, date_str=tomorrow)
@@ -129,8 +130,9 @@ class TestEndToEndSuite(unittest.TestCase):
 
     def test_reschedule_and_cancellation(self):
         """Test appointment rescheduling and cancellation workflows."""
+        from tests.test_date_helpers import get_next_open_weekday
         biz_id = Config.DEFAULT_BUSINESS_ID
-        target_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        target_date = get_next_open_weekday(biz_id, doctor_id=2)
 
         book_res = BookingService.book_appointment(
             business_id=biz_id,
@@ -145,7 +147,7 @@ class TestEndToEndSuite(unittest.TestCase):
         appt_id = book_res["appointment_id"]
 
         # Reschedule
-        new_date = (date.today() + timedelta(days=2)).strftime("%Y-%m-%d")
+        new_date = get_next_open_weekday(biz_id, from_date=target_date, doctor_id=2)
         reschedule_res = BookingService.reschedule_appointment(
             business_id=biz_id,
             appointment_id=appt_id,
@@ -167,6 +169,7 @@ class TestEndToEndSuite(unittest.TestCase):
 
     def test_agent_workflow_and_tool_dispatcher(self):
         """Test full Agent conversation loop with tool dispatching."""
+        from tests.test_date_helpers import get_next_open_weekday
         biz_id = Config.DEFAULT_BUSINESS_ID
         agent = Agent(business_id=biz_id, llm_provider="mock")
 
@@ -181,7 +184,7 @@ class TestEndToEndSuite(unittest.TestCase):
         self.assertIn("dental services", resp1["content"].lower())
 
         # 3. Book cleaning
-        tomorrow = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow = get_next_open_weekday(biz_id)
         resp2 = agent.process_message(conv.id, f"Please book a cleaning for Tariq at 10:00 on {tomorrow}, phone 03001234567")
         self.assertTrue(any(t["name"] == "book_appointment" for t in resp2.get("executed_tools", [])))
         self.assertIn("confirmed", resp2["content"].lower())

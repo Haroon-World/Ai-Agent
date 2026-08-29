@@ -55,9 +55,13 @@ class TestDatePickerScheduleFiltering(unittest.TestCase):
             db.session.add_all(sara_schedules)
 
         db.session.commit()
+        from services.booking_service import RequestCache
+        RequestCache.clear()
         self.agent = Agent(business_id=1, llm_provider="mock")
 
     def tearDown(self):
+        from services.booking_service import RequestCache
+        RequestCache.clear()
         db.session.remove()
         db.drop_all()
         self.ctx.pop()

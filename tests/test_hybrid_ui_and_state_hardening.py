@@ -30,6 +30,8 @@ class TestHybridUIAndStateHardening(unittest.TestCase):
         User provides Doctor, Service, Date, and Time in a single Roman Urdu turn.
         System must extract all 4, NOT ask for doctor/service/date/time, and ask ONLY for customer full name.
         """
+        from tests.test_date_helpers import patch_open_date
+
         conv = Conversation(business_id=1, status="AI", intent="BOOK_APPOINTMENT", workflow_state="START")
         db.session.add(conv)
         db.session.commit()
@@ -38,28 +40,29 @@ class TestHybridUIAndStateHardening(unittest.TestCase):
 
         # Multi-parameter input
         msg = "Mujhe Dr Sara ke sath kal cleaning ki appointment chahiye, 10 baje."
-        res = agent.process_message(conv.id, msg)
+        with patch_open_date(1, doctor_id=2) as expected_date:
+            res = agent.process_message(conv.id, msg)
 
         # Verify state parameters resolved from DB
         db.session.refresh(conv)
         self.assertEqual(conv.selected_doctor_id, 2)  # Dr. Sara Malik
         self.assertEqual(conv.selected_service_id, 2) # Dental Cleaning & Scaling
         self.assertEqual(conv.requested_time, "10:00")
-        expected_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
         self.assertEqual(conv.requested_date, expected_date)
 
     def test_multi_turn_flow_with_name_and_phone(self):
         """
         Verify complete multi-turn flow through name and phone to appointment creation.
         """
+        from tests.test_date_helpers import get_next_open_weekday
         conv = Conversation(business_id=1, status="AI", intent="BOOK_APPOINTMENT", workflow_state="START")
         db.session.add(conv)
         db.session.commit()
 
         agent = Agent(business_id=1, llm_provider="mock")
 
-        # Turn 1: Specify booking details on working day (tomorrow)
-        target_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        # Turn 1: Specify booking details on working day
+        target_date = get_next_open_weekday(1, doctor_id=2)
         msg1 = f"Mujhe Dr Sara ke sath {target_date} ko cleaning ki appointment chahiye, 10 baje."
         r1 = agent.process_message(conv.id, msg1)
         self.assertEqual(r1["status"], "AI")

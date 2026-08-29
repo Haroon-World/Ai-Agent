@@ -163,11 +163,13 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         - Check real availability and book directly.
         - No service/doctor/date/time selector.
         """
+        from tests.test_date_helpers import patch_open_date
         conv = Conversation(business_id=self.biz.id, status="AI")
         db.session.add(conv)
         db.session.commit()
 
-        res = self.agent.process_message(conv.id, "Book me with Dr Sara tomorrow at 10 AM. My name is Ali and my number is 03123456789.")
+        with patch_open_date(self.biz.id, doctor_id=self.doc2.id):
+            res = self.agent.process_message(conv.id, "Book me with Dr Sara tomorrow at 10 AM. My name is Ali and my number is 03123456789.")
         conv = db.session.get(Conversation, conv.id)
 
         self.assertEqual(conv.workflow_state, "BOOKED")
@@ -255,13 +257,16 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         - Exactly ONE final confirmation containing: customer name, doctor, service, date, time, price, appointment ID.
         - No additional service/doctor/date/time selector appears after successful booking.
         """
+        from tests.test_date_helpers import get_next_open_weekday
+        target_date = get_next_open_weekday(self.biz.id, doctor_id=self.doc2.id)
+
         conv = Conversation(
             business_id=self.biz.id,
             status="AI",
             selected_service_id=self.svc1.id,
             selected_doctor_id=self.doc2.id,
             pending_customer_name="Ali",
-            requested_date="2026-08-28",
+            requested_date=target_date,
             requested_time="14:00",
             awaiting_input="phone"
         )
@@ -276,7 +281,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         self.assertIn("confirmed", content)
         self.assertIn("ali", content)
         self.assertIn("sara", content)
-        self.assertIn("2026-08-28", content)
+        self.assertIn(target_date.lower(), content)
         self.assertIn("02:00 pm", content)
         self.assertIn("appointment id", content)
         self.assertIsNone(res["ui_action"])

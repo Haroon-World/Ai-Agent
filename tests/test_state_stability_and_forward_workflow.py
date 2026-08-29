@@ -70,8 +70,18 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         db.session.commit()
 
         self.agent = Agent(business_id=self.biz.id, llm_provider="mock")
+        from tests.test_date_helpers import get_next_open_weekday, make_open_date_resolver
+        from unittest.mock import patch
+        self.open_date = get_next_open_weekday(self.biz.id, doctor_id=self.doc2.id)
+        resolver = make_open_date_resolver(self.open_date)
+        self._p_agent = patch("ai.agent.resolve_date_string", side_effect=resolver)
+        self._p_llm = patch("ai.llm_client.resolve_date_string", side_effect=resolver)
+        self._p_agent.start()
+        self._p_llm.start()
 
     def tearDown(self):
+        self._p_agent.stop()
+        self._p_llm.stop()
         db.session.remove()
         db.drop_all()
         self.ctx.pop()
@@ -248,9 +258,7 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         db.session.add(conv)
         db.session.commit()
 
-        tomorrow = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
-        if (date.today() + timedelta(days=1)).weekday() == 6: # Sunday
-            tomorrow = (date.today() + timedelta(days=2)).strftime("%Y-%m-%d")
+        tomorrow = self.open_date
 
         resp = self.agent.process_message(conv.id, f"Book me with Dr Sara on {tomorrow} at 10 AM. My name is Ali and my phone is 03123456789.")
         conv_after = db.session.get(Conversation, conv.id)

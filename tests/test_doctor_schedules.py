@@ -109,7 +109,8 @@ class TestDoctorSchedulesAndTypoIntent(unittest.TestCase):
 
     def test_doctor_break_and_slot_gaps(self):
         """Test that availability accounts for doctor slot_interval (30m) and excludes break times (13:00-14:00)."""
-        target_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        from tests.test_date_helpers import get_next_open_weekday
+        target_date = get_next_open_weekday(1, doctor_id=1)
         avail = BookingService.check_availability(business_id=1, doctor_id=1, service_id=1, date_str=target_date)
 
         self.assertIn("results", avail)
@@ -125,7 +126,8 @@ class TestDoctorSchedulesAndTypoIntent(unittest.TestCase):
 
     def test_booking_and_cancellation_slot_recovery(self):
         """Test that booking reserves a slot, and cancelling immediately frees up the slot for other clients."""
-        target_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
+        from tests.test_date_helpers import get_next_open_weekday
+        target_date = get_next_open_weekday(1, doctor_id=1)
         chosen_time = "10:00"
 
         # 1. Book appointment

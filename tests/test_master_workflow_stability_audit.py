@@ -88,9 +88,18 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         db.session.commit()
 
         self.tz = ZoneInfo("Asia/Karachi")
-        self.tomorrow_str = (datetime.now(self.tz).date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        from tests.test_date_helpers import get_next_open_weekday, make_open_date_resolver
+        from unittest.mock import patch
+        self.tomorrow_str = get_next_open_weekday(self.biz.id)
+        resolver = make_open_date_resolver(self.tomorrow_str)
+        self._p_agent = patch("ai.agent.resolve_date_string", side_effect=resolver)
+        self._p_llm = patch("ai.llm_client.resolve_date_string", side_effect=resolver)
+        self._p_agent.start()
+        self._p_llm.start()
 
     def tearDown(self):
+        self._p_agent.stop()
+        self._p_llm.stop()
         db.session.remove()
         db.drop_all()
         self.ctx.pop()
@@ -322,11 +331,12 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
     def test_23_explicit_date_change(self):
         c_id = self._init_conv()
         self._send(c_id, f"I want Dr Sara on {self.tomorrow_str} at 2 PM")
-        # Change date to today
-        today_str = datetime.now(self.tz).date().strftime("%Y-%m-%d")
-        d = self._send(c_id, "Actually I want to change date to today")
+        # Change date to next open weekday
+        from tests.test_date_helpers import get_next_open_weekday
+        target_open_date = get_next_open_weekday(self.biz.id, from_date=self.tomorrow_str, doctor_id=self.doc2.id)
+        d = self._send(c_id, f"Actually I want to change date to {target_open_date}")
         conv = db.session.get(Conversation, c_id)
-        self.assertEqual(conv.requested_date, today_str)
+        self.assertEqual(conv.requested_date, target_open_date)
 
     # 24. Explicit time change
     def test_24_explicit_time_change(self):

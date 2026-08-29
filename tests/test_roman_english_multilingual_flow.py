@@ -10,7 +10,9 @@ class TestRomanEnglishMultilingualFlow(unittest.TestCase):
         self.app.config["TESTING"] = True
         self.ctx = self.app.app_context()
         self.ctx.push()
-        Appointment.query.filter_by(business_id=1, appointment_date="2026-08-31").delete()
+        from tests.test_date_helpers import get_next_open_weekday
+        self.target_date = get_next_open_weekday(1, doctor_id=2)
+        Appointment.query.filter_by(business_id=1, appointment_date=self.target_date).delete()
         db.session.commit()
 
     def tearDown(self):
@@ -61,8 +63,8 @@ class TestRomanEnglishMultilingualFlow(unittest.TestCase):
         print(t1["content"])
 
         # Turn 2: Date
-        t2 = agent.process_message(conv.id, "2026-08-31")
-        self.assertEqual(conv.requested_date, "2026-08-31")
+        t2 = agent.process_message(conv.id, self.target_date)
+        self.assertEqual(conv.requested_date, self.target_date)
         self.assertIn("available appointment slots yeh hain", t1["content"] + t2["content"])
         self.assertIn("Dr. Sara Malik", t2["content"])
         print("\n--- ROMAN URDU TURN 2 ---")

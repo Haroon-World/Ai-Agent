@@ -1059,23 +1059,26 @@ class TestFuzzyDoctorServiceMatching(unittest.TestCase):
         db.session.add(conv)
         db.session.commit()
 
+        from tests.test_date_helpers import patch_open_date
+
         # Turn 1: establish a requested_date (as in the real transcript,
         # this came from an earlier booking message), then ask to see
         # doctors, then pick one WITH a date already known — this is what
         # actually triggers check_availability and moves awaiting_input
         # from "doctor_choice" to "time_choice".
-        agent.process_message(conv.id, "I'd like to book for tomorrow")
-        agent.process_message(conv.id, "tell me what doctors are available")
-        agent.process_message(conv.id, "dr sara")
-        conv_db = db.session.get(Conversation, conv.id)
-        self.assertEqual(conv_db.awaiting_input, "time_choice")
-        self.assertEqual(conv_db.selected_doctor_id, 2)
+        with patch_open_date(biz_id, doctor_id=2):
+            agent.process_message(conv.id, "I'd like to book for tomorrow")
+            agent.process_message(conv.id, "tell me what doctors are available")
+            agent.process_message(conv.id, "dr sara")
+            conv_db = db.session.get(Conversation, conv.id)
+            self.assertEqual(conv_db.awaiting_input, "time_choice")
+            self.assertEqual(conv_db.selected_doctor_id, 2)
 
-        # Turn 2: a bare doctor-name spelling variant sent AFTER
-        # awaiting_input has moved past "doctor_choice" — must still be
-        # recognized as a doctor reference, not the customer's own name.
-        resp = agent.process_message(conv.id, "ahmad")
-        conv_db = db.session.get(Conversation, conv.id)
+            # Turn 2: a bare doctor-name spelling variant sent AFTER
+            # awaiting_input has moved past "doctor_choice" — must still be
+            # recognized as a doctor reference, not the customer's own name.
+            resp = agent.process_message(conv.id, "ahmad")
+            conv_db = db.session.get(Conversation, conv.id)
 
         self.assertNotIn("Thank you, Ahmad", resp.get("content", ""),
                           "'ahmad' must never be treated as the customer's own name, at any conversation stage")
