@@ -717,6 +717,39 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
             active_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 
         date_options = []
+
+        # Check if today qualifies as a tappable option (working day with real remaining slots)
+        today_day_name = today.strftime("%A")
+        if today_day_name in active_days:
+            today_str = today.strftime("%Y-%m-%d")
+            if doc:
+                # Specific doctor selected — check that doctor's remaining slots today
+                today_avail = BookingService.check_availability(
+                    business_id=conv.business_id, doctor_id=doc["id"], date_str=today_str
+                )
+                today_has_slots = today_avail.get("success") and len(today_avail.get("available_slots", [])) > 0
+            else:
+                # No doctor selected — check if ANY active doctor has remaining slots today
+                today_has_slots = False
+                for d in doctor_roster:
+                    d_avail = BookingService.check_availability(
+                        business_id=conv.business_id, doctor_id=d["id"], date_str=today_str
+                    )
+                    if d_avail.get("success") and len(d_avail.get("available_slots", [])) > 0:
+                        today_has_slots = True
+                        break
+
+            if today_has_slots:
+                date_options.append({
+                    "id": f"date_{today.strftime('%Y%m%d')}",
+                    "title": "Today",
+                    "label": "Today",
+                    "value": today_str,
+                    "day": today_day_name,
+                    "display": f"Today ({today_day_name})"
+                })
+
+        # Future days (offset 1..21) — existing logic preserved
         offset = 1
         while len(date_options) < 5 and offset <= 21:
             target_d = today + dt_td(days=offset)

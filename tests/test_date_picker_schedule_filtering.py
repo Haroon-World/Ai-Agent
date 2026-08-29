@@ -1,4 +1,5 @@
 import unittest
+import freezegun
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from app import create_app
@@ -228,6 +229,164 @@ class TestDatePickerScheduleFiltering(unittest.TestCase):
         )
         self.assertTrue(book_res["success"])
         self.assertEqual(book_res["appointment"]["status"], "CONFIRMED")
+
+
+    def test_6_today_appears_in_date_options_during_working_hours_with_doctor_selected(self):
+        """
+        Regression Test 6: When frozen at 11:00 AM on a working day (Monday) with
+        a doctor selected, 'Today' must appear as the FIRST date option.
+        """
+        # Monday 2026-08-31 11:00 AM PKT — Dr Ahmed works Mondays
+        with freezegun.freeze_time("2026-08-31 11:00:00+05:00"):
+            from services.booking_service import RequestCache
+            RequestCache.clear()
+
+            conv = Conversation(
+                business_id=1,
+                status="AI",
+                intent="BOOK_APPOINTMENT",
+                workflow_state="COLLECTING_INFO",
+                selected_service_id=1,
+                selected_doctor_id=1,
+                awaiting_input="date_choice"
+            )
+            db.session.add(conv)
+            db.session.commit()
+
+            ui_action = _build_ui_action(conv)
+            self.assertIsNotNone(ui_action)
+            self.assertEqual(ui_action["type"], "date_selection")
+
+            options = ui_action["options"]
+            self.assertGreaterEqual(len(options), 2)
+            self.assertEqual(options[0]["title"], "Today", "Today must be first option")
+            self.assertEqual(options[0]["value"], "2026-08-31")
+            self.assertEqual(options[0]["day"], "Monday")
+            # Dr Ahmed's next working day after Monday is Friday (Tue/Wed/Thu closed)
+            self.assertEqual(options[1]["day"], "Friday")
+
+    def test_7_today_excluded_from_date_options_after_closing_time(self):
+        """
+        Regression Test 7: When frozen at 6:00 PM (after closing) on a working day,
+        'Today' must NOT appear in the date options.
+        """
+        # Monday 2026-08-31 18:00 PKT — after Dr Ahmed's 17:00 closing
+        with freezegun.freeze_time("2026-08-31 18:00:00+05:00"):
+            from services.booking_service import RequestCache
+            RequestCache.clear()
+
+            conv = Conversation(
+                business_id=1,
+                status="AI",
+                intent="BOOK_APPOINTMENT",
+                workflow_state="COLLECTING_INFO",
+                selected_service_id=1,
+                selected_doctor_id=1,
+                awaiting_input="date_choice"
+            )
+            db.session.add(conv)
+            db.session.commit()
+
+            ui_action = _build_ui_action(conv)
+            self.assertIsNotNone(ui_action)
+            self.assertEqual(ui_action["type"], "date_selection")
+
+            options = ui_action["options"]
+            titles = [o["title"] for o in options]
+            self.assertNotIn("Today", titles, "Today must NOT appear after closing time")
+            # Dr Ahmed's next working day after Monday is Friday (Tue/Wed/Thu closed)
+            self.assertEqual(options[0]["day"], "Friday")
+
+    def test_8_today_appears_no_doctor_selected_during_working_hours(self):
+        """
+        Regression Test 8: No doctor selected, during working hours.
+        'Today' should appear if ANY active doctor has remaining slots today.
+        """
+        # Monday 2026-08-31 11:00 AM PKT — both doctors work Mondays
+        with freezegun.freeze_time("2026-08-31 11:00:00+05:00"):
+            from services.booking_service import RequestCache
+            RequestCache.clear()
+
+            conv = Conversation(
+                business_id=1,
+                status="AI",
+                intent="BOOK_APPOINTMENT",
+                workflow_state="COLLECTING_INFO",
+                selected_service_id=None,
+                selected_doctor_id=None,
+                awaiting_input="date_choice"
+            )
+            db.session.add(conv)
+            db.session.commit()
+
+            ui_action = _build_ui_action(conv)
+            self.assertIsNotNone(ui_action)
+            self.assertEqual(ui_action["type"], "date_selection")
+
+            options = ui_action["options"]
+            self.assertEqual(options[0]["title"], "Today", "Today must be first option when any doctor has slots")
+            self.assertEqual(options[0]["value"], "2026-08-31")
+
+    def test_9_today_excluded_no_doctor_selected_after_closing(self):
+        """
+        Regression Test 9: No doctor selected, after closing time.
+        'Today' should NOT appear since no doctor has remaining slots.
+        """
+        with freezegun.freeze_time("2026-08-31 18:00:00+05:00"):
+            from services.booking_service import RequestCache
+            RequestCache.clear()
+
+            conv = Conversation(
+                business_id=1,
+                status="AI",
+                intent="BOOK_APPOINTMENT",
+                workflow_state="COLLECTING_INFO",
+                selected_service_id=None,
+                selected_doctor_id=None,
+                awaiting_input="date_choice"
+            )
+            db.session.add(conv)
+            db.session.commit()
+
+            ui_action = _build_ui_action(conv)
+            self.assertIsNotNone(ui_action)
+            self.assertEqual(ui_action["type"], "date_selection")
+
+            options = ui_action["options"]
+            titles = [o["title"] for o in options]
+            self.assertNotIn("Today", titles, "Today must NOT appear after closing when no doctor selected")
+
+    def test_10_today_excluded_on_closed_day_sunday(self):
+        """
+        Regression Test 10: On Sunday (closed for all doctors), 'Today' must NOT appear.
+        """
+        # Sunday 2026-09-06 11:00 AM PKT — no doctor works Sundays
+        with freezegun.freeze_time("2026-09-06 11:00:00+05:00"):
+            from services.booking_service import RequestCache
+            RequestCache.clear()
+
+            conv = Conversation(
+                business_id=1,
+                status="AI",
+                intent="BOOK_APPOINTMENT",
+                workflow_state="COLLECTING_INFO",
+                selected_service_id=1,
+                selected_doctor_id=1,
+                awaiting_input="date_choice"
+            )
+            db.session.add(conv)
+            db.session.commit()
+
+            ui_action = _build_ui_action(conv)
+            self.assertIsNotNone(ui_action)
+            self.assertEqual(ui_action["type"], "date_selection")
+
+            options = ui_action["options"]
+            titles = [o["title"] for o in options]
+            self.assertNotIn("Today", titles, "Today must NOT appear on a closed day (Sunday)")
+            # First option should be Tomorrow (Monday)
+            self.assertEqual(options[0]["title"], "Tomorrow")
+            self.assertEqual(options[0]["day"], "Monday")
 
 
 if __name__ == "__main__":
