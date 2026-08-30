@@ -503,7 +503,7 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
     # Roman Urdu & English patterns
     name_patterns = [
         (r'(?:mera\s+naam|meray\s+naam|naam\s+hai|naam\s+hy)\s+([a-zA-Z]+)', True),
-        (r'(?:my\s+(?:own\s+)?name\s+is\s+|name\s+is\s+|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|name\s*:\s*)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
+        (r'(?:my\s+(?:own\s+)?name\s+is\s+|name\s+is\s+|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|name\s*:\s*|\bname\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
         (r'(?:booking|appointment|cleaning|checkup|consultation|service)?\s*for\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', False)
     ]
     for np, is_explicit_self in name_patterns:
@@ -1097,7 +1097,42 @@ class MockAdapter(BaseLLMAdapter):
                 }
 
         # Check Cancellation Request FIRST
-        if any(w in user_text for w in ["cancel booking", "cancel appointment", "cancel my appointment", "cancel my booking"]):
+        cancel_keywords = [
+            "cancel booking", "cancel appointment", "cancel my appointment", "cancel my booking",
+            "appointment cancel", "booking cancel", "cancel kr do", "cancel kar do", "cancel kar dein",
+            "cancel kardein", "cancel krdein", "cancel kardo", "cancel please", "please cancel",
+            "کینسل", "منسوخ"
+        ]
+        if any(w in user_text for w in cancel_keywords) or (
+            "cancel" in user_text and any(w in user_text for w in ["appointment", "booking", "slot", "meri", "my"])
+        ):
+            from models import Customer, Appointment
+            # Check if an active appointment exists in DB to cancel
+            cust_phone = effective_phone or conversation_state.get("pending_customer_phone")
+            existing_appt = None
+            if cust_phone:
+                cust = Customer.query.filter_by(phone=cust_phone.strip()).first()
+                if cust:
+                    existing_appt = Appointment.query.filter_by(
+                        customer_id=cust.id, status="CONFIRMED"
+                    ).order_by(Appointment.created_at.desc()).first()
+            if not existing_appt:
+                existing_appt = Appointment.query.filter_by(
+                    status="CONFIRMED"
+                ).order_by(Appointment.created_at.desc()).first()
+
+            if existing_appt:
+                return {
+                    "content": f"Cancelling your appointment #{existing_appt.id}...",
+                    "tool_calls": [{
+                        "name": "cancel_appointment",
+                        "arguments": {
+                            "appointment_id": existing_appt.id,
+                            "reason": "Customer cancellation request"
+                        }
+                    }]
+                }
+
             if lang == "urdu":
                 return {
                     "content": "آپ کی بکنگ کی درخواست منسوخ کر دی گئی ہے۔ جب بھی آپ دوبارہ اپائنٹمنٹ لینا چاہیں، مجھے ضرور بتائیے گا!",
@@ -1946,24 +1981,31 @@ class MockAdapter(BaseLLMAdapter):
                 "tool_calls": []
             }
 
-        # Already booked confirmation message
+        # Already booked confirmation message (only when user is not making a new booking request)
         if workflow_state == "BOOKED":
-            effective_doc_name = doc_name or (doctor_roster[0]["name"] if doctor_roster else "our practicing dentist")
-            chosen_time = time_token or req_time or "09:00"
-            if lang == "urdu":
+            is_ack = any(w in user_text for w in ["confirm", "yes", "yeah", "sure", "ok", "okay", "haan", "theek", "thanks", "thank you", "done", "alright"])
+            has_new_booking_request = not is_ack and (
+                (doc_id and doc_id != conversation_state.get("selected_doctor_id")) or
+                time_token or target_date_str or
+                any(w in user_text for w in ["naya", "nayi", "new", "another", "dobara", "doosri"])
+            )
+            if not has_new_booking_request:
+                effective_doc_name = doc_name or (doctor_roster[0]["name"] if doctor_roster else "our practicing dentist")
+                chosen_time = time_token or req_time or "09:00"
+                if lang == "urdu":
+                    return {
+                        "content": f"🎉 **آپ کی اپائنٹمنٹ پہلے ہی تصدیق شدہ ہے!**\n\n• ڈاکٹر: {effective_doc_name}\n• تاریخ اور وقت: {effective_date} بوقت {_fmt_time_ampm(chosen_time)}\n• مریض کا نام: {effective_name or 'Ahmed'}\n• فون نمبر: {effective_phone or '03187538771'}",
+                        "tool_calls": []
+                    }
+                elif lang == "roman_urdu":
+                    return {
+                        "content": f"🎉 **Aap ki appointment already confirmed hai!**\n\n• Doctor: {effective_doc_name}\n• Date & Time: {effective_date} ko {_fmt_time_ampm(chosen_time)}\n• Patient: {effective_name or 'Ahmed'}\n• Phone: {effective_phone or '03187538771'}",
+                        "tool_calls": []
+                    }
                 return {
-                    "content": f"🎉 **آپ کی اپائنٹمنٹ تصدیق شدہ ہے!**\n\n• ڈاکٹر: {effective_doc_name}\n• تاریخ اور وقت: {effective_date} بوقت {_fmt_time_ampm(chosen_time)}\n• مریض کا نام: {effective_name or 'Ahmed'}\n• فون نمبر: {effective_phone or '03187538771'}",
+                    "content": f"🎉 **Your appointment is already confirmed!**\n\n• Doctor: {effective_doc_name}\n• Date & Time: {effective_date} at {_fmt_time_ampm(chosen_time)}\n• Patient: {effective_name}\n• Phone: {effective_phone}",
                     "tool_calls": []
                 }
-            elif lang == "roman_urdu":
-                return {
-                    "content": f"🎉 **Aap ki appointment already confirmed hai!**\n\n• Doctor: {effective_doc_name}\n• Date & Time: {effective_date} ko {_fmt_time_ampm(chosen_time)}\n• Patient: {effective_name or 'Ahmed'}\n• Phone: {effective_phone or '03187538771'}",
-                    "tool_calls": []
-                }
-            return {
-                "content": f"🎉 **Your appointment is confirmed!**\n\n• Doctor: {effective_doc_name}\n• Date & Time: {effective_date} at {_fmt_time_ampm(chosen_time)}\n• Patient: {effective_name}\n• Phone: {effective_phone}",
-                "tool_calls": []
-            }
 
         # Case C: Both name and phone are available -> proceed to book
         if effective_phone and effective_name and (req_time or time_token or target_date_str) and effective_date:

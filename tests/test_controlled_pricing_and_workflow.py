@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, date, timedelta
 from app import create_app
 from config.config import Config
-from models import db, Business, Doctor, Service, Appointment, Conversation, Message
+from models import db, Business, Doctor, Service, Appointment, Conversation, Message, Customer
 from ai.agent import Agent
 from services.booking_service import BookingService
 
@@ -273,6 +273,115 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
         conv = db.session.get(Conversation, conv.id)
         self.assertEqual(conv.status, "HUMAN")
         self.assertIn("reception", res["content"].lower())
+
+    def test_g_cancel_and_rebook_in_same_conversation(self):
+        """
+        Test G — Cancel and rebook in same conversation:
+        1. Book confirmed appointment with Dr. Ahmed Khan.
+        2. Send Roman Urdu cancellation ("meri appointment cancel kr do").
+           Verifies cancel_appointment is executed and status becomes CANCELLED in DB.
+        3. Send new booking request with same details ("meri sari detail wohi hai, Dr Sara ke sath kal 3 baje ki appointment rakh dein").
+           Verifies the AI does not falsely claim the new appointment is confirmed before booking.
+        4. Confirm booking -> verifies a real NEW row for Dr. Sara is created in Appointment table,
+           and the original CANCELLED row is preserved.
+        """
+        import freezegun
+        from services.booking_service import RequestCache
+
+        with freezegun.freeze_time("2026-08-31 10:00:00+05:00"):
+            RequestCache.clear()
+            conv = Conversation(business_id=1, status="AI", workflow_state="START")
+            db.session.add(conv)
+            db.session.commit()
+
+            # Step 1: Pre-book appointment with Dr. Ahmed Khan
+            cust = Customer(business_id=1, name="Ali Khan", phone="03001234567")
+            db.session.add(cust)
+            db.session.flush()
+
+            appt1 = Appointment(
+                business_id=1,
+                customer_id=cust.id,
+                doctor_id=1,
+                service_id=1,
+                appointment_date="2026-09-01",
+                appointment_time="10:00",
+                status="CONFIRMED"
+            )
+            db.session.add(appt1)
+            conv.customer_id = cust.id
+            conv.workflow_state = "BOOKED"
+            conv.selected_doctor_id = 1
+            conv.selected_service_id = 1
+            conv.requested_date = "2026-09-01"
+            conv.requested_time = "10:00"
+            conv.pending_customer_name = "Ali Khan"
+            conv.pending_customer_phone = "03001234567"
+            db.session.commit()
+
+            # Step 2: Send cancellation
+            r2 = self.agent.process_message(conv.id, "meri appointment cancel kr do")
+            self.assertEqual(r2["status"], "AI")
+            self.assertIn("cancel_appointment", [t["name"] for t in r2.get("executed_tools", [])])
+            appt1_db = db.session.get(Appointment, appt1.id)
+            self.assertEqual(appt1_db.status, "CANCELLED")
+
+            # Step 3: Rebook with Dr. Sara at 15:00 tomorrow in same conversation
+            r3 = self.agent.process_message(conv.id, "meri sari detail wohi hai, Dr Sara ke sath kal 3 baje ki appointment rakh dein")
+            self.assertEqual(r3["status"], "AI")
+            # Must NOT claim appointment is confirmed yet
+            self.assertNotIn("Aap ki appointment confirm ho gayi hai", r3["content"])
+            self.assertNotIn("Your appointment has been successfully booked", r3["content"])
+
+            # Step 4: Confirm booking
+            r4 = self.agent.process_message(conv.id, "haan confirm kar dein")
+            self.assertEqual(r4["status"], "AI")
+            self.assertIn("book_appointment", [t["name"] for t in r4.get("executed_tools", [])])
+            self.assertTrue("confirm" in r4["content"].lower() or "confirmed" in r4["content"].lower())
+
+            # Verify Database rows
+            appts = Appointment.query.filter_by(business_id=1, customer_id=cust.id).order_by(Appointment.id.asc()).all()
+            self.assertEqual(len(appts), 2, "Must be 2 appointments: 1 cancelled, 1 newly confirmed")
+            self.assertEqual(appts[0].id, appt1.id)
+            self.assertEqual(appts[0].status, "CANCELLED")
+            self.assertEqual(appts[0].doctor_id, 1)
+
+            self.assertEqual(appts[1].status, "CONFIRMED")
+            self.assertEqual(appts[1].doctor_id, 2)
+            self.assertEqual(appts[1].appointment_date, "2026-09-01")
+            self.assertEqual(appts[1].appointment_time, "15:00")
+
+    def test_h_reschedule_cancelled_appointment_rejected(self):
+        """
+        Test H — Rescheduling a CANCELLED appointment must be rejected by BookingService.
+        """
+        target_date = self._next_working_date(2)
+        res1 = BookingService.book_appointment(
+            business_id=1,
+            customer_name="Test User",
+            customer_phone="03001122334",
+            doctor_id=2,
+            service_id=1,
+            appointment_date=target_date,
+            appointment_time="11:00"
+        )
+        self.assertTrue(res1["success"])
+        appt_id = res1["appointment_id"]
+
+        # Cancel
+        res_cancel = BookingService.cancel_appointment(1, appt_id)
+        self.assertTrue(res_cancel["success"])
+
+        # Attempt to reschedule cancelled appointment
+        res_reschedule = BookingService.reschedule_appointment(
+            business_id=1,
+            appointment_id=appt_id,
+            new_date=target_date,
+            new_time="12:00"
+        )
+        self.assertFalse(res_reschedule["success"])
+        self.assertIn("cannot reschedule cancelled appointment", res_reschedule["error"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

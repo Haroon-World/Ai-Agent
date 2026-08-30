@@ -426,6 +426,19 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
             else:
                 conv.awaiting_input = "date_choice"
 
+    # Ensure customer info from linked customer record is carried over if not yet populated
+    if conv.customer:
+        if not conv.pending_customer_name and conv.customer.name:
+            conv.pending_customer_name = conv.customer.name
+        if not conv.pending_customer_phone and conv.customer.phone:
+            conv.pending_customer_phone = conv.customer.phone
+
+    # If in BOOKED state and user initiates a new booking request with new parameters
+    if conv.workflow_state == "BOOKED":
+        is_ack = any(k in text_lower for k in ["confirm", "yes", "yeah", "sure", "ok", "okay", "haan", "theek", "thanks", "thank you", "done", "alright"])
+        if not is_ack and (matched_doc or parsed_date or _extract_time_token(user_content) or any(w in text_lower for w in ["naya", "nayi", "new", "another", "dobara", "doosri"])):
+            conv.workflow_state = "COLLECTING_INFO"
+
     # 5. Extract customer name (excluding doctor & service names)
     _roster_names = [d["name"] for d in doctor_roster] + [s["name"] for s in service_roster]
     cand_name = _extract_name(user_content, roster_names=_roster_names)
@@ -443,7 +456,15 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
             conv.awaiting_input = "confirmation"
 
     # 8. Cancel trigger
-    if any(k in text_lower for k in ["cancel booking", "cancel appointment", "cancel my appointment", "cancel my booking"]):
+    cancel_keywords = [
+        "cancel booking", "cancel appointment", "cancel my appointment", "cancel my booking",
+        "appointment cancel", "booking cancel", "cancel kr do", "cancel kar do", "cancel kar dein",
+        "cancel kardein", "cancel krdein", "cancel kardo", "cancel please", "please cancel",
+        "کینسل", "منسوخ"
+    ]
+    if any(k in text_lower for k in cancel_keywords) or (
+        "cancel" in text_lower and any(w in text_lower for w in ["appointment", "booking", "slot", "meri", "my"])
+    ):
         conv.workflow_state = "START"
         conv.intent = "CANCEL_APPOINTMENT"
         conv.awaiting_input = None
@@ -451,8 +472,6 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         conv.requested_date = None
         conv.selected_doctor_id = None
         conv.selected_service_id = None
-        conv.pending_customer_name = None
-        conv.pending_customer_phone = None
 
     # 9. Reschedule trigger
     if any(k in text_lower for k in ["move it to", "move to", "reschedule", "change time to", "change appointment time", "postpone to"]):
@@ -987,6 +1006,35 @@ class Agent:
                     conv.requested_time = None
                     conv.awaiting_input = "time_choice"
                     conv.workflow_state = "CHECKING_AVAILABILITY"
+
+            # Safeguard: Never allow unbacked booking confirmation messages if no successful booking tool ran
+            confirmation_markers = [
+                "your appointment is confirmed",
+                "your appointment has been successfully booked",
+                "aap ki appointment confirm ho gayi hai",
+                "aap ki appointment already confirmed hai",
+                "آپ کی اپائنٹمنٹ کامیابی سے بک اور تصدیق",
+                "آپ کی اپائنٹمنٹ تصدیق شدہ ہے"
+            ]
+            has_booking_tool_success = any(
+                t.get("name") in ["book_appointment", "reschedule_appointment"]
+                for t in executed_tools
+            )
+            if not has_booking_tool_success and any(m in final_content.lower() for m in confirmation_markers):
+                if conv.workflow_state != "BOOKED":
+                    avail = BookingService.check_availability(
+                        business_id=self.business_id,
+                        doctor_id=conv.selected_doctor_id,
+                        service_id=conv.selected_service_id,
+                        date_str=conv.requested_date
+                    )
+                    final_content = generate_tool_response(
+                        tool_name="check_availability",
+                        tool_result=avail,
+                        conversation_state=_build_state_dict(conv),
+                        user_message=user_content,
+                        history_messages=formatted_messages
+                    )
 
         ui_act = _build_ui_action(conv)
 

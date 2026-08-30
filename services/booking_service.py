@@ -670,6 +670,12 @@ class BookingService:
         if not appt:
             return {"success": False, "error": f"Appointment #{appointment_id} not found."}
 
+        if appt.status == "CANCELLED":
+            return {
+                "success": False,
+                "error": f"Cannot reschedule cancelled appointment #{appointment_id}. Please book a new appointment."
+            }
+
         service = appt.service
         duration = service.duration if service else 30
         try:
