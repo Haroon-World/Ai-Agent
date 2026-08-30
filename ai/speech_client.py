@@ -59,8 +59,7 @@ class GroqWhisperAdapter(BaseSTTAdapter):
 
             whisper_prompt = (
                 "Dr. Sara Malik, Dr. Ahmed Khan, SmileCare, appointment, checkup, consultation, cleaning, scaling, "
-                "whitening, root canal, daant, dard, kal, aaj, parso, subah, dopahar, sham, baje, بجے, "
-                "ڈاکٹر سارا, ڈاکٹر احمد, اپائنٹمنٹ, مشورہ, چیک اپ, دانت, درد, کل, آج"
+                "whitening, root canal, daant, dard, kal, aaj, parso, subah, dopahar, sham, baje"
             )
 
             transcription = client.audio.transcriptions.create(
