@@ -11,7 +11,7 @@ from models import db, Business, Conversation, Message, Customer, Doctor, Servic
 from services.booking_service import BookingService, _get_business, _get_business_info, _get_business_tz, RequestCache
 from ai.tools import CANONICAL_TOOLS, ToolDispatcher
 from ai.prompts import build_system_prompt
-from ai.llm_client import LLMClient, _extract_name, _fuzzy_match_roster, _extract_doctor_mention, resolve_date_string, _classify_intent
+from ai.llm_client import LLMClient, _extract_name, _extract_phone_number, _fuzzy_match_roster, _extract_doctor_mention, resolve_date_string, _classify_intent
 from ai.response_generator import generate_tool_response, detect_language
 
 _local_perf_state = threading.local()
@@ -446,9 +446,28 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         conv.pending_customer_name = cand_name
 
     # 6. Extract customer phone
-    phone_match = re.search(r'\b(03\d{2}[- ]?\d{7}|\+92\d{10}|03\d{9})\b', user_content)
-    if phone_match and not conv.pending_customer_phone:
-        conv.pending_customer_phone = phone_match.group(1).replace(" ", "").replace("-", "")
+    phone_found = _extract_phone_number(user_content)
+    if phone_found and not conv.pending_customer_phone:
+        conv.pending_customer_phone = phone_found
+
+    # Contact details update trigger (name or phone update)
+    contact_update_phrases = [
+        "change my mobile", "change my number", "change my phone", "change mobile number", "change phone number",
+        "update my mobile", "update my number", "update my phone", "update phone", "update mobile",
+        "wrong number", "wrong mobile", "wrong phone", "number was of", "number was wrong", "mobile was of",
+        "correct my number", "correct my phone", "correct my name", "change my name", "update my name",
+        "write my mobile", "write my phone", "write my number", "mera number change", "number badal", "phone change",
+        "change number", "change name", "update contact", "change contact"
+    ]
+    is_contact_update = any(k in text_lower for k in contact_update_phrases) or (
+        phone_found and any(w in text_lower for w in ["change", "update", "correct", "wrong", "instead", "brother", "sister", "badal"])
+    )
+    if is_contact_update and not parsed_date and not _extract_time_token(user_content):
+        conv.intent = "UPDATE_CUSTOMER_DETAILS"
+        if phone_found:
+            conv.pending_customer_phone = phone_found
+        if cand_name and any(w in text_lower for w in ["name", "naam"]):
+            conv.pending_customer_name = cand_name
 
     # 7. Confirmation triggers
     if any(k in text_lower for k in ["confirm", "confirm booking", "confirm appointment", "yes", "yeah", "sure", "book it", "please book", "go ahead", "haan", "theek hai", "theek", "confirm kar do", "confirm karein"]):

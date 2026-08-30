@@ -737,3 +737,74 @@ class BookingService:
         except Exception as e:
             db.session.rollback()
             return {"success": False, "error": f"Failed to reschedule: {str(e)}"}
+
+    @staticmethod
+    def update_customer_details(
+        business_id: int,
+        conversation_id: int,
+        customer_name: Optional[str] = None,
+        customer_phone: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Update customer contact information (name/phone) scoped to conversation & business_id."""
+        from models import Conversation
+        conv = Conversation.query.filter_by(id=conversation_id, business_id=business_id).first()
+        if not conv:
+            return {"success": False, "error": f"Conversation #{conversation_id} not found."}
+
+        customer = None
+        if conv.customer_id:
+            customer = Customer.query.filter_by(id=conv.customer_id, business_id=business_id).first()
+
+        if not customer and conv.pending_customer_phone:
+            customer = Customer.query.filter_by(
+                business_id=business_id, phone=conv.pending_customer_phone.strip()
+            ).first()
+
+        clean_name = customer_name.strip() if customer_name and customer_name.strip() else None
+        clean_phone = customer_phone.strip().replace(" ", "").replace("-", "") if customer_phone and customer_phone.strip() else None
+
+        if not clean_name and not clean_phone:
+            return {"success": False, "error": "At least one of customer_name or customer_phone must be provided."}
+
+        try:
+            if customer:
+                if clean_name:
+                    customer.name = clean_name
+                if clean_phone:
+                    customer.phone = clean_phone
+                conv.customer_id = customer.id
+            else:
+                lookup_phone = clean_phone or conv.pending_customer_phone or "0000000000"
+                customer = Customer.query.filter_by(business_id=business_id, phone=lookup_phone).first()
+                if not customer:
+                    customer = Customer(
+                        business_id=business_id,
+                        name=clean_name or conv.pending_customer_name or "Valued Patient",
+                        phone=lookup_phone
+                    )
+                    db.session.add(customer)
+                    db.session.flush()
+                else:
+                    if clean_name:
+                        customer.name = clean_name
+                    if clean_phone:
+                        customer.phone = clean_phone
+                conv.customer_id = customer.id
+
+            if clean_name:
+                conv.pending_customer_name = clean_name
+            if clean_phone:
+                conv.pending_customer_phone = clean_phone
+
+            db.session.commit()
+
+            return {
+                "success": True,
+                "customer_id": customer.id,
+                "customer": customer.to_dict(),
+                "message": f"Customer contact details updated successfully: Name='{customer.name}', Phone='{customer.phone}'."
+            }
+        except Exception as e:
+            db.session.rollback()
+            return {"success": False, "error": f"Failed to update customer details: {str(e)}"}
+

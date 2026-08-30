@@ -184,6 +184,8 @@ def generate_tool_response(
         return _format_cancellation(tool_result, lang)
     elif tool_name == "reschedule_appointment":
         return _format_reschedule(tool_result, lang)
+    elif tool_name == "update_customer_details":
+        return _format_update_customer_details(tool_result, lang)
     elif tool_name == "get_doctors":
         return _format_doctors(tool_result, lang, user_text_lower, conv_state)
     elif tool_name == "get_services":
@@ -511,6 +513,31 @@ def _format_reschedule(tool_data: Dict[str, Any], lang: str) -> str:
     elif lang == "roman_urdu":
         return f"Aap ki appointment successfully update kar di gayi hai: **{new_date} at {new_time}** with {doctor}."
     return f"Your appointment has been successfully rescheduled to **{new_date} at {new_time}** with {doctor}."
+
+
+def _format_update_customer_details(tool_data: Dict[str, Any], lang: str) -> str:
+    if not tool_data.get("success"):
+        err = tool_data.get("error", "Could not update contact details.")
+        if lang == "urdu":
+            return f"معذرت، رابطہ کی تفصیلات اپ ڈیٹ نہیں ہو سکیں: {err}"
+        elif lang == "roman_urdu":
+            return f"Maazrat, contact details update nahi ho sakeen: {err}"
+        return f"Sorry, your contact details could not be updated: {err}"
+
+    cust = tool_data.get("customer", {})
+    name = cust.get("name", "")
+    phone = cust.get("phone", "")
+
+    name_str = f"• **Name:** {name}\n" if name else ""
+    phone_str = f"• **Phone Number:** {phone}\n" if phone else ""
+
+    if lang == "urdu":
+        u_name = f"• **مریض کا نام:** {name}\n" if name else ""
+        u_phone = f"• **فون نمبر:** {phone}\n" if phone else ""
+        return f"آپ کے رابطے کی تفصیلات کامیابی سے اپ ڈیٹ کر دی گئی ہیں:\n\n{u_name}{u_phone}\nآپ کی اپائنٹمنٹ ان نئی تفصیلات کے ساتھ تصدیق شدہ رہے گی۔ کیا میں آپ کی مزید کوئی مدد کر سکتا ہوں؟"
+    elif lang == "roman_urdu":
+        return f"Aap ki contact details successfully update ho gayi hain:\n\n{name_str}{phone_str}\nAap ki appointment in updated details ke sath confirmed rahe gi. Agar koi mazeed sawal ho to zaroor batayein!"
+    return f"Your contact details have been successfully updated:\n\n{name_str}{phone_str}\nYour existing appointment remains confirmed with these updated details. How else may I assist you today?"
 
 
 def _format_doctor_schedule_lines(doc: Dict[str, Any], target_day: Optional[str] = None) -> List[str]:

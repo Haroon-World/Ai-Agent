@@ -382,6 +382,134 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
         self.assertFalse(res_reschedule["success"])
         self.assertIn("cannot reschedule cancelled appointment", res_reschedule["error"].lower())
 
+    def test_i_update_customer_contact_details_without_cancelling_or_rescheduling(self):
+        """
+        Test I — Patient updates/corrects their own contact details (phone number).
+        Verifies:
+        1. update_customer_details tool is executed.
+        2. Appointment status is strictly UNCHANGED (CONFIRMED).
+        3. Customer phone number is updated in the database.
+        4. Response explicitly confirms contact details update rather than rescheduling/cancelling.
+        """
+        import freezegun
+        from services.booking_service import RequestCache
+
+        with freezegun.freeze_time("2026-08-31 10:00:00+05:00"):
+            RequestCache.clear()
+            conv = Conversation(business_id=1, status="AI", workflow_state="BOOKED")
+            cust = Customer(business_id=1, name="Ali Khan", phone="03001234567")
+            db.session.add(cust)
+            db.session.flush()
+
+            conv.customer_id = cust.id
+            conv.selected_doctor_id = 1
+            conv.selected_service_id = 1
+            conv.requested_date = "2026-09-01"
+            conv.requested_time = "10:00"
+            conv.pending_customer_name = "Ali Khan"
+            conv.pending_customer_phone = "03001234567"
+            db.session.add(conv)
+            db.session.flush()
+
+            appt = Appointment(
+                business_id=1,
+                customer_id=cust.id,
+                doctor_id=1,
+                service_id=1,
+                appointment_date="2026-09-01",
+                appointment_time="10:00",
+                status="CONFIRMED"
+            )
+            db.session.add(appt)
+            db.session.commit()
+
+            msg = "Can you change my mobile number? Actually I didn't notice that that mobile number was of my brother. So write my mobile number 031-875-38771."
+            res = self.agent.process_message(conv.id, msg)
+
+            self.assertEqual(res["status"], "AI")
+            self.assertIn("update_customer_details", [t["name"] for t in res.get("executed_tools", [])])
+            self.assertNotIn("cancel_appointment", [t["name"] for t in res.get("executed_tools", [])])
+            self.assertNotIn("reschedule_appointment", [t["name"] for t in res.get("executed_tools", [])])
+
+            # Appointment status MUST remain CONFIRMED
+            appt_db = db.session.get(Appointment, appt.id)
+            self.assertEqual(appt_db.status, "CONFIRMED")
+            self.assertEqual(appt_db.appointment_date, "2026-09-01")
+            self.assertEqual(appt_db.appointment_time, "10:00")
+
+            # Customer phone MUST be updated in database
+            cust_db = db.session.get(Customer, cust.id)
+            self.assertEqual(cust_db.phone, "03187538771")
+
+            # Message content confirms details updated, not appointment cancelled
+            self.assertIn("contact details have been successfully updated", res["content"].lower())
+            self.assertNotIn("cancelled", res["content"].lower())
+
+    def test_j_genuine_cancel_still_works(self):
+        """
+        Test J — Genuine cancellation request triggers cancel_appointment and sets status to CANCELLED.
+        """
+        import freezegun
+        from services.booking_service import RequestCache
+
+        with freezegun.freeze_time("2026-08-31 10:00:00+05:00"):
+            RequestCache.clear()
+            conv = Conversation(business_id=1, status="AI", workflow_state="BOOKED")
+            cust = Customer(business_id=1, name="Hassan Raza", phone="03007654321")
+            db.session.add(cust)
+            db.session.flush()
+
+            conv.customer_id = cust.id
+            conv.pending_customer_phone = "03007654321"
+            db.session.add(conv)
+
+            appt = Appointment(
+                business_id=1,
+                customer_id=cust.id,
+                doctor_id=1,
+                service_id=1,
+                appointment_date="2026-09-01",
+                appointment_time="10:00",
+                status="CONFIRMED"
+            )
+            db.session.add(appt)
+            db.session.commit()
+
+            res = self.agent.process_message(conv.id, "Please cancel my appointment")
+            self.assertIn("cancel_appointment", [t["name"] for t in res.get("executed_tools", [])])
+            appt_db = db.session.get(Appointment, appt.id)
+            self.assertEqual(appt_db.status, "CANCELLED")
+            self.assertIn("cancelled", res["content"].lower())
+
+    def test_k_genuine_reschedule_service_execution(self):
+        """
+        Test K — Genuine rescheduling updates appointment date & time via BookingService.reschedule_appointment.
+        """
+        target_date = self._next_working_date(2)
+        res_book = BookingService.book_appointment(
+            business_id=1,
+            customer_name="Usman Tariq",
+            customer_phone="03005544332",
+            doctor_id=2,
+            service_id=1,
+            appointment_date=target_date,
+            appointment_time="09:00"
+        )
+        self.assertTrue(res_book["success"])
+        appt_id = res_book["appointment_id"]
+
+        res_resched = BookingService.reschedule_appointment(
+            business_id=1,
+            appointment_id=appt_id,
+            new_date=target_date,
+            new_time="14:00"
+        )
+        self.assertTrue(res_resched["success"])
+        appt_db = db.session.get(Appointment, appt_id)
+        self.assertEqual(appt_db.status, "CONFIRMED")
+        self.assertEqual(appt_db.appointment_date, target_date)
+        self.assertEqual(appt_db.appointment_time, "14:00")
+
 
 if __name__ == "__main__":
     unittest.main()

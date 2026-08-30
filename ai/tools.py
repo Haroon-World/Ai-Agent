@@ -138,6 +138,24 @@ CANONICAL_TOOLS = [
         }
     },
     {
+        "name": "update_customer_details",
+        "description": "Update or correct the patient/customer's stored contact details (name and/or phone number) without cancelling, rescheduling, or altering their booked appointments.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "customer_name": {
+                    "type": "string",
+                    "description": "New or corrected full name of the customer (optional)"
+                },
+                "customer_phone": {
+                    "type": "string",
+                    "description": "New or corrected contact phone number of the customer (optional)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
         "name": "human_handoff",
         "description": "Transfer the conversation to a human clinic receptionist when requested by the customer or when encountering unknown/unsupported queries or requests for medical advice.",
         "parameters": {
@@ -243,6 +261,14 @@ class ToolDispatcher:
                     appointment_id=parsed_appt_id,
                     new_date=arguments.get("new_date", ""),
                     new_time=arguments.get("new_time", "")
+                )
+
+            elif tool_name == "update_customer_details":
+                return BookingService.update_customer_details(
+                    business_id=self.business_id,
+                    conversation_id=self.conversation_id,
+                    customer_name=arguments.get("customer_name"),
+                    customer_phone=arguments.get("customer_phone")
                 )
 
             elif tool_name == "human_handoff":

@@ -480,6 +480,23 @@ def _fmt_spoken_time_roman(time_str: str) -> str:
         return str(time_str)
 
 
+def _extract_phone_number(text: str) -> Optional[str]:
+    """
+    Extract standardized Pakistani phone number (e.g. 03001234567, 031-875-38771, +92-318-7538771).
+    Returns formatted 11-digit string starting with 03xxxxxxxx.
+    """
+    if not text:
+        return None
+    for m in re.finditer(r'(?:(?:\+|00)?92[\s-]*|0)?(3[\d\s-]{8,14}\d)', text):
+        raw = m.group(1)
+        digits = re.sub(r'\D', '', raw)
+        if len(digits) == 10 and digits.startswith('3'):
+            return f"0{digits}"
+        elif len(digits) == 11 and digits.startswith('03'):
+            return digits
+    return None
+
+
 def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Optional[str]:
     """
     Extract person name from customer booking text.
@@ -955,7 +972,8 @@ class MockAdapter(BaseLLMAdapter):
         all_offered_slots = conv_state.get("all_offered_slots", [])
         # Token extractions
         time_token = _extract_time_str(user_text)
-        phone_match = re.search(r'\b(03\d{2}[- ]?\d{7}|\+92\d{10}|03\d{9})\b', user_text)
+        phone_val = _extract_phone_number(user_text)
+        phone_match = phone_val
         date_match = re.search(r'(\d{4}-\d{2}-\d{2})', user_text)
         is_question = _is_question_query(user_text)
         lang = detect_language(user_text, messages)
@@ -969,7 +987,7 @@ class MockAdapter(BaseLLMAdapter):
         )
         cand_name = _extract_name(user_text, roster_names=_roster_names_for_exclusion)
         effective_name = cand_name or pending_name
-        effective_phone = (phone_match.group(1).replace(" ", "").replace("-", "") if phone_match else None) or pending_phone
+        effective_phone = phone_val or pending_phone
 
 
         # ── CLASSIFY INTENT FROM CURRENT MESSAGE ONLY (before any state lookup) ──
@@ -1094,6 +1112,35 @@ class MockAdapter(BaseLLMAdapter):
                 return {
                     "content": "Your appointment is already confirmed! We look forward to seeing you at SmileCare Dental Clinic. Please let us know if you need anything else.",
                     "tool_calls": []
+                }
+
+        # Check Contact Details (Name/Phone) Update Request FIRST (before cancel / reschedule)
+        contact_update_phrases = [
+            "change my mobile", "change my number", "change my phone", "change mobile number", "change phone number",
+            "update my mobile", "update my number", "update my phone", "update phone", "update mobile",
+            "wrong number", "wrong mobile", "wrong phone", "number was of", "number was wrong", "mobile was of",
+            "correct my number", "correct my phone", "correct my name", "change my name", "update my name",
+            "write my mobile", "write my phone", "write my number", "mera number change", "number badal", "phone change",
+            "change number", "change name", "update contact", "change contact"
+        ]
+        is_contact_update = any(w in user_text for w in contact_update_phrases) or (
+            phone_val and any(w in user_text for w in ["change", "update", "correct", "wrong", "instead", "brother", "sister", "badal"])
+        )
+        if is_contact_update and not parsed_target_date and not _extract_time_str(user_text):
+            new_phone = phone_val
+            new_name = cand_name if (cand_name and not is_question and any(w in user_text for w in ["name", "naam"])) else None
+            if new_phone or new_name:
+                args = {}
+                if new_name:
+                    args["customer_name"] = new_name
+                if new_phone:
+                    args["customer_phone"] = new_phone
+                return {
+                    "content": "Updating your contact details...",
+                    "tool_calls": [{
+                        "name": "update_customer_details",
+                        "arguments": args
+                    }]
                 }
 
         # Check Cancellation Request FIRST
@@ -1651,7 +1698,7 @@ class MockAdapter(BaseLLMAdapter):
 
             elif awaiting_input == "phone":
                 if phone_match:
-                    effective_phone = phone_match.group(1).replace(" ", "").replace("-", "")
+                    effective_phone = phone_match
                     if effective_name and target_date_str and req_time:
                         return {
                             "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {req_time}...",
