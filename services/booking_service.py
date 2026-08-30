@@ -746,19 +746,34 @@ class BookingService:
         customer_phone: Optional[str] = None
     ) -> Dict[str, Any]:
         """Update customer contact information (name/phone) scoped to conversation & business_id."""
-        from models import Conversation
+        from models import Conversation, Appointment, Customer
         conv = Conversation.query.filter_by(id=conversation_id, business_id=business_id).first()
         if not conv:
             return {"success": False, "error": f"Conversation #{conversation_id} not found."}
 
         customer = None
+        # 1. Primary: Use conversation's linked customer_id
         if conv.customer_id:
             customer = Customer.query.filter_by(id=conv.customer_id, business_id=business_id).first()
 
+        # 2. Secondary: If conv.customer_id is not set, resolve customer from existing appointment in this conversation
+        if not customer:
+            appt = Appointment.query.filter(
+                Appointment.business_id == business_id,
+                Appointment.idempotency_key.like(f"conv-{conv.id}-%")
+            ).order_by(Appointment.id.desc()).first()
+            if appt and appt.customer_id:
+                customer = Customer.query.filter_by(id=appt.customer_id, business_id=business_id).first()
+                if customer:
+                    conv.customer_id = customer.id
+
+        # 3. Tertiary: Look up by pending customer phone if available
         if not customer and conv.pending_customer_phone:
             customer = Customer.query.filter_by(
                 business_id=business_id, phone=conv.pending_customer_phone.strip()
             ).first()
+            if customer:
+                conv.customer_id = customer.id
 
         clean_name = customer_name.strip() if customer_name and customer_name.strip() else None
         clean_phone = customer_phone.strip().replace(" ", "").replace("-", "") if customer_phone and customer_phone.strip() else None
@@ -770,8 +785,18 @@ class BookingService:
             if customer:
                 if clean_name:
                     customer.name = clean_name
-                if clean_phone:
-                    customer.phone = clean_phone
+                if clean_phone and customer.phone != clean_phone:
+                    # Check if clean_phone already belongs to another Customer row in the same business
+                    existing_other = Customer.query.filter_by(business_id=business_id, phone=clean_phone).first()
+                    if existing_other and existing_other.id != customer.id:
+                        # Re-link existing appointments to existing_other and update its name
+                        for a in Appointment.query.filter_by(customer_id=customer.id).all():
+                            a.customer_id = existing_other.id
+                        if clean_name:
+                            existing_other.name = clean_name
+                        customer = existing_other
+                    else:
+                        customer.phone = clean_phone
                 conv.customer_id = customer.id
             else:
                 lookup_phone = clean_phone or conv.pending_customer_phone or "0000000000"
@@ -807,4 +832,3 @@ class BookingService:
         except Exception as e:
             db.session.rollback()
             return {"success": False, "error": f"Failed to update customer details: {str(e)}"}
-

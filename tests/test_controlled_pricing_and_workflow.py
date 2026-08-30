@@ -510,6 +510,75 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
         self.assertEqual(appt_db.appointment_date, target_date)
         self.assertEqual(appt_db.appointment_time, "14:00")
 
+    def test_l_end_to_end_contact_correction_reflects_in_admin_appointments_view(self):
+        """
+        Test L — End-to-end multi-turn booking and mid-conversation contact info correction.
+        Verifies:
+        1. Multi-turn booking creates Appointment and links conv.customer_id properly.
+        2. Customer changes phone number in turn 2 -> update_customer_details updates the exact Customer row.
+        3. Customer changes name in turn 3 -> update_customer_details updates the exact Customer row.
+        4. Admin panel appointments query (Appointment.to_dict() / appt.customer) immediately reflects updated name/phone.
+        5. No orphaned/duplicate Customer rows are created.
+        """
+        import freezegun
+        from services.booking_service import RequestCache
+
+        with freezegun.freeze_time("2026-08-31 10:00:00+05:00"):
+            RequestCache.clear()
+            conv = Conversation(business_id=1, status="AI", intent="UNKNOWN", workflow_state="START")
+            db.session.add(conv)
+            db.session.commit()
+
+            # Turn 1: Full booking flow
+            r1 = self.agent.process_message(
+                conv.id,
+                "I want to book an appointment with Dr. Ahmed on 2026-09-01 at 10:00. My name is Ali Khan and phone is 03001234567"
+            )
+            self.assertIn("book_appointment", [t["name"] for t in r1.get("executed_tools", [])])
+
+            # Verify appointment in DB
+            appt = Appointment.query.filter_by(business_id=1).order_by(Appointment.id.desc()).first()
+            self.assertIsNotNone(appt)
+            self.assertEqual(appt.customer.name, "Ali Khan")
+            self.assertEqual(appt.customer.phone, "03001234567")
+            self.assertEqual(conv.customer_id, appt.customer_id)
+
+            # Turn 2: Correct phone number
+            r2 = self.agent.process_message(
+                conv.id,
+                "Can you change my mobile number? Actually I didn't notice that that mobile number was of my brother. So write my mobile number 031-875-38771."
+            )
+            self.assertIn("update_customer_details", [t["name"] for t in r2.get("executed_tools", [])])
+
+            # Query via Admin Panel data path
+            admin_appts = Appointment.query.filter_by(business_id=1).order_by(Appointment.appointment_date.desc()).all()
+            target_appt = [a for a in admin_appts if a.id == appt.id][0]
+            self.assertEqual(target_appt.customer_id, appt.customer_id)
+            self.assertEqual(target_appt.customer.name, "Ali Khan")
+            self.assertEqual(target_appt.customer.phone, "03187538771")
+            self.assertEqual(target_appt.to_dict()["customer_phone"], "03187538771")
+
+            # Turn 3: Correct name
+            r3 = self.agent.process_message(
+                conv.id,
+                "change my name to Asghar Ali"
+            )
+            self.assertIn("update_customer_details", [t["name"] for t in r3.get("executed_tools", [])])
+
+            # Query via Admin Panel data path
+            admin_appts_after = Appointment.query.filter_by(business_id=1).order_by(Appointment.appointment_date.desc()).all()
+            target_appt_after = [a for a in admin_appts_after if a.id == appt.id][0]
+            self.assertEqual(target_appt_after.customer_id, appt.customer_id)
+            self.assertEqual(target_appt_after.customer.name, "Asghar Ali")
+            self.assertEqual(target_appt_after.customer.phone, "03187538771")
+            self.assertEqual(target_appt_after.to_dict()["customer_name"], "Asghar Ali")
+            self.assertEqual(target_appt_after.to_dict()["customer_phone"], "03187538771")
+
+            # Verify no duplicate customers created
+            customers = Customer.query.filter_by(business_id=1).all()
+            self.assertEqual(len(customers), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+

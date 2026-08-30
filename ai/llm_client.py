@@ -519,8 +519,10 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
 
     # Roman Urdu & English patterns
     name_patterns = [
+        (r'(?:change\s+(?:my\s+)?name\s+to|update\s+(?:my\s+)?name\s+to|correct\s+(?:my\s+)?name\s+to|write\s+(?:my\s+)?name\s+(?:as|is|to)?)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
+        (r'(?:mera\s+naam\s+(?:badal\s+ke|change\s+karke|rakhein|likhein))\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
         (r'(?:mera\s+naam|meray\s+naam|naam\s+hai|naam\s+hy)\s+([a-zA-Z]+)', True),
-        (r'(?:my\s+(?:own\s+)?name\s+is\s+|name\s+is\s+|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|name\s*:\s*|\bname\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
+        (r'(?:my\s+(?:own\s+)?name\s+is\s+(?:actually\s+)?|name\s+is\s+(?:actually\s+)?|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|name\s*:\s*|\bname\s+is\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
         (r'(?:booking|appointment|cleaning|checkup|consultation|service)?\s*for\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', False)
     ]
     for np, is_explicit_self in name_patterns:
@@ -528,11 +530,12 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
         if m:
             raw = m.group(1)
             name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b|\bdate\b|\bfor\b|\bwith\b|\bi\s+need\b|\bi\s+want\b|\band\b|\bhai\b|\bhein\b|\bhy\b|\bha\b|\bplease\b|\bselect\b|\bprefer\b|\bdr\b|\bdoctor\b', raw, flags=re.IGNORECASE)[0].strip()
+            name = re.sub(r'^(?:to|as|is|actually|the)\s+', '', name, flags=re.IGNORECASE).strip()
             name = re.sub(r'^(?:a\s+|an\s+|the\s+)?(?:cleaning|checkup|consultation|appointment|booking|regular|routine)\s+(?:for\s+)?', '', name, flags=re.IGNORECASE).strip()
             invalid_names = {
                 "patient", "a", "the", "an", "cleaning", "checkup", "appointment", "booking", "doctor", "dr",
                 "tomorrow", "today", "me", "us", "him", "her", "regular checkup", "regular", "routine", "consultation",
-                "teeth", "braces", "extraction", "root canal", "whitening", "dental", "care", "clinic"
+                "teeth", "braces", "extraction", "root canal", "whitening", "dental", "care", "clinic", "to", "as", "is"
             }
             if name and name.lower() not in invalid_names:
                 if not is_explicit_self and roster_names:

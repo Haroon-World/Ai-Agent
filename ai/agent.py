@@ -976,6 +976,15 @@ class Agent:
                 result = dispatcher.execute(tool_name, tool_args)
                 tool_results.append({"tool": tool_name, "result": result})
 
+                if tool_name == "book_appointment" and result.get("success"):
+                    cust_id = result.get("customer_id") or (result.get("appointment") or {}).get("customer_id")
+                    if cust_id:
+                        conv.customer_id = int(cust_id)
+                elif tool_name == "update_customer_details" and result.get("success"):
+                    cust_id = result.get("customer_id") or (result.get("customer") or {}).get("id")
+                    if cust_id:
+                        conv.customer_id = int(cust_id)
+
                 # If check_availability ran, update state if date has 0 slots or requested time is unavailable
                 if tool_name == "check_availability":
                     avail_slots = result.get("available_slots", [])
