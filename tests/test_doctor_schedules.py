@@ -83,6 +83,7 @@ class TestDoctorSchedulesAndTypoIntent(unittest.TestCase):
             svc = Service(
                 id=1,
                 business_id=1,
+                doctor_id=doc.id,
                 name="Checkup",
                 description="Regular Checkup",
                 duration=30,

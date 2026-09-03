@@ -52,14 +52,18 @@ class TestPhase1ADatabase(unittest.TestCase):
                 start_time="09:00",
                 end_time="17:00"
             )
+            db.session.add(doc)
+            db.session.commit()
+
             svc = Service(
                 business_id=biz.id,
+                doctor_id=doc.id,
                 name="Cleaning",
                 description="Teeth scaling",
                 duration=30,
                 price=3000.0
             )
-            db.session.add_all([doc, svc])
+            db.session.add(svc)
             db.session.commit()
 
             # 3. Add Customer
@@ -120,23 +124,24 @@ class TestPhase1ADatabase(unittest.TestCase):
             self.assertEqual(len(conv.messages), 2)
             self.assertEqual(appt.reminders[0].status, "SCHEDULED")
 
-    def test_double_booking_database_constraint(self):
+    def test_database_unique_constraint_prevents_double_booking(self):
+        """
+        Phase 1 Regression:
+        Verify DB-level UniqueConstraint(business_id, doctor_id, appointment_date, appointment_time, status)
+        prevents duplicate active bookings.
+        """
         with self.app.app_context():
-            biz = Business(
-                name="Clinic A",
-                business_type="dental_clinic",
-                address="Address A",
-                phone="123",
-                opening_hours="Mon-Fri 9-5"
-            )
+            biz = Business(name="Clinic A", business_type="dental_clinic", address="Address A", phone="123", opening_hours="Mon-Fri 9-5")
             db.session.add(biz)
             db.session.commit()
 
             doc = Doctor(business_id=biz.id, name="Dr. A", specialization="Dentist")
-            svc = Service(business_id=biz.id, name="Checkup", duration=30, price=1000)
+            db.session.add(doc)
+            db.session.flush()
+            svc = Service(business_id=biz.id, doctor_id=doc.id, name="Checkup", duration=30, price=1000)
             c1 = Customer(business_id=biz.id, name="Cust 1", phone="111")
             c2 = Customer(business_id=biz.id, name="Cust 2", phone="222")
-            db.session.add_all([doc, svc, c1, c2])
+            db.session.add_all([svc, c1, c2])
             db.session.commit()
 
             # First booking
@@ -179,11 +184,13 @@ class TestPhase1ADatabase(unittest.TestCase):
             db.session.commit()
 
             doc = Doctor(business_id=biz.id, name="Dr. B", specialization="Dentist")
-            svc = Service(business_id=biz.id, name="Checkup", duration=30, price=1000)
+            db.session.add(doc)
+            db.session.flush()
+            svc = Service(business_id=biz.id, doctor_id=doc.id, name="Checkup", duration=30, price=1000)
             c1 = Customer(business_id=biz.id, name="Cust 1", phone="111")
             c2 = Customer(business_id=biz.id, name="Cust 2", phone="222")
             c3 = Customer(business_id=biz.id, name="Cust 3", phone="333")
-            db.session.add_all([doc, svc, c1, c2, c3])
+            db.session.add_all([svc, c1, c2, c3])
             db.session.commit()
 
             # 1. Customer 1 books 09:00 (CONFIRMED)

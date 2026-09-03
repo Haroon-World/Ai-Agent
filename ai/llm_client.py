@@ -149,6 +149,104 @@ def _fmt_time_ampm(t_str: str) -> str:
         return str(t_str)
 
 
+def _prompt_doctor_choice(doctor_roster, lang="english", effective_name=None):
+    """Return structured response prompting user to select a doctor from the roster."""
+    roster_lines = "\n".join(f"• **{d['name']}** - {d.get('specialization', 'Dentist')}" for d in doctor_roster)
+    if lang == "urdu":
+        greeting = f"ہیلو {effective_name} صاحب! " if effective_name else "ہیلو! "
+        return {
+            "content": f"{greeting}سمائل کیئر کلینک میں ہمارے پاس درج ذیل ڈاکٹرز دستیاب ہیں:\n\n{roster_lines}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا چاہیں گے؟",
+            "tool_calls": []
+        }
+    elif lang == "roman_urdu":
+        greeting = f"Hello {effective_name}! " if effective_name else "Hello! "
+        return {
+            "content": f"{greeting}SmileCare Clinic mein hamare practicing doctors yeh hain:\n\n{roster_lines}\n\nAap kis doctor se appointment book karwana chahte hain?",
+            "tool_calls": []
+        }
+    greeting = f"Hello {effective_name}! " if effective_name else ""
+    return {
+        "content": f"{greeting}SmileCare is a polyclinic where each doctor offers their own separate set of services and schedules. Our practicing dentists are:\n\n{roster_lines}\n\nWhich doctor would you like to see for your appointment?",
+        "tool_calls": []
+    }
+
+
+def _prompt_service_choice(doc_id, doc_name, service_roster, lang="english", effective_name=None):
+    """Return structured response prompting user to select a service for the specified doctor."""
+    doc_display = doc_name or "your selected doctor"
+    doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id] if doc_id else service_roster
+    if doc_services:
+        roster_names = ", ".join(f"{s['name']} (PKR {s.get('price', 0):,.0f})" for s in doc_services)
+    else:
+        roster_names = ", ".join(f"{s['name']} (PKR {s.get('price', 0):,.0f})" for s in service_roster) or "Consultation"
+    if lang == "urdu":
+        return {
+            "content": f"براہ کرم {doc_display} کی خدمات میں سے کسی ایک کا انتخاب کریں: {roster_names}",
+            "tool_calls": []
+        }
+    elif lang == "roman_urdu":
+        return {
+            "content": f"Barah-e-karam {doc_display} ki services mein se select karein: {roster_names}",
+            "tool_calls": []
+        }
+    return {
+        "content": f"Which of {doc_display}'s available services would you like to select? {roster_names}",
+        "tool_calls": []
+    }
+
+
+def _make_booking_or_reschedule_tool(
+    conv_state,
+    user_text,
+    effective_name,
+    effective_phone,
+    doc_id,
+    doc_name,
+    effective_svc_id,
+    target_date,
+    chosen_time,
+    notes="Booked via AI Assistant"
+):
+    active_appt_id = conv_state.get("active_appointment_id")
+    conv_intent = conv_state.get("intent")
+    is_reschedule = (
+        conv_intent == "RESCHEDULE_APPOINTMENT" or
+        (active_appt_id and any(w in user_text.lower() for w in [
+            "reschedule", "change", "switch", "same", "confirm", "yes", "update",
+            "theek", "haan", "bhejo", "kar do", "baki sab same", "all the other data will be same", "data will be same"
+        ]))
+    )
+    if active_appt_id and is_reschedule:
+        return {
+            "content": f"Rescheduling your appointment with {doc_name or 'our practicing dentist'} to {target_date} at {chosen_time}...",
+            "tool_calls": [{
+                "name": "reschedule_appointment",
+                "arguments": {
+                    "appointment_id": active_appt_id,
+                    "new_date": target_date,
+                    "new_time": chosen_time,
+                    "new_doctor_id": doc_id,
+                    "new_service_id": effective_svc_id
+                }
+            }]
+        }
+    return {
+        "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date} at {chosen_time}...",
+        "tool_calls": [{
+            "name": "book_appointment",
+            "arguments": {
+                "customer_name": effective_name,
+                "customer_phone": effective_phone,
+                "doctor_id": doc_id,
+                "service_id": effective_svc_id,
+                "appointment_date": target_date,
+                "appointment_time": chosen_time,
+                "notes": notes
+            }
+        }]
+    }
+
+
 def _extract_doctor_mention(text: str) -> Optional[str]:
     """
     Extract a doctor name explicitly mentioned in user text (e.g. 'Dr. Hassan', 'Dr Sara', 'doctor ahmed', 'ڈاکٹر حسن').
@@ -497,10 +595,71 @@ def _extract_phone_number(text: str) -> Optional[str]:
     return None
 
 
+_NON_NAME_WORDS = {
+    "want", "need", "like", "would", "schedule", "book", "available", "availability",
+    "slot", "slots", "time", "timing", "day", "tomorrow", "today", "appointment",
+    "checkup", "cleaning", "dentist", "doctor", "dr", "info", "information", "price",
+    "yes", "no", "ok", "okay", "sure", "thanks", "thank you", "cancel", "help", "hello", "hi", "hey",
+    "root", "canal", "treatment", "extraction", "whitening", "braces", "consultation", "scaling", "polishing",
+    "confirm", "confirmed", "confirmation", "change", "modify", "reset", "details", "haan", "theek",
+    "who", "what", "where", "when", "why", "how", "are", "you", "your", "is", "am", "i", "a", "an", "the",
+    "for", "with", "at", "to", "in", "on", "can", "could", "should", "will", "shall", "do", "does", "did",
+    "have", "has", "had", "tell", "show", "list", "give", "please", "not", "dont", "good", "morning", "afternoon",
+    "kal", "aaj", "parso", "parson", "subah", "shaam", "dopahar", "raat", "baje", "bje", "bjay",
+    "kro", "krdo", "kardo", "kar", "kr", "karna", "krna", "btao", "batao", "batayein",
+    "check", "up", "kalye", "kelye", "klie", "keliye",
+    "pehly", "pehle", "ka", "ki", "ke", "ko", "se", "sy", "hain", "hai", "ha", "hun", "hoon",
+    "nhi", "nahi", "karwana", "krwana", "chahiye", "chahta", "chahti"
+}
+
+_INVALID_NAMES = {
+    "patient", "a", "the", "an", "cleaning", "checkup", "appointment", "booking", "doctor", "dr",
+    "tomorrow", "today", "me", "us", "him", "her", "regular checkup", "regular", "routine", "consultation",
+    "teeth", "braces", "extraction", "root canal", "whitening", "dental", "care", "clinic", "to", "as", "is"
+}
+
+
+def _is_roster_conflict(cand: str, roster_names: Optional[List[str]]) -> bool:
+    if not cand or not roster_names:
+        return False
+    cand_lower = cand.lower().strip()
+    for i, rn in enumerate(roster_names):
+        clean_rn = _NAME_PREFIX_RE.sub('', rn.lower()).strip()
+        rn_words = [w for w in clean_rn.split() if len(w) >= 3 and w not in _GENERIC_MATCH_STOPWORDS]
+        if cand_lower == clean_rn or cand_lower in rn_words:
+            return True
+        roster_entries = [{"id": i, "name": rn}]
+        if _fuzzy_match_roster(cand, roster_entries):
+            return True
+    return False
+
+
+def _is_valid_name_token(cand: str, roster_names: Optional[List[str]] = None) -> bool:
+    if not cand:
+        return False
+    cand = cand.strip()
+    words = cand.split()
+    if not (1 <= len(words) <= 4):
+        return False
+    for w in words:
+        clean_w = w.replace(".", "").replace("-", "").replace("'", "")
+        if not clean_w.isalpha():
+            return False
+    lower = cand.lower()
+    if any(nw in lower.split() or lower == nw for nw in _NON_NAME_WORDS):
+        return False
+    if lower in _INVALID_NAMES:
+        return False
+    if _is_roster_conflict(cand, roster_names):
+        return False
+    return True
+
+
 def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Optional[str]:
     """
     Extract person name from customer booking text.
-    Supports English ("My name is Ali"), Roman Urdu ("Mera naam Ali hai"), and Urdu script ("میرا نام علی ہے").
+    Supports English ("My name is Ali"), Roman Urdu ("Mera naam Ali hai"), Urdu script ("میرا نام علی ہے"),
+    and informal compound patterns ("Hassan 03001234567", "Hassan, 03001234567", "It's Hassan, my number is 03001234567").
     """
     if not text:
         return None
@@ -517,12 +676,12 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
         }
         return urdu_name_map.get(raw_urdu, raw_urdu)
 
-    # Roman Urdu & English patterns
+    # Roman Urdu & English explicit patterns
     name_patterns = [
         (r'(?:change\s+(?:my\s+)?name\s+to|update\s+(?:my\s+)?name\s+to|correct\s+(?:my\s+)?name\s+to|write\s+(?:my\s+)?name\s+(?:as|is|to)?)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
         (r'(?:mera\s+naam\s+(?:badal\s+ke|change\s+karke|rakhein|likhein))\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
         (r'(?:mera\s+naam|meray\s+naam|naam\s+hai|naam\s+hy)\s+([a-zA-Z]+)', True),
-        (r'(?:my\s+(?:own\s+)?name\s+is\s+(?:actually\s+)?|name\s+is\s+(?:actually\s+)?|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|name\s*:\s*|\bname\s+is\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
+        (r'(?:my\s+(?:own\s+)?name\s+is\s+(?:actually\s+)?|name\s+is\s+(?:actually\s+)?|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|it\'?s\s+|name\s*:\s*|\bname\s+is\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
         (r'(?:booking|appointment|cleaning|checkup|consultation|service)?\s*for\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', False)
     ]
     for np, is_explicit_self in name_patterns:
@@ -532,44 +691,26 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
             name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b|\bdate\b|\bfor\b|\bwith\b|\bi\s+need\b|\bi\s+want\b|\band\b|\bhai\b|\bhein\b|\bhy\b|\bha\b|\bplease\b|\bselect\b|\bprefer\b|\bdr\b|\bdoctor\b', raw, flags=re.IGNORECASE)[0].strip()
             name = re.sub(r'^(?:to|as|is|actually|the)\s+', '', name, flags=re.IGNORECASE).strip()
             name = re.sub(r'^(?:a\s+|an\s+|the\s+)?(?:cleaning|checkup|consultation|appointment|booking|regular|routine)\s+(?:for\s+)?', '', name, flags=re.IGNORECASE).strip()
-            invalid_names = {
-                "patient", "a", "the", "an", "cleaning", "checkup", "appointment", "booking", "doctor", "dr",
-                "tomorrow", "today", "me", "us", "him", "her", "regular checkup", "regular", "routine", "consultation",
-                "teeth", "braces", "extraction", "root canal", "whitening", "dental", "care", "clinic", "to", "as", "is"
-            }
-            if name and name.lower() not in invalid_names:
-                if not is_explicit_self and roster_names:
-                    roster_entries = [{"id": i, "name": n} for i, n in enumerate(roster_names)]
-                    if _fuzzy_match_roster(name, roster_entries):
-                        continue
+            if name and name.lower() not in _INVALID_NAMES:
+                if not is_explicit_self and _is_roster_conflict(name, roster_names):
+                    continue
                 return name.title()
 
+    # Informal name + phone pattern: exactly one recognizable phone number in text
+    phone_pattern = r'(?:(?:\+|00)?92[\s-]*|0)?(3[\d\s-]{8,14}\d)'
+    phone_matches = list(re.finditer(phone_pattern, text))
+    if len(phone_matches) == 1:
+        pm = phone_matches[0]
+        rem = text[:pm.start()] + " " + text[pm.end():]
+        rem = re.sub(r'\b(?:my\s+)?(?:phone|mobile|contact|cell|number|num|no|ph)(?:\s*(?:is|number|hai|hy|:))?\b', ' ', rem, flags=re.IGNORECASE)
+        rem = re.sub(r'[,:;|\-–—/&+]|\band\b|\baur\b', ' ', rem, flags=re.IGNORECASE)
+        rem = re.sub(r'^(?:it\'?s|this\s+is|i\'?m|i\s+am|my\s+name\s+is|name\s+is)\s+', ' ', rem.strip(), flags=re.IGNORECASE)
+        rem = ' '.join(rem.split())
+        if _is_valid_name_token(rem, roster_names):
+            return rem.strip().title()
+
     # Check if the entire text consists of a person's name (1-4 alphabetic words)
-    words = text.strip().split()
-    if 1 <= len(words) <= 4 and all(w.replace(".", "").replace("-", "").isalpha() for w in words):
-        lower_txt = text.strip().lower()
-        non_name_words = [
-            "want", "need", "like", "would", "schedule", "book", "available", "availability",
-            "slot", "slots", "time", "timing", "day", "tomorrow", "today", "appointment",
-            "checkup", "cleaning", "dentist", "doctor", "dr", "info", "information", "price",
-            "yes", "no", "ok", "okay", "sure", "thanks", "thank you", "cancel", "help", "hello", "hi", "hey",
-            "root", "canal", "treatment", "extraction", "whitening", "braces", "consultation", "scaling", "polishing",
-            "confirm", "confirmed", "confirmation", "change", "modify", "reset", "details", "haan", "theek",
-            "who", "what", "where", "when", "why", "how", "are", "you", "your", "is", "am", "i", "a", "an", "the",
-            "for", "with", "at", "to", "in", "on", "can", "could", "should", "will", "shall", "do", "does", "did",
-            "have", "has", "had", "tell", "show", "list", "give", "please", "not", "dont", "good", "morning", "afternoon",
-            "kal", "aaj", "parso", "parson", "subah", "shaam", "dopahar", "raat", "baje", "bje", "bjay",
-            "kro", "krdo", "kardo", "kar", "kr", "karna", "krna", "btao", "batao", "batayein",
-            "check", "up", "kalye", "kelye", "klie", "keliye",
-            "pehly", "pehle", "ka", "ki", "ke", "ko", "se", "sy", "hain", "hai", "ha", "hun", "hoon",
-            "nhi", "nahi", "karwana", "krwana", "chahiye", "chahta", "chahti"
-        ]
-        if any(nw in lower_txt.split() or lower_txt == nw for nw in non_name_words):
-            return None
-        if roster_names:
-            roster_entries = [{"id": i, "name": n} for i, n in enumerate(roster_names)]
-            if _fuzzy_match_roster(text, roster_entries):
-                return None
+    if _is_valid_name_token(text, roster_names):
         return text.strip().title()
     return None
 
@@ -1201,9 +1342,11 @@ class MockAdapter(BaseLLMAdapter):
         # Check Reschedule / Move Request
         if any(w in user_text for w in ["move it to", "move to", "reschedule", "change time to", "change appointment time", "postpone to"]):
             if time_token:
+                if not doc_id:
+                    return _prompt_doctor_choice(doctor_roster, lang, effective_name)
                 return {
                     "content": f"I can help reschedule your appointment to {_fmt_time_ampm(time_token)}. Checking open slots for {doc_name or 'our practicing dentist'}...",
-                    "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str or req_date or "2026-08-28", "doctor_id": doc_id or 1, "service_id": svc_id or 1}}]
+                    "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str or req_date or "2026-08-28", "doctor_id": doc_id, "service_id": svc_id}}]
                 }
             if lang == "urdu":
                 return {
@@ -1238,15 +1381,24 @@ class MockAdapter(BaseLLMAdapter):
             }
 
         # Check Explicit Doctor Switch / Change Request
-        if any(w in user_text for w in ["instead", "switch", "change doctor", "different doctor", "actually i want", "prefer dr"]):
+        if any(w in user_text for w in ["instead", "switch", "change doctor", "different doctor", "actually i want", "prefer dr", "change my doctor", "switch doctor", "switch my doctor"]):
             matched_switch_doc = _fuzzy_match_roster(user_text, doctor_roster)
             if matched_switch_doc:
                 doc_id = matched_switch_doc["id"]
                 doc_name = matched_switch_doc["name"]
+                active_svc_id = conv_state.get("active_appointment_service_id")
+                new_doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id]
+                # If current service does NOT belong to the new doctor, prompt for service
+                if active_svc_id and not any(s["id"] == active_svc_id for s in new_doc_services):
+                    matched_svc_switch = _fuzzy_match_roster(user_text, new_doc_services)
+                    if matched_svc_switch:
+                        svc_id = matched_svc_switch["id"]
+                    else:
+                        return _prompt_service_choice(doc_id, doc_name, service_roster, lang, effective_name)
                 if target_date_str:
                     return {
                         "content": f"Switched to {doc_name}. Checking available slots on {target_date_str}...",
-                        "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id or 1}}]
+                        "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
                     }
                 if lang == "urdu":
                     return {
@@ -1262,6 +1414,8 @@ class MockAdapter(BaseLLMAdapter):
                     "content": f"{doc_name} selected. Which date would you prefer for your appointment?",
                     "tool_calls": []
                 }
+            else:
+                return _prompt_doctor_choice(doctor_roster, lang, effective_name)
 
         # ── SCHEDULE INTENT HANDLER (uses _msg_intent from classifier) ──────────
         # Detects weekday from current message using the same canonical map
@@ -1364,12 +1518,16 @@ class MockAdapter(BaseLLMAdapter):
                 if target_date_str and not is_question:
                     if time_token or req_time:
                         chosen_time = time_token or req_time
+                        if not doc_id:
+                            return _prompt_doctor_choice(doctor_roster, lang, effective_name)
+                        doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id] if doc_id else service_roster
+                        effective_svc_id = svc_id or (doc_services[0]["id"] if doc_services else None)
                         # Authoritative live availability check
                         from services.booking_service import BookingService
                         avail_check = BookingService.check_availability(
                             business_id=conv_state.get('business_id', 1),
-                            doctor_id=doc_id or 1,
-                            service_id=svc_id or 1,
+                            doctor_id=doc_id,
+                            service_id=effective_svc_id,
                             date_str=target_date_str
                         )
                         avail_slots = avail_check.get("available_slots", []) if avail_check.get("success") else []
@@ -1397,21 +1555,10 @@ class MockAdapter(BaseLLMAdapter):
                                 }
 
                         if effective_name and effective_phone:
-                            return {
-                                "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {chosen_time}...",
-                                "tool_calls": [{
-                                    "name": "book_appointment",
-                                    "arguments": {
-                                        "customer_name": effective_name,
-                                        "customer_phone": effective_phone,
-                                        "doctor_id": doc_id or 1,
-                                        "service_id": svc_id or 1,
-                                        "appointment_date": target_date_str,
-                                        "appointment_time": chosen_time,
-                                        "notes": "Booked via AI Assistant"
-                                    }
-                                }]
-                            }
+                            return _make_booking_or_reschedule_tool(
+                                conv_state, user_text, effective_name, effective_phone,
+                                doc_id, doc_name, effective_svc_id, target_date_str, chosen_time
+                            )
                         elif effective_name and not effective_phone:
                             spoken_d_u = _fmt_spoken_date_urdu(target_date_str)
                             spoken_t_u = _fmt_spoken_time_urdu(chosen_time)
@@ -1451,9 +1598,11 @@ class MockAdapter(BaseLLMAdapter):
                                 "tool_calls": []
                             }
                     else:
+                        if not doc_id:
+                            return _prompt_doctor_choice(doctor_roster, lang, effective_name)
                         return {
                             "content": f"Checking open slots for {doc_name or 'our practicing dentist'} on {target_date_str}...",
-                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id or 1, "service_id": svc_id or 1}}]
+                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
                         }
                 elif not is_question:
                     if doc_name and svc_name:
@@ -1515,10 +1664,18 @@ class MockAdapter(BaseLLMAdapter):
                     doc_name = matched_doc["name"]
                     cand_name = None
                     effective_name = pending_name
+                    active_svc_id = conv_state.get("active_appointment_service_id")
+                    new_doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id]
+                    if active_svc_id and not any(s["id"] == active_svc_id for s in new_doc_services) and not svc_id:
+                        matched_svc_choice = _fuzzy_match_roster(user_text, new_doc_services)
+                        if matched_svc_choice:
+                            svc_id = matched_svc_choice["id"]
+                        else:
+                            return _prompt_service_choice(doc_id, doc_name, service_roster, lang, effective_name)
                     if target_date_str:
                         return {
                             "content": f"Checking open slots for {doc_name} on {target_date_str}...",
-                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id or 1}}]
+                            "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": doc_id, "service_id": svc_id}}]
                         }
                     if lang == "urdu":
                         greeting = f"بالکل، {effective_name} صاحب! " if effective_name else "بالکل! "
@@ -1541,10 +1698,14 @@ class MockAdapter(BaseLLMAdapter):
                 if matched_svc_here:
                     svc_id = matched_svc_here["id"]
                     svc_name = matched_svc_here["name"]
+                    offering_doc = next((d for d in doctor_roster if d["id"] == matched_svc_here.get("doctor_id")), None) if not doc_id else None
+                    effective_doc_id = doc_id or (offering_doc["id"] if offering_doc else None)
+                    effective_doc_name = doc_name or (offering_doc["name"] if offering_doc else None)
+                    if not effective_doc_id:
+                        return _prompt_doctor_choice(doctor_roster, lang, effective_name)
                     if target_date_str:
-                        effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
                         return {
-                            "content": f"Checking open slots for {svc_name} on {target_date_str}...",
+                            "content": f"Checking open slots for {svc_name} with {effective_doc_name} on {target_date_str}...",
                             "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": effective_doc_id, "service_id": svc_id}}]
                         }
                     if doc_id:
@@ -1598,9 +1759,12 @@ class MockAdapter(BaseLLMAdapter):
                 if matched_svc:
                     svc_id = matched_svc["id"]
                     svc_name = matched_svc["name"]
+                    offering_doc = next((d for d in doctor_roster if d["id"] == matched_svc.get("doctor_id")), None) if not doc_id else None
+                    effective_doc_id = doc_id or (offering_doc["id"] if offering_doc else None)
+                    effective_doc_name = doc_name or (offering_doc["name"] if offering_doc else None)
+                    if not effective_doc_id:
+                        return _prompt_doctor_choice(doctor_roster, lang, effective_name)
                     if effective_phone and effective_name and (req_time or time_token) and target_date_str:
-                        effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
-                        effective_doc_name = doc_name or (doctor_roster[0]["name"] if doctor_roster else "our practicing dentist")
                         chosen_time = time_token or req_time or "10:00"
                         return {
                             "content": f"Booking your appointment with {effective_doc_name} for {target_date_str} at {chosen_time}...",
@@ -1625,13 +1789,12 @@ class MockAdapter(BaseLLMAdapter):
                                 "tool_calls": []
                             }
                         return {
-                            "content": f"I have selected the {_fmt_time_ampm(chosen_time)} slot on {target_date_str} with {doc_name or 'Dr. Sara Malik'} for {svc_name}. To complete and confirm your booking, please provide your full name and contact phone number.",
+                            "content": f"I have selected the {_fmt_time_ampm(chosen_time)} slot on {target_date_str} with {effective_doc_name} for {svc_name}. To complete and confirm your booking, please provide your full name and contact phone number.",
                             "tool_calls": []
                         }
                     elif target_date_str:
-                        effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
                         return {
-                            "content": f"Checking open slots for {svc_name} on {target_date_str}...",
+                            "content": f"Checking open slots for {svc_name} with {effective_doc_name} on {target_date_str}...",
                             "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": effective_doc_id, "service_id": svc_id}}]
                         }
                     elif doc_id:
@@ -1643,32 +1806,37 @@ class MockAdapter(BaseLLMAdapter):
                         "content": f"You selected {svc_name}. Which doctor would you prefer?",
                         "tool_calls": []
                     }
-                elif not is_question and not target_date_str:
-                    roster_names = ", ".join(s["name"] for s in service_roster) or "Dental Checkup, Dental Cleaning, Teeth Whitening, Tooth Extraction, Root Canal, or Braces"
-                    return {
-                        "content": f"Which of our available dental services would you like to select? {roster_names}. (If you are not sure what you need, we can book a general consultation.)",
-                        "tool_calls": []
-                    }
+                elif not is_question and (not target_date_str or conv_state.get("intent") == "RESCHEDULE_APPOINTMENT"):
+                    if doc_id:
+                        return _prompt_service_choice(doc_id, doc_name, service_roster, lang, effective_name)
+                    else:
+                        if lang == "urdu":
+                            return {
+                                "content": "سمائل کیئر ایک پولی کلینک ہے جہاں ہر ڈاکٹر کی سروسز اور فیس الگ ہے۔ براہ کرم بتائیے کہ آپ کس ڈاکٹر کی سروسز دیکھنا چاہتے ہیں؟ ہمارے پاس Dr. Ahmed Khan (General & Ortho) اور Dr. Sara Malik (Pediatric & Cosmetic) موجود ہیں۔",
+                                "tool_calls": []
+                            }
+                        elif lang == "roman_urdu":
+                            return {
+                                "content": "SmileCare ek polyclinic hai jahan har doctor ki services aur pricing alag hai. Aap kis doctor ki services dekhna chahte hain? Hamare paas Dr. Ahmed Khan (General Dentistry & Orthodontics) aur Dr. Sara Malik (Pediatric & Cosmetic Dentistry) available hain.",
+                                "tool_calls": []
+                            }
+                        return {
+                            "content": "SmileCare is a polyclinic where each doctor offers their own separate set of services and pricing. Which doctor would you like to see services for?\n\n• **Dr. Ahmed Khan** - General Dentistry & Orthodontics\n• **Dr. Sara Malik** - Pediatric & Cosmetic Dentistry",
+                            "tool_calls": []
+                        }
 
             elif awaiting_input == "confirmation":
                 if any(w in user_text for w in ["yes", "yeah", "confirm", "sure", "go ahead", "ok", "okay", "haan", "theek", "book it", "please book", "book"]):
+                    if not doc_id:
+                        return _prompt_doctor_choice(doctor_roster, lang, effective_name)
+                    doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id] if doc_id else service_roster
+                    effective_svc_id = svc_id or (doc_services[0]["id"] if doc_services else None)
                     if effective_name and effective_phone and target_date_str:
                         chosen_time = req_time or "10:00"
-                        return {
-                            "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {chosen_time}...",
-                            "tool_calls": [{
-                                "name": "book_appointment",
-                                "arguments": {
-                                    "customer_name": effective_name,
-                                    "customer_phone": effective_phone,
-                                    "doctor_id": doc_id or 1,
-                                    "service_id": svc_id or 1,
-                                    "appointment_date": target_date_str,
-                                    "appointment_time": chosen_time,
-                                    "notes": "Booked via AI Assistant"
-                                }
-                            }]
-                        }
+                        return _make_booking_or_reschedule_tool(
+                            conv_state, user_text, effective_name, effective_phone,
+                            doc_id, doc_name, effective_svc_id, target_date_str, chosen_time
+                        )
                 elif any(w in user_text for w in ["no", "cancel", "nevermind", "nahi"]):
                     return {
                         "content": "I have cancelled your booking request. How else may I assist you?",
@@ -1679,21 +1847,14 @@ class MockAdapter(BaseLLMAdapter):
                 if cand_name:
                     effective_name = cand_name
                     if effective_phone and target_date_str and req_time:
-                        return {
-                            "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {req_time}...",
-                            "tool_calls": [{
-                                "name": "book_appointment",
-                                "arguments": {
-                                    "customer_name": effective_name,
-                                    "customer_phone": effective_phone,
-                                    "doctor_id": doc_id or 1,
-                                    "service_id": svc_id or 1,
-                                    "appointment_date": target_date_str,
-                                    "appointment_time": req_time,
-                                    "notes": "Booked via AI Assistant"
-                                }
-                            }]
-                        }
+                        if not doc_id:
+                            return _prompt_doctor_choice(doctor_roster, lang, effective_name)
+                        doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id] if doc_id else service_roster
+                        effective_svc_id = svc_id or (doc_services[0]["id"] if doc_services else None)
+                        return _make_booking_or_reschedule_tool(
+                            conv_state, user_text, effective_name, effective_phone,
+                            doc_id, doc_name, effective_svc_id, target_date_str, req_time
+                        )
                     return {
                         "content": f"Thank you, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
                         "tool_calls": []
@@ -1703,21 +1864,14 @@ class MockAdapter(BaseLLMAdapter):
                 if phone_match:
                     effective_phone = phone_match
                     if effective_name and target_date_str and req_time:
-                        return {
-                            "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {req_time}...",
-                            "tool_calls": [{
-                                "name": "book_appointment",
-                                "arguments": {
-                                    "customer_name": effective_name,
-                                    "customer_phone": effective_phone,
-                                    "doctor_id": doc_id or 1,
-                                    "service_id": svc_id or 1,
-                                    "appointment_date": target_date_str,
-                                    "appointment_time": req_time,
-                                    "notes": "Booked via AI Assistant"
-                                }
-                            }]
-                        }
+                        if not doc_id:
+                            return _prompt_doctor_choice(doctor_roster, lang, effective_name)
+                        doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id] if doc_id else service_roster
+                        effective_svc_id = svc_id or (doc_services[0]["id"] if doc_services else None)
+                        return _make_booking_or_reschedule_tool(
+                            conv_state, user_text, effective_name, effective_phone,
+                            doc_id, doc_name, effective_svc_id, target_date_str, req_time
+                        )
                     return {
                         "content": "Thank you. Please provide your full name to complete and confirm your booking.",
                         "tool_calls": []
@@ -1725,11 +1879,13 @@ class MockAdapter(BaseLLMAdapter):
 
             elif awaiting_input == "time_choice":
                 if time_token:
+                    if not doc_id:
+                        return _prompt_doctor_choice(doctor_roster, lang, effective_name)
                     from services.booking_service import BookingService
                     avail_check = BookingService.check_availability(
                         business_id=conv_state.get('business_id', 1),
-                        doctor_id=doc_id or 1,
-                        service_id=svc_id or 1,
+                        doctor_id=doc_id,
+                        service_id=svc_id,
                         date_str=target_date_str
                     ) if target_date_str else {"success": False, "available_slots": []}
                     avail_slots = avail_check.get("available_slots", []) if avail_check.get("success") else (conv_state.get("all_offered_slots") or [])
@@ -1757,21 +1913,12 @@ class MockAdapter(BaseLLMAdapter):
                             }
                     req_time = time_token
                     if effective_name and effective_phone and target_date_str:
-                        return {
-                            "content": f"Booking your appointment with {doc_name or 'our practicing dentist'} for {target_date_str} at {time_token}...",
-                            "tool_calls": [{
-                                "name": "book_appointment",
-                                "arguments": {
-                                    "customer_name": effective_name,
-                                    "customer_phone": effective_phone,
-                                    "doctor_id": doc_id or 1,
-                                    "service_id": svc_id or 1,
-                                    "appointment_date": target_date_str,
-                                    "appointment_time": time_token,
-                                    "notes": "Booked via AI Assistant"
-                                }
-                            }]
-                        }
+                        doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id] if doc_id else service_roster
+                        effective_svc_id = svc_id or (doc_services[0]["id"] if doc_services else None)
+                        return _make_booking_or_reschedule_tool(
+                            conv_state, user_text, effective_name, effective_phone,
+                            doc_id, doc_name, effective_svc_id, target_date_str, time_token
+                        )
                     elif effective_name and not effective_phone:
                         return {
                             "content": f"Thanks, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
@@ -1880,10 +2027,27 @@ class MockAdapter(BaseLLMAdapter):
         is_dont_know_treatment = any(phrase in user_text for phrase in ["dont know", "don't know", "not sure", "unsure", "pata nahi", "nahi pata", "maloom nahi"])
         is_service_inquiry = not is_dont_know_treatment and any(w in user_text for w in ["which service", "what service", "what services", "list service", "list services", "treatment", "treatments", "price", "prices", "cost", "costs", "charge", "charges", "what do you offer", "how much"])
         if is_service_inquiry:
-            return {
-                "content": "Let me fetch our dental services and pricing for you.",
-                "tool_calls": [{"name": "get_services", "arguments": {}}]
-            }
+            if doc_id:
+                return {
+                    "content": f"Let me fetch the dental services and pricing for {doc_name or 'your selected doctor'}.",
+                    "tool_calls": [{"name": "get_services", "arguments": {"doctor_id": doc_id}}]
+                }
+            else:
+                if lang == "urdu":
+                    return {
+                        "content": "سمائل کیئر ایک پولی کلینک ہے جہاں ہر ڈاکٹر کی سروسز اور فیس الگ ہے۔ براہ کرم بتائیے کہ آپ کس ڈاکٹر کی سروسز دیکھنا چاہتے ہیں؟ ہمارے پاس Dr. Ahmed Khan (General & Ortho) اور Dr. Sara Malik (Pediatric & Cosmetic) موجود ہیں۔",
+                        "tool_calls": []
+                    }
+                elif lang == "roman_urdu":
+                    return {
+                        "content": "SmileCare ek polyclinic hai jahan har doctor ki services aur pricing alag hai. Aap kis doctor ki services dekhna chahte hain? Hamare paas Dr. Ahmed Khan (General Dentistry & Orthodontics) aur Dr. Sara Malik (Pediatric & Cosmetic Dentistry) available hain.",
+                        "tool_calls": []
+                    }
+                else:
+                    return {
+                        "content": "SmileCare is a polyclinic where each doctor offers their own separate set of services and pricing. Which doctor would you like to see services for?\n\n• **Dr. Ahmed Khan** - General Dentistry & Orthodontics\n• **Dr. Sara Malik** - Pediatric & Cosmetic Dentistry",
+                        "tool_calls": []
+                    }
 
         is_clinic_info_inquiry = any(w in user_text for w in ["address", "location", "located", "where is", "where are", "timing", "hours", "contact", "phone number", "clinic info", "directions"])
         if is_clinic_info_inquiry:
@@ -2057,28 +2221,23 @@ class MockAdapter(BaseLLMAdapter):
                     "tool_calls": []
                 }
 
-        # Case C: Both name and phone are available -> proceed to book
-        if effective_phone and effective_name and (req_time or time_token or target_date_str) and effective_date:
-            effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
-            effective_doc_name = doc_name or (doctor_roster[0]["name"] if doctor_roster else "our practicing dentist")
-            effective_svc_id = svc_id or (service_roster[0]["id"] if service_roster else 1)
+        # Case C: Both name and phone are available -> proceed to book or reschedule
+        is_reschedule = (conv_state.get("intent") == "RESCHEDULE_APPOINTMENT") or bool(conv_state.get("active_appointment_id") and any(w in user_text.lower() for w in ["reschedule", "change", "switch", "same", "confirm", "yes", "update"]))
+        has_time = bool(req_time or time_token)
+        time_or_date_ready = has_time if is_reschedule else (req_time or time_token or target_date_str)
+        if effective_phone and effective_name and time_or_date_ready and effective_date:
+            if not doc_id:
+                return _prompt_doctor_choice(doctor_roster, lang, effective_name)
+            doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id] if doc_id else service_roster
+            effective_svc_id = svc_id or (doc_services[0]["id"] if doc_services else None)
+            effective_doc_id = doc_id
+            effective_doc_name = doc_name or "our practicing dentist"
             chosen_time = time_token or req_time or (doc_slots[0] if doc_slots else "09:00")
 
-            return {
-                "content": f"Booking your appointment with {effective_doc_name} for {effective_date} at {chosen_time}...",
-                "tool_calls": [{
-                    "name": "book_appointment",
-                    "arguments": {
-                        "customer_name": effective_name,
-                        "customer_phone": effective_phone,
-                        "doctor_id": effective_doc_id,
-                        "service_id": effective_svc_id,
-                        "appointment_date": effective_date,
-                        "appointment_time": chosen_time,
-                        "notes": "Booked via AI Assistant"
-                    }
-                }]
-            }
+            return _make_booking_or_reschedule_tool(
+                conv_state, user_text, effective_name, effective_phone,
+                effective_doc_id, effective_doc_name, effective_svc_id, effective_date, chosen_time
+            )
 
         # Direct name stated by user in booking context (e.g. "Name is Haroon", "My name is Ali", "Mera naam Ahmed hai")
         if cand_name and not phone_match and not is_question:
@@ -2216,10 +2375,14 @@ class MockAdapter(BaseLLMAdapter):
         if matched_svc_any and not is_question:
             svc_id = matched_svc_any["id"]
             svc_name = matched_svc_any["name"]
+            offering_doc = next((d for d in doctor_roster if d["id"] == matched_svc_any.get("doctor_id")), None) if not doc_id else None
+            effective_doc_id = doc_id or (offering_doc["id"] if offering_doc else None)
+            effective_doc_name = doc_name or (offering_doc["name"] if offering_doc else None)
             if target_date_str:
-                effective_doc_id = doc_id or (doctor_roster[0]["id"] if doctor_roster else 1)
+                if not effective_doc_id:
+                    return _prompt_doctor_choice(doctor_roster, lang, effective_name)
                 return {
-                    "content": f"Checking open slots for {svc_name} on {target_date_str}...",
+                    "content": f"Checking open slots for {svc_name} with {effective_doc_name} on {target_date_str}...",
                     "tool_calls": [{"name": "check_availability", "arguments": {"date": target_date_str, "doctor_id": effective_doc_id, "service_id": svc_id}}]
                 }
             if doc_id:
@@ -2238,20 +2401,39 @@ class MockAdapter(BaseLLMAdapter):
                     "tool_calls": []
                 }
             else:
-                if lang == "urdu":
+                offering_doc = next((d for d in doctor_roster if d["id"] == matched_svc_any.get("doctor_id")), None)
+                if offering_doc:
+                    o_name = offering_doc["name"]
+                    o_spec = offering_doc.get("specialization", "")
+                    if lang == "urdu":
+                        return {
+                            "content": f"سمائل کیئر میں {svc_name} کے ماہر {o_name} ({o_spec}) ہیں۔ کیا آپ {o_name} کے ساتھ بکنگ آگے بڑھانا چاہیں گے؟",
+                            "tool_calls": []
+                        }
+                    elif lang == "roman_urdu":
+                        return {
+                            "content": f"SmileCare mein {svc_name} **{o_name}** ({o_spec}) offer karte hain. Kya aap {o_name} ke sath proceed karna chahenge?",
+                            "tool_calls": []
+                        }
                     return {
-                        "content": f"آپ نے {svc_name} کا انتخاب کیا ہے۔ آپ کس ڈاکٹر کو ترجیح دیں گے؟",
+                        "content": f"At SmileCare Dental Clinic, {svc_name} is offered by **{o_name}** ({o_spec}). Would you like to proceed with {o_name}?",
                         "tool_calls": []
                     }
-                elif lang == "roman_urdu":
+                else:
+                    if lang == "urdu":
+                        return {
+                            "content": f"آپ نے {svc_name} کا انتخاب کیا ہے۔ آپ کس ڈاکٹر کو ترجیح دیں گے؟",
+                            "tool_calls": []
+                        }
+                    elif lang == "roman_urdu":
+                        return {
+                            "content": f"Aap ne {svc_name} select ki hai. Aap kis doctor ko prefer karein ge?",
+                            "tool_calls": []
+                        }
                     return {
-                        "content": f"Aap ne {svc_name} select ki hai. Aap kis doctor ko prefer karein ge?",
+                        "content": f"You selected {svc_name}. Which doctor would you prefer?",
                         "tool_calls": []
                     }
-                return {
-                    "content": f"You selected {svc_name}. Which doctor would you prefer?",
-                    "tool_calls": []
-                }
         elif any(w in user_text for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup"]):
             consultation_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else {"id": 1, "name": "Dental Checkup & Consultation", "price": 2000})
             fee = consultation_svc.get("price", 2000.0)
@@ -2291,13 +2473,14 @@ class MockAdapter(BaseLLMAdapter):
         # 6. Booking intent or explicit date provided in active booking context -> Check availability if date is known, or ask for service/doctor/date
         if _has_booking_intent(user_text) or (explicit_date_given and target_date_str and (workflow_state in ["CHECKING_AVAILABILITY", "COLLECTING_INFO", "START"] or conv_state.get("intent") in ["BOOK_APPOINTMENT", "UNKNOWN"])):
             if explicit_date_given and target_date_str:
+                disp_doc = doc_name or "our practicing dentists"
                 return {
-                    "content": f"Checking open slots for you on {target_date_str}...",
+                    "content": f"Checking open slots for {disp_doc} on {target_date_str}...",
                     "tool_calls": [{
                         "name": "check_availability",
                         "arguments": {
                             "date": target_date_str,
-                            "doctor_id": doc_id or 1,
+                            "doctor_id": doc_id,
                             "service_id": svc_id
                         }
                     }]

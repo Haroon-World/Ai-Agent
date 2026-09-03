@@ -70,6 +70,7 @@ class TestTimeSelectionUIRegression(unittest.TestCase):
         if not self.svc1:
             self.svc1 = Service(
                 business_id=self.biz.id,
+                doctor_id=self.doc1.id,
                 name="Dental Checkup & Consultation",
                 duration=30,
                 price=2000.0,
@@ -81,6 +82,7 @@ class TestTimeSelectionUIRegression(unittest.TestCase):
         if not self.svc2:
             self.svc2 = Service(
                 business_id=self.biz.id,
+                doctor_id=self.doc2.id,
                 name="Dental Cleaning & Scaling",
                 duration=45,
                 price=4000.0,

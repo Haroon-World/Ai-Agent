@@ -81,12 +81,12 @@ class TestWeeklyScheduleAndAvailabilityEngine(unittest.TestCase):
 
         svc1 = db.session.get(Service, 1)
         if not svc1:
-            svc1 = Service(id=1, business_id=1, name="Dental Checkup", description="Exam", duration=30, price=2000.0)
+            svc1 = Service(id=1, business_id=1, doctor_id=doc1.id, name="Dental Checkup", description="Exam", duration=30, price=2000.0)
             db.session.add(svc1)
 
         svc2 = db.session.get(Service, 2)
         if not svc2:
-            svc2 = Service(id=2, business_id=1, name="Dental Cleaning", description="Cleaning", duration=45, price=4000.0)
+            svc2 = Service(id=2, business_id=1, doctor_id=doc1.id, name="Dental Cleaning", description="Cleaning", duration=45, price=4000.0)
             db.session.add(svc2)
 
         db.session.commit()
@@ -119,8 +119,8 @@ class TestWeeklyScheduleAndAvailabilityEngine(unittest.TestCase):
         thurs_date = self._get_next_date_for_day("Thursday") # Thursday works 10:00 to 16:00
         # 30 min service
         res_30 = BookingService.check_availability(business_id=1, doctor_id=1, service_id=1, date_str=thurs_date)
-        # 45 min service
-        res_45 = BookingService.check_availability(business_id=1, doctor_id=1, service_id=2, date_str=thurs_date)
+        # 45 min service (Tooth Extraction, service_id=4 for doctor_id=1)
+        res_45 = BookingService.check_availability(business_id=1, doctor_id=1, service_id=4, date_str=thurs_date)
         self.assertEqual(res_30["duration_minutes"], 30)
         self.assertEqual(res_45["duration_minutes"], 45)
         # For 45 min service starting 10:00, slots: 10:00, 10:30... 15:00 (ends 15:45 <= 16:00)
@@ -203,7 +203,7 @@ class TestWeeklyScheduleAndAvailabilityEngine(unittest.TestCase):
     def test_9_check_availability_returns_db_generated_slots(self):
         """9. check_availability returns actual DB-generated slots matching schema."""
         monday_date = self._get_next_date_for_day("Monday")
-        res = BookingService.check_availability(business_id=1, doctor_id=1, service_id=2, date_str=monday_date)
+        res = BookingService.check_availability(business_id=1, doctor_id=1, service_id=4, date_str=monday_date)
         self.assertTrue(res["success"])
         self.assertEqual(res["doctor"], "Dr. Ahmed Khan")
         self.assertEqual(res["duration_minutes"], 45)

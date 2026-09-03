@@ -60,7 +60,7 @@ class TestEndToEndSuite(unittest.TestCase):
             customer_name="Ali Hassan",
             customer_phone="+923001234567",
             doctor_id=1,
-            service_id=2, # Dental Cleaning
+            service_id=1,
             appointment_date=tomorrow,
             appointment_time=chosen_slot,
             notes="First visit"
@@ -79,7 +79,7 @@ class TestEndToEndSuite(unittest.TestCase):
             customer_name="Sara Khan",
             customer_phone="+923009876543",
             doctor_id=1,
-            service_id=2,
+            service_id=1,
             appointment_date=tomorrow,
             appointment_time=chosen_slot
         )

@@ -407,7 +407,8 @@ def services_view():
     business_id = Config.DEFAULT_BUSINESS_ID
     business = db.session.get(Business, business_id)
     services = Service.query.filter_by(business_id=business_id).order_by(Service.id.asc()).all()
-    return render_template("services.html", business=business, services=services)
+    doctors = Doctor.query.filter_by(business_id=business_id).all()
+    return render_template("services.html", business=business, services=services, doctors=doctors)
 
 @admin_bp.route("/admin/services/add", methods=["POST"])
 @login_required
@@ -415,6 +416,10 @@ def add_service():
     business_id = Config.DEFAULT_BUSINESS_ID
     name = request.form.get("name", "").strip()
     description = request.form.get("description", "").strip()
+    try:
+        doctor_id = int(request.form.get("doctor_id", "1"))
+    except Exception:
+        doctor_id = 1
     try:
         duration = int(request.form.get("duration", "30"))
     except Exception:
@@ -431,6 +436,7 @@ def add_service():
 
     service = Service(
         business_id=business_id,
+        doctor_id=doctor_id,
         name=name,
         description=description or None,
         duration=duration,

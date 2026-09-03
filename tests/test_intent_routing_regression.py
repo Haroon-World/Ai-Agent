@@ -68,7 +68,7 @@ class TestIntentRoutingAndConversationFix(unittest.TestCase):
         self.assertEqual(res["status"], "AI")
         executed_tool_names = [t["name"] for t in res.get("executed_tools", [])]
         self.assertNotIn("check_availability", executed_tool_names)
-        self.assertTrue("date" in res["content"].lower() or "which" in res["content"].lower())
+        self.assertTrue("doctor" in res["content"].lower() or "select" in res["content"].lower() or "date" in res["content"].lower())
 
     def test_3_tell_me_your_doctors(self):
         """TEST 3: 'Tell me your doctors' -> calls get_doctors."""
@@ -159,13 +159,13 @@ class TestIntentRoutingAndConversationFix(unittest.TestCase):
         self.assertEqual(appt.customer.name, "Muhammad Haroon")
 
     def test_8_compound_intent_services_inquiry(self):
-        """TEST 8: 'I want an appointment, what services do you offer?' -> get_services first."""
+        """TEST 8: 'I want an appointment with Dr Sara, what services does she offer?' -> get_services first."""
         conv = Conversation(business_id=1, status="AI")
         db.session.add(conv)
         db.session.commit()
 
         agent = Agent(business_id=1, llm_provider="mock")
-        res = agent.process_message(conv.id, "I want an appointment, what services do you offer?")
+        res = agent.process_message(conv.id, "I want an appointment with Dr Sara, what services does she offer?")
 
         executed_tool_names = [t["name"] for t in res.get("executed_tools", [])]
         self.assertIn("get_services", executed_tool_names)

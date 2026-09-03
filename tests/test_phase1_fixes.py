@@ -107,7 +107,7 @@ class TestStateContextInjection(BaseFixTest):
         # Step 1: Ask for availability — check_availability is called and updates state
         resp1 = agent.process_message(
             conv.id,
-            f"I'd like to book a dental cleaning with Dr. Ahmed on {target_date}"
+            f"I'd like to book a dental checkup with Dr. Ahmed on {target_date}"
         )
         conv_db1 = db.session.get(Conversation, conv.id)
         self.assertEqual(conv_db1.requested_date, target_date,
@@ -136,7 +136,7 @@ class TestStateContextInjection(BaseFixTest):
             f"Response should acknowledge the chosen 09:30 time slot: {content2}"
         )
         self.assertTrue(
-            "name" in content2.lower() and "phone" in content2.lower(),
+            ("name" in content2.lower() or "naam" in content2.lower()) and "phone" in content2.lower(),
             f"Response should ask for patient name and phone number: {content2}"
         )
 
@@ -144,7 +144,7 @@ class TestStateContextInjection(BaseFixTest):
         conv_db2 = db.session.get(Conversation, conv.id)
         self.assertEqual(conv_db2.requested_date, target_date)
         self.assertEqual(conv_db2.selected_doctor_id, 1)
-        self.assertEqual(conv_db2.selected_service_id, 2)
+        self.assertEqual(conv_db2.selected_service_id, 1)
         self.assertEqual(conv_db2.requested_time, "09:30")
         self.assertEqual(conv_db2.status, "AI")
 
@@ -171,7 +171,7 @@ class TestStateContextInjection(BaseFixTest):
         ).first()
         self.assertIsNotNone(appt, "Appointment record should be created in the database")
         self.assertEqual(appt.doctor_id, 1)
-        self.assertEqual(appt.service_id, 2)
+        self.assertEqual(appt.service_id, 1)
         self.assertEqual(appt.customer.name, "Ali Raza")
 
     def test_out_of_scope_specialty_mid_conversation_preserves_state(self):
@@ -472,7 +472,7 @@ class TestDurationAwareOverlap(BaseFixTest):
 
         # Service 1 = Root Canal Treatment (60 min) — use any service that's ≥30 min
         # but find which service IDs are seeded:
-        services = Service.query.filter_by(business_id=Config.DEFAULT_BUSINESS_ID).all()
+        services = Service.query.filter_by(business_id=Config.DEFAULT_BUSINESS_ID, doctor_id=1).all()
         # Pick the longest service to guarantee overlap
         long_svc = max(services, key=lambda s: s.duration)
         short_svc = min(services, key=lambda s: s.duration)
@@ -505,7 +505,7 @@ class TestDurationAwareOverlap(BaseFixTest):
 
     def test_non_overlapping_same_day_accepted(self):
         target_date = self._next_monday()
-        services = Service.query.filter_by(business_id=Config.DEFAULT_BUSINESS_ID).all()
+        services = Service.query.filter_by(business_id=Config.DEFAULT_BUSINESS_ID, doctor_id=1).all()
         short_svc = min(services, key=lambda s: s.duration)
 
         # Two back-to-back non-overlapping slots
@@ -550,10 +550,10 @@ class TestWorkingDayValidation(BaseFixTest):
         sunday = self._next_sunday()
         result = BookingService.book_appointment(
             business_id=Config.DEFAULT_BUSINESS_ID,
-            customer_name="Weekend Warrior",
+            customer_name="Sunday Patient",
             customer_phone="+923005555555",
             doctor_id=1,       # Dr. Ahmed Khan — Mon–Sat only (Sunday is off)
-            service_id=2,
+            service_id=1,
             appointment_date=sunday,
             appointment_time="10:00",
         )
@@ -572,7 +572,7 @@ class TestWorkingDayValidation(BaseFixTest):
             customer_name="Monday Patient",
             customer_phone="+923006666666",
             doctor_id=1,
-            service_id=2,
+            service_id=1,
             appointment_date=monday,
             appointment_time="10:00",
         )
@@ -779,7 +779,7 @@ class TestConversationStateAndBookingValidation(BaseFixTest):
             customer_name="John Doe",
             customer_phone="",
             doctor_id=1,
-            service_id=2,
+            service_id=1,
             appointment_date=monday,
             appointment_time="10:00"
         )
@@ -829,7 +829,7 @@ class TestIdempotencyAndReminderTimezone(BaseFixTest):
             customer_name="Idempotent Patient",
             customer_phone="03009999999",
             doctor_id=1,
-            service_id=2,
+            service_id=1,
             appointment_date=monday,
             appointment_time="11:00",
             idempotency_key=key
@@ -843,7 +843,7 @@ class TestIdempotencyAndReminderTimezone(BaseFixTest):
             customer_name="Idempotent Patient",
             customer_phone="03009999999",
             doctor_id=1,
-            service_id=2,
+            service_id=1,
             appointment_date=monday,
             appointment_time="11:00",
             idempotency_key=key
@@ -868,7 +868,7 @@ class TestIdempotencyAndReminderTimezone(BaseFixTest):
             customer_name="Timezone Patient",
             customer_phone="03008888888",
             doctor_id=1,
-            service_id=2,
+            service_id=1,
             appointment_date=future_date_str,
             appointment_time="09:00"
         )
@@ -1102,7 +1102,7 @@ class TestFuzzyDoctorServiceMatching(unittest.TestCase):
         db.session.add(conv)
         db.session.commit()
 
-        agent.process_message(conv.id, "I'd like to book a dental cleaning with Dr. Ahmed")
+        agent.process_message(conv.id, "I'd like to book a dental cleaning with Dr. Sara")
         conv_db = db.session.get(Conversation, conv.id)
         self.assertEqual(conv_db.selected_service_id, 2,
                           "'dental cleaning' must match 'Dental Cleaning & Scaling' (id 2), not 'Dental Checkup & Consultation' (id 1) via the shared word 'dental'")

@@ -49,7 +49,7 @@ class TestTranscriptScenarioFixes(unittest.TestCase):
 
         svc = db.session.get(Service, 2)
         if not svc:
-            svc = Service(id=2, business_id=1, name="Dental Cleaning & Scaling", description="Cleaning", duration=45, price=4000.0)
+            svc = Service(id=2, business_id=1, doctor_id=doc.id, name="Dental Cleaning & Scaling", description="Cleaning", duration=45, price=4000.0)
             db.session.add(svc)
 
         db.session.commit()

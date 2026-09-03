@@ -9,16 +9,20 @@ class TestUserExactUrduFlow(unittest.TestCase):
     def setUp(self):
         self.app = create_app()
         self.app.config["TESTING"] = True
+        self.app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
         self.ctx = self.app.app_context()
         self.ctx.push()
+        db.create_all()
+        from seed import seed_database
+        seed_database()
+
         from tests.test_date_helpers import get_next_open_weekday, get_next_closed_day
         self.target_date = get_next_open_weekday(1, doctor_id=2)
         self.closed_date = get_next_closed_day(1)
-        Appointment.query.filter_by(business_id=1, appointment_date=self.target_date).delete()
-        db.session.commit()
 
     def tearDown(self):
         db.session.remove()
+        db.drop_all()
         self.ctx.pop()
 
     def test_5_turn_exact_urdu_conversation(self):
@@ -101,7 +105,6 @@ class TestUserExactUrduFlow(unittest.TestCase):
         # Turn 1: Doctor + Name in Urdu
         t1 = agent.process_message(conv.id, "میرا نام حارون ہے اور میری ڈاکٹر سارا سے appointment fix کر دیں for normal checkup.")
         self.assertEqual(conv.selected_doctor_id, 2)
-        self.assertEqual(conv.selected_service_id, 1)
         self.assertTrue("Haroon" in t1["content"] or "حارون" in t1["content"])
         self.assertIn("Dr. Sara Malik", t1["content"])
 

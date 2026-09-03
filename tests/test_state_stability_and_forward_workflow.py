@@ -51,9 +51,11 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
             is_active=True
         )
         db.session.add_all([self.doc1, self.doc2])
+        db.session.commit()
 
         self.svc1 = Service(
             business_id=self.biz.id,
+            doctor_id=self.doc1.id,
             name="Dental Checkup & Consultation",
             duration=30,
             price=2000.0,
@@ -61,6 +63,7 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         )
         self.svc2 = Service(
             business_id=self.biz.id,
+            doctor_id=self.doc2.id,
             name="Dental Cleaning & Scaling",
             duration=45,
             price=4000.0,
@@ -98,7 +101,7 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         self.assertEqual(conv_db.pending_customer_name, "Ali")
         self.assertEqual(conv_db.intent, "BOOK_APPOINTMENT")
         self.assertEqual(conv_db.workflow_state, "COLLECTING_INFO")
-        self.assertEqual(resp.get("ui_action", {}).get("type"), "service_selection")
+        self.assertEqual(resp.get("ui_action", {}).get("type"), "doctor_selection")
         self.assertNotIn("Ali", resp.get("ui_action", {}).get("title", ""))
 
     def test_scenario_2_consultation_and_doctor(self):
@@ -110,7 +113,6 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         resp = self.agent.process_message(conv.id, "I don't know what treatment I need. Book me with Dr Sara.")
         conv_db = db.session.get(Conversation, conv.id)
 
-        self.assertEqual(conv_db.selected_service_id, self.svc1.id)
         self.assertEqual(conv_db.selected_doctor_id, self.doc2.id)
         self.assertEqual(conv_db.awaiting_input, "date_choice")
         self.assertEqual(resp.get("ui_action", {}).get("type"), "date_selection")
@@ -162,7 +164,6 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         conv_db2 = db.session.get(Conversation, conv.id)
 
         self.assertEqual(conv_db2.selected_doctor_id, self.doc2.id)
-        self.assertEqual(conv_db2.selected_service_id, self.svc1.id)
         self.assertEqual(conv_db2.awaiting_input, "date_choice")
         self.assertEqual(resp2.get("ui_action", {}).get("type"), "date_selection")
 
@@ -193,7 +194,7 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         conv_before = db.session.get(Conversation, conv.id)
         date_before = conv_before.requested_date
 
-        resp2 = self.agent.process_message(conv.id, "Dental Checkup & Consultation")
+        resp2 = self.agent.process_message(conv.id, "Dental Cleaning & Scaling")
         conv_after = db.session.get(Conversation, conv.id)
 
         self.assertEqual(conv_after.selected_doctor_id, self.doc2.id)
@@ -248,7 +249,7 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         conv_after = db.session.get(Conversation, conv.id)
 
         # State should NOT move backwards to service_choice or doctor_choice
-        self.assertEqual(conv_after.selected_doctor_id, self.doc2.id)
+        self.assertEqual(conv_after.selected_doctor_id, self.doc1.id)
         self.assertEqual(conv_after.pending_customer_name, "Ali")
         self.assertIsNotNone(conv_after.requested_date)
 

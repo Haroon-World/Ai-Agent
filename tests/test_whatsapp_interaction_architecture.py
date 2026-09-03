@@ -85,7 +85,7 @@ class TestWhatsAppInteractionArchitecture(unittest.TestCase):
 
     def test_4_real_time_slot_selection_schema(self):
         target_date = self._next_working_date(doctor_id=2)
-        conv = Conversation(business_id=1, status='AI', intent='BOOK_APPOINTMENT', workflow_state='CHECKING_AVAILABILITY', selected_service_id=1, selected_doctor_id=2, requested_date=target_date)
+        conv = Conversation(business_id=1, status='AI', intent='BOOK_APPOINTMENT', workflow_state='CHECKING_AVAILABILITY', selected_service_id=2, selected_doctor_id=2, requested_date=target_date)
         db.session.add(conv)
         db.session.commit()
 

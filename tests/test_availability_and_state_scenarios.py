@@ -124,7 +124,7 @@ class TestAvailabilityAndStateScenarios(unittest.TestCase):
             status="AI",
             intent="BOOK_APPOINTMENT",
             selected_doctor_id=2,
-            selected_service_id=1,
+            selected_service_id=2,
             requested_date=future_working_date,
             awaiting_input="time_choice"
         )

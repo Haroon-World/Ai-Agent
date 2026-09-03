@@ -62,36 +62,23 @@ def seed_database(app=None):
                     )
                     db.session.add(sched)
 
-        # 3. Seed Services if not existing
+        # 3. Seed Services if not existing (split by doctor specialization)
         if Service.query.filter_by(business_id=clinic.id).count() == 0:
             services = [
+                # Dr. Ahmed Khan (General Dentistry & Orthodontics)
                 Service(
                     id=1,
                     business_id=clinic.id,
+                    doctor_id=dr_ahmed.id,
                     name="Dental Checkup & Consultation",
                     description="Comprehensive oral examination, diagnostic x-rays review, and consultation.",
                     duration=30,
                     price=2000.0
                 ),
                 Service(
-                    id=2,
-                    business_id=clinic.id,
-                    name="Dental Cleaning & Scaling",
-                    description="Professional tartar removal, plaque scaling, and teeth polishing.",
-                    duration=45,
-                    price=4000.0
-                ),
-                Service(
-                    id=3,
-                    business_id=clinic.id,
-                    name="Teeth Whitening",
-                    description="Advanced laser teeth whitening for a bright, radiant smile.",
-                    duration=60,
-                    price=8000.0
-                ),
-                Service(
                     id=4,
                     business_id=clinic.id,
+                    doctor_id=dr_ahmed.id,
                     name="Tooth Extraction",
                     description="Safe, painless tooth removal under local anesthesia.",
                     duration=45,
@@ -100,6 +87,7 @@ def seed_database(app=None):
                 Service(
                     id=5,
                     business_id=clinic.id,
+                    doctor_id=dr_ahmed.id,
                     name="Root Canal Treatment",
                     description="In-depth endodontic treatment to save infected or damaged teeth.",
                     duration=60,
@@ -108,10 +96,30 @@ def seed_database(app=None):
                 Service(
                     id=6,
                     business_id=clinic.id,
+                    doctor_id=dr_ahmed.id,
                     name="Dental Braces Consultation",
                     description="Orthodontic evaluation and alignment planning for braces or clear aligners.",
                     duration=30,
                     price=3000.0
+                ),
+                # Dr. Sara Malik (Pediatric & Cosmetic Dentistry)
+                Service(
+                    id=2,
+                    business_id=clinic.id,
+                    doctor_id=dr_sara.id,
+                    name="Dental Cleaning & Scaling",
+                    description="Professional tartar removal, plaque scaling, and teeth polishing.",
+                    duration=45,
+                    price=4000.0
+                ),
+                Service(
+                    id=3,
+                    business_id=clinic.id,
+                    doctor_id=dr_sara.id,
+                    name="Teeth Whitening",
+                    description="Advanced laser teeth whitening for a bright, radiant smile.",
+                    duration=60,
+                    price=8000.0
                 ),
             ]
             db.session.add_all(services)

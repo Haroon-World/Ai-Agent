@@ -205,12 +205,15 @@ class BookingService:
         return business.to_dict()
 
     @staticmethod
-    def get_services(business_id: int) -> List[Dict[str, Any]]:
-        """Fetch all dental services offered by the business."""
-        cache_key = f"services_dict_{business_id}"
+    def get_services(business_id: int, doctor_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Fetch dental services offered by the business or a specific doctor."""
+        cache_key = f"services_dict_{business_id}_{doctor_id}"
         svcs = RequestCache.get(cache_key)
         if svcs is None:
-            services = Service.query.filter_by(business_id=business_id).all()
+            query = Service.query.filter_by(business_id=business_id)
+            if doctor_id:
+                query = query.filter_by(doctor_id=doctor_id)
+            services = query.all()
             svcs = [s.to_dict() for s in services]
             RequestCache.set(cache_key, svcs)
         return svcs
@@ -280,6 +283,13 @@ class BookingService:
         if service_id:
             service = Service.query.filter_by(id=service_id, business_id=business_id).first()
             if service:
+                if doctor_id and service.doctor_id != doctor_id:
+                    doc = doctors[0] if doctors else None
+                    doc_name = doc.name if doc else "The requested doctor"
+                    return {
+                        "success": False,
+                        "error": f"{doc_name} does not offer {service.name}."
+                    }
                 duration_override = service.duration
 
         results = []
@@ -432,6 +442,11 @@ class BookingService:
         service = Service.query.filter_by(id=service_id, business_id=business_id).first()
         if not service:
             return {"success": False, "error": f"Service with ID {service_id} not found."}
+        if service.doctor_id != doctor.id:
+            return {
+                "success": False,
+                "error": f"{doctor.name} does not offer {service.name} - would you like to see available services for {doctor.name}, or book {service.name} with a doctor who offers it?"
+            }
 
         # --- Validate Date & Day of Week ---
         tz = _get_business_tz(business_id)
@@ -663,9 +678,14 @@ class BookingService:
         business_id: int,
         appointment_id: int,
         new_date: str,
-        new_time: str
+        new_time: str,
+        new_doctor_id: Optional[int] = None,
+        new_service_id: Optional[int] = None
     ) -> Dict[str, Any]:
-        """Reschedule an existing appointment to a new date and time."""
+        """
+        Reschedule an existing appointment to a new date and time, optionally changing doctor and/or service.
+        Validates schedule, break times, leaves, and conflicts against the target doctor.
+        """
         appt = Appointment.query.filter_by(id=appointment_id, business_id=business_id).first()
         if not appt:
             return {"success": False, "error": f"Appointment #{appointment_id} not found."}
@@ -676,8 +696,70 @@ class BookingService:
                 "error": f"Cannot reschedule cancelled appointment #{appointment_id}. Please book a new appointment."
             }
 
-        service = appt.service
-        duration = service.duration if service else 30
+        # 1. Determine target doctor
+        target_doctor_id = new_doctor_id if new_doctor_id is not None else appt.doctor_id
+        target_doctor = Doctor.query.filter_by(id=target_doctor_id, business_id=business_id).first()
+        if not target_doctor:
+            return {"success": False, "error": f"Doctor #{target_doctor_id} not found."}
+        if not target_doctor.is_active:
+            return {"success": False, "error": f"Dr. {target_doctor.name} is currently not practicing."}
+
+        # 2. Determine target service & validate polyclinic doctor-service ownership
+        if new_service_id is not None:
+            target_service = Service.query.filter_by(id=new_service_id, business_id=business_id).first()
+            if not target_service:
+                return {"success": False, "error": f"Service #{new_service_id} not found."}
+            if target_service.doctor_id != target_doctor.id:
+                return {
+                    "success": False,
+                    "error": f"Dr. {target_doctor.name} does not offer {target_service.name}."
+                }
+        else:
+            # Check if current appointment service belongs to the target doctor
+            if appt.service and appt.service.doctor_id == target_doctor.id:
+                target_service = appt.service
+            else:
+                # Service mismatch: target doctor does NOT offer the current service
+                avail_svcs = Service.query.filter_by(business_id=business_id, doctor_id=target_doctor.id).all()
+                svc_names = ", ".join(f"{s.name} (PKR {s.price:,.0f})" for s in avail_svcs) if avail_svcs else "None"
+                curr_svc_name = appt.service.name if appt.service else "the current service"
+                return {
+                    "success": False,
+                    "error": (
+                        f"Dr. {target_doctor.name} does not offer {curr_svc_name}. "
+                        f"Please select one of their available services: {svc_names}."
+                    )
+                }
+
+        # 3. Validate Date
+        try:
+            target_date = datetime.strptime(new_date, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return {"success": False, "error": "Invalid new_date format. Use YYYY-MM-DD."}
+
+        business = Business.query.get(business_id)
+        tz_str = business.timezone if business and business.timezone else "Asia/Karachi"
+        try:
+            tz = ZoneInfo(tz_str)
+        except Exception:
+            tz = ZoneInfo("Asia/Karachi")
+        now_dt = datetime.now(tz)
+        today = now_dt.date()
+        if target_date < today:
+            return {"success": False, "error": "Cannot reschedule an appointment to a past date."}
+
+        # 4. Validate Working Day for Target Doctor
+        day_name = target_date.strftime("%A")
+        doc_label = target_doctor.name if target_doctor.name.lower().startswith(('dr', 'doctor')) else f"Dr. {target_doctor.name}"
+        doc_sched = DoctorSchedule.query.filter_by(doctor_id=target_doctor.id, day_of_week=day_name).first()
+        if doc_sched and not doc_sched.is_available:
+            return {
+                "success": False,
+                "error": f"{doc_label} does not practice on {day_name}s."
+            }
+
+        # 5. Validate Time & Duration
+        duration = target_service.duration if target_service else 30
         try:
             new_h, new_m = map(int, new_time.split(":"))
         except (ValueError, TypeError):
@@ -686,9 +768,55 @@ class BookingService:
         new_start_m = new_h * 60 + new_m
         new_end_m = new_start_m + duration
 
+        # Working hours check
+        doc_start = doc_sched.start_time if doc_sched and doc_sched.start_time else target_doctor.start_time or "09:00"
+        doc_end = doc_sched.end_time if doc_sched and doc_sched.end_time else target_doctor.end_time or "17:00"
+        try:
+            sh, sm = _parse_time_str(doc_start)
+            eh, em = _parse_time_str(doc_end)
+            if new_start_m < (sh * 60 + sm) or new_end_m > (eh * 60 + em):
+                return {
+                    "success": False,
+                    "error": f"The requested time {new_time} is outside {doc_label}'s working hours ({doc_start} - {doc_end})."
+                }
+        except Exception:
+            pass
+
+        # Break time check
+        if target_doctor.break_start_time and target_doctor.break_end_time:
+            try:
+                bsh, bsm = _parse_time_str(target_doctor.break_start_time)
+                beh, bem = _parse_time_str(target_doctor.break_end_time)
+                b_start = bsh * 60 + bsm
+                b_end = beh * 60 + bem
+                if new_start_m < b_end and new_end_m > b_start:
+                    return {
+                        "success": False,
+                        "error": f"{doc_label} is on break from {target_doctor.break_start_time} to {target_doctor.break_end_time}."
+                    }
+            except Exception:
+                pass
+
+        # Doctor leave check
+        leaves = DoctorLeave.query.filter_by(doctor_id=target_doctor.id, leave_date=new_date).all()
+        for l in leaves:
+            try:
+                l_sh, l_sm = _parse_time_str(l.start_time)
+                l_eh, l_em = _parse_time_str(l.end_time)
+                l_start = l_sh * 60 + l_sm
+                l_end = l_eh * 60 + l_em
+                if new_start_m < l_end and new_end_m > l_start:
+                    return {
+                        "success": False,
+                        "error": f"{doc_label} is unavailable from {l.start_time} to {l.end_time} on {new_date}."
+                    }
+            except Exception:
+                pass
+
+        # 6. Duration-aware Overlap Check against Target Doctor's Confirmed Appointments
         conflicts = Appointment.query.filter_by(
             business_id=business_id,
-            doctor_id=appt.doctor_id,
+            doctor_id=target_doctor.id,
             appointment_date=new_date,
             status="CONFIRMED"
         ).filter(Appointment.id != appointment_id).all()
@@ -703,36 +831,59 @@ class BookingService:
                     return {
                         "success": False,
                         "error": (
-                            f"The slot at {new_time} on {new_date} overlaps an existing appointment. "
+                            f"The requested slot at {new_time} overlaps an existing "
+                            f"{c_dur}-minute appointment at {c.appointment_time} for {doc_label}. "
                             "Please select another slot."
                         )
                     }
             except Exception:
                 pass
 
+        # 7. Authoritative Generated Availability Check
+        avail_slots, _ = _get_slots_for_doctor_on_date(target_doctor, target_date, duration, business_id)
+        if new_time not in avail_slots:
+            if not (target_doctor.id == appt.doctor_id and new_date == appt.appointment_date and new_time == appt.appointment_time):
+                return {
+                    "success": False,
+                    "error": f"The slot {new_time} is not available for {doc_label} on {new_date}."
+                }
+
+        # 8. Apply All Updates in a Single Atomic Transaction
         try:
             appt.appointment_date = new_date
             appt.appointment_time = new_time
+            appt.doctor_id = target_doctor.id
+            appt.service_id = target_service.id
             appt.status = "CONFIRMED"
 
             ReminderService.cancel_for_appointment(appt.id)
             ReminderService.schedule_for_appointment(appt)
 
             db.session.commit()
+
+            # Read fresh from committed object
+            db.session.refresh(appt)
+            appt_dict = appt.to_dict()
+            try:
+                h, m = map(int, appt.appointment_time.split(":"))
+                formatted_time = f"{h % 12 or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
+            except Exception:
+                formatted_time = appt.appointment_time
+
             return {
                 "success": True,
                 "appointment_id": appt.id,
-                "appointment": appt.to_dict(),
+                "appointment": appt_dict,
                 "message": (
                     f"Appointment #{appt.id} successfully rescheduled to "
-                    f"{new_date} at {new_time} with {appt.doctor.name}."
+                    f"{appt.appointment_date} at {formatted_time} with {appt.doctor.name} for {appt.service.name}."
                 )
             }
         except IntegrityError:
             db.session.rollback()
             return {
                 "success": False,
-                "error": f"The requested slot on {new_date} at {new_time} is not available."
+                "error": f"The requested slot on {new_date} at {new_time} with Dr. {target_doctor.name} is already booked."
             }
         except Exception as e:
             db.session.rollback()

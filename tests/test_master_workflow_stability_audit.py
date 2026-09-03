@@ -68,6 +68,7 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         if not self.svc_consult:
             self.svc_consult = Service(
                 business_id=self.biz.id,
+                doctor_id=self.doc1.id,
                 name="Dental Checkup & Consultation",
                 duration=30,
                 price=2000.0,
@@ -79,6 +80,7 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         if not self.svc_clean:
             self.svc_clean = Service(
                 business_id=self.biz.id,
+                doctor_id=self.doc2.id,
                 name="Dental Cleaning & Scaling",
                 duration=45,
                 price=4000.0,
@@ -125,7 +127,7 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         d = self._send(c_id, "My name is Ali and I want an appointment.")
         conv = db.session.get(Conversation, c_id)
         self.assertEqual(conv.pending_customer_name, "Ali")
-        self.assertEqual(d.get("ui_action", {}).get("type"), "service_selection")
+        self.assertEqual(d.get("ui_action", {}).get("type"), "doctor_selection")
 
     # 3. Name + consultation
     def test_03_name_and_consultation(self):
@@ -134,7 +136,7 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         conv = db.session.get(Conversation, c_id)
         self.assertEqual(conv.pending_customer_name, "Ali")
         self.assertEqual(conv.selected_service_id, self.svc_consult.id)
-        self.assertEqual(d.get("ui_action", {}).get("type"), "doctor_selection")
+        self.assertEqual(conv.selected_doctor_id, self.svc_consult.doctor_id)
 
     # 4. Name + doctor
     def test_04_name_and_doctor(self):
@@ -173,7 +175,6 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         conv = db.session.get(Conversation, c_id)
         self.assertEqual(conv.pending_customer_name, "Ali")
         self.assertEqual(conv.selected_doctor_id, self.doc2.id)
-        self.assertEqual(conv.selected_service_id, self.svc_consult.id)
         self.assertEqual(conv.requested_date, self.tomorrow_str)
         self.assertEqual(conv.requested_time, "14:00")
         self.assertEqual(conv.awaiting_input, "phone")
@@ -185,7 +186,7 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         d = self._send(c_id, "I don't know what treatment I need.")
         conv = db.session.get(Conversation, c_id)
         self.assertEqual(conv.selected_service_id, self.svc_consult.id)
-        self.assertEqual(d.get("ui_action", {}).get("type"), "doctor_selection")
+        self.assertEqual(d.get("ui_action", {}).get("type"), "date_selection")
 
     # 9. Doctor selected through UI
     def test_09_doctor_selected_ui(self):
@@ -203,7 +204,7 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         d = self._send(c_id, "Dental Cleaning & Scaling")
         conv = db.session.get(Conversation, c_id)
         self.assertEqual(conv.selected_service_id, self.svc_clean.id)
-        self.assertEqual(d.get("ui_action", {}).get("type"), "doctor_selection")
+        self.assertEqual(conv.selected_doctor_id, self.svc_clean.doctor_id)
 
     # 11. Date selected through UI
     def test_11_date_selected_ui(self):
@@ -375,7 +376,7 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         hist = self.client.get(f"/api/chat/history/{c_id}").get_json()
         self.assertTrue(hist["success"])
         last_asst = [m for m in hist["messages"] if m["role"] == "assistant"][-1]
-        self.assertEqual(last_asst.get("interactive_data", {}).get("type"), "doctor_selection")
+        self.assertEqual(last_asst.get("interactive_data", {}).get("type"), "date_selection")
 
     # 28. Booking completion
     def test_28_booking_completion(self):

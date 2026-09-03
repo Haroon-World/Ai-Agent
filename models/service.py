@@ -6,6 +6,7 @@ class Service(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     business_id = db.Column(db.Integer, db.ForeignKey("businesses.id"), nullable=False, index=True)
+    doctor_id = db.Column(db.Integer, db.ForeignKey("doctors.id"), nullable=False, index=True)
     name = db.Column(db.String(150), nullable=False)
     description = db.Column(db.Text, nullable=True)
     duration = db.Column(db.Integer, nullable=False, default=30)  # In minutes
@@ -21,6 +22,7 @@ class Service(db.Model):
         return {
             "id": self.id,
             "business_id": self.business_id,
+            "doctor_id": self.doctor_id,
             "name": self.name,
             "description": self.description,
             "duration": self.duration,

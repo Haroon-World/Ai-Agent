@@ -17,11 +17,16 @@ CANONICAL_TOOLS = [
     },
     {
         "name": "get_services",
-        "description": "Get the complete list of available dental treatments, descriptions, durations, and pricing.",
+        "description": "Get the list of dental treatments, descriptions, durations, and pricing offered by a specific doctor.",
         "parameters": {
             "type": "object",
-            "properties": {},
-            "required": []
+            "properties": {
+                "doctor_id": {
+                    "type": "integer",
+                    "description": "ID of the doctor whose services to retrieve"
+                }
+            },
+            "required": ["doctor_id"]
         }
     },
     {
@@ -117,7 +122,7 @@ CANONICAL_TOOLS = [
     },
     {
         "name": "reschedule_appointment",
-        "description": "Reschedule an existing appointment to a new date and time slot.",
+        "description": "Reschedule an existing appointment to a new date and time slot, optionally changing doctor or service.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -132,6 +137,14 @@ CANONICAL_TOOLS = [
                 "new_time": {
                     "type": "string",
                     "description": "New appointment time in HH:MM format"
+                },
+                "new_doctor_id": {
+                    "type": "integer",
+                    "description": "Optional ID of the new doctor if changing doctor"
+                },
+                "new_service_id": {
+                    "type": "integer",
+                    "description": "Optional ID of the new service if changing service"
                 }
             },
             "required": ["appointment_id", "new_date", "new_time"]
@@ -184,7 +197,14 @@ class ToolDispatcher:
                 return BookingService.get_clinic_info(self.business_id)
 
             elif tool_name == "get_services":
-                return {"services": BookingService.get_services(self.business_id)}
+                doc_id_raw = arguments.get("doctor_id")
+                try:
+                    parsed_doc_id = int(doc_id_raw) if doc_id_raw is not None else None
+                except (ValueError, TypeError):
+                    parsed_doc_id = None
+                if not parsed_doc_id:
+                    return {"services": [], "error": "doctor_id parameter is required to retrieve services."}
+                return {"services": BookingService.get_services(self.business_id, doctor_id=parsed_doc_id)}
 
             elif tool_name == "get_doctors":
                 return {"doctors": BookingService.get_doctors(self.business_id)}
@@ -256,11 +276,23 @@ class ToolDispatcher:
                     parsed_appt_id = None
                 if not parsed_appt_id:
                     return {"success": False, "error": "Valid appointment_id is required."}
+                new_doc_id_raw = arguments.get("new_doctor_id")
+                try:
+                    parsed_new_doc_id = int(new_doc_id_raw) if new_doc_id_raw is not None else None
+                except (ValueError, TypeError):
+                    parsed_new_doc_id = None
+                new_svc_id_raw = arguments.get("new_service_id")
+                try:
+                    parsed_new_svc_id = int(new_svc_id_raw) if new_svc_id_raw is not None else None
+                except (ValueError, TypeError):
+                    parsed_new_svc_id = None
                 return BookingService.reschedule_appointment(
                     business_id=self.business_id,
                     appointment_id=parsed_appt_id,
                     new_date=arguments.get("new_date", ""),
-                    new_time=arguments.get("new_time", "")
+                    new_time=arguments.get("new_time", ""),
+                    new_doctor_id=parsed_new_doc_id,
+                    new_service_id=parsed_new_svc_id
                 )
 
             elif tool_name == "update_customer_details":

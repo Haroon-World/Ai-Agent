@@ -76,13 +76,13 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
         res1 = self.agent.process_message(conv.id, "My name is Ali and I want an appointment.")
         conv = db.session.get(Conversation, conv.id)
         self.assertEqual(conv.pending_customer_name, "Ali")
-        self.assertIn("service", res1["content"].lower() + str(res1.get("ui_action")))
+        self.assertIn("doctor", res1["content"].lower() + str(res1.get("ui_action")))
 
         # Turn 2: User doesn't know treatment
         res2 = self.agent.process_message(conv.id, "I don't know, my tooth hurts.")
         conv = db.session.get(Conversation, conv.id)
         self.assertIn("consultation", res2["content"].lower())
-        self.assertIn("doctor", res2["content"].lower())
+        self.assertTrue("doctor" in res2["content"].lower() or "dr" in res2["content"].lower())
 
         # Turn 3: Doctor selection
         res3 = self.agent.process_message(conv.id, "Sara.")
@@ -213,7 +213,7 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
             customer_name="Ali",
             customer_phone="03001234567",
             doctor_id=2,
-            service_id=1,
+            service_id=2,
             appointment_date=target_date,
             appointment_time="10:00"
         )
@@ -225,7 +225,7 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
             business_id=1,
             doctor_id=2,
             date_str=target_date,
-            service_id=1
+            service_id=2
         )
         self.assertNotIn("10:00", avail1["available_slots"])
 
@@ -242,7 +242,7 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
             business_id=1,
             doctor_id=2,
             date_str=target_date,
-            service_id=1
+            service_id=2
         )
         self.assertIn("10:00", avail2["available_slots"])
 
@@ -252,7 +252,7 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
             customer_name="Hamza",
             customer_phone="03009876543",
             doctor_id=2,
-            service_id=1,
+            service_id=2,
             appointment_date=target_date,
             appointment_time="10:00"
         )
@@ -361,7 +361,7 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
             customer_name="Test User",
             customer_phone="03001122334",
             doctor_id=2,
-            service_id=1,
+            service_id=2,
             appointment_date=target_date,
             appointment_time="11:00"
         )
@@ -491,7 +491,7 @@ class TestControlledPricingAndWorkflow(unittest.TestCase):
             customer_name="Usman Tariq",
             customer_phone="03005544332",
             doctor_id=2,
-            service_id=1,
+            service_id=2,
             appointment_date=target_date,
             appointment_time="09:00"
         )

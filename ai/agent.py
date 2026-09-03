@@ -7,7 +7,7 @@ from datetime import datetime, timezone, date as dt_date, timedelta as dt_td
 from typing import Dict, Any, List, Optional
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
-from models import db, Business, Conversation, Message, Customer, Doctor, Service
+from models import db, Business, Conversation, Message, Customer, Doctor, Service, Appointment
 from services.booking_service import BookingService, _get_business, _get_business_info, _get_business_tz, RequestCache
 from ai.tools import CANONICAL_TOOLS, ToolDispatcher
 from ai.prompts import build_system_prompt
@@ -139,7 +139,19 @@ def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
     Uses RequestCache to eliminate repeated roster SQL queries.
     """
     doctor_roster = BookingService.get_doctors(conv.business_id)
-    service_roster = BookingService.get_services(conv.business_id)
+    if conv.selected_doctor_id:
+        service_roster = BookingService.get_services(conv.business_id, doctor_id=conv.selected_doctor_id)
+    else:
+        service_roster = BookingService.get_services(conv.business_id)
+
+    # Validate that selected_service_id actually belongs to selected_doctor_id
+    if conv.selected_doctor_id and conv.selected_service_id:
+        if not any(s["id"] == conv.selected_service_id for s in service_roster):
+            conv.selected_service_id = None
+            conv.requested_time = None
+            if conv.awaiting_input not in ["doctor_choice", "doctor"]:
+                conv.awaiting_input = "service_choice"
+            db.session.flush()
 
     doc_name = None
     if conv.selected_doctor_id:
@@ -203,6 +215,37 @@ def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
     except Exception:
         pass
 
+    active_appt_id = None
+    active_appt_doc_id = None
+    active_appt_svc_id = None
+    active_appt_date = None
+    active_appt_time = None
+    try:
+        from models import Appointment, Customer
+        active_appt = Appointment.query.filter(
+            Appointment.business_id == conv.business_id,
+            Appointment.status == "CONFIRMED"
+        ).filter(
+            (Appointment.idempotency_key.like(f"conv-{conv.id}-%")) |
+            ((Appointment.customer_id == conv.customer_id) if conv.customer_id else False)
+        ).order_by(Appointment.id.desc()).first()
+
+        if not active_appt and conv.pending_customer_phone:
+            cust = Customer.query.filter_by(business_id=conv.business_id, phone=conv.pending_customer_phone.strip()).first()
+            if cust:
+                active_appt = Appointment.query.filter_by(
+                    business_id=conv.business_id, customer_id=cust.id, status="CONFIRMED"
+                ).order_by(Appointment.id.desc()).first()
+
+        if active_appt:
+            active_appt_id = active_appt.id
+            active_appt_doc_id = active_appt.doctor_id
+            active_appt_svc_id = active_appt.service_id
+            active_appt_date = active_appt.appointment_date
+            active_appt_time = active_appt.appointment_time
+    except Exception:
+        pass
+
     return {
         "workflow_state": conv.workflow_state or "START",
         "intent": conv.intent or "UNKNOWN",
@@ -218,6 +261,11 @@ def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
         "customer_id": conv.customer_id,
         "channel": conv.channel or "web_chat",
         "business_id": conv.business_id,
+        "active_appointment_id": active_appt_id,
+        "active_appointment_doctor_id": active_appt_doc_id,
+        "active_appointment_service_id": active_appt_svc_id,
+        "active_appointment_date": active_appt_date,
+        "active_appointment_time": active_appt_time,
         "last_offered_slots": last_offered_slots,
         "all_offered_slots": all_offered_slots,
         "doctor_roster": doctor_roster,
@@ -241,7 +289,10 @@ def _build_state_context(conv: Conversation) -> str:
     lines.append(f"Awaiting Input : {awaiting}")
 
     doctor_roster = BookingService.get_doctors(conv.business_id)
-    service_roster = BookingService.get_services(conv.business_id)
+    if conv.selected_doctor_id:
+        service_roster = BookingService.get_services(conv.business_id, doctor_id=conv.selected_doctor_id)
+    else:
+        service_roster = BookingService.get_services(conv.business_id)
 
     # Resolve doctor ID -> name if set
     if conv.selected_doctor_id:
@@ -355,28 +406,50 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     matched_doc = _fuzzy_match_roster(user_content, doctor_roster)
     if matched_doc:
         if not conv.selected_doctor_id or is_explicit_change or conv.awaiting_input == "doctor_choice" or not _msg_is_question:
-            if conv.selected_doctor_id and conv.selected_doctor_id != matched_doc["id"]:
+            if (conv.selected_doctor_id and conv.selected_doctor_id != matched_doc["id"]) or conv.intent == "RESCHEDULE_APPOINTMENT":
                 conv.requested_time = None
+                # Doctor changed mid-conversation or in reschedule: revalidate selected_service_id against new doctor's roster
+                if conv.selected_service_id:
+                    new_doc_services = BookingService.get_services(conv.business_id, doctor_id=matched_doc["id"])
+                    if not any(s["id"] == conv.selected_service_id for s in new_doc_services):
+                        conv.selected_service_id = None
+                        conv.awaiting_input = "service_choice"
             conv.selected_doctor_id = matched_doc["id"]
             if conv.awaiting_input == "doctor_choice":
-                conv.awaiting_input = "date_choice" if not conv.requested_date else None
+                if conv.intent == "RESCHEDULE_APPOINTMENT" and not conv.selected_service_id:
+                    conv.awaiting_input = "service_choice"
+                else:
+                    conv.awaiting_input = "date_choice" if not conv.requested_date else None
     else:
         # Check if user mentioned an unregistered/unknown doctor
         _doc_mention_raw = _extract_doctor_mention(user_content)
         if _doc_mention_raw:
             conv.selected_doctor_id = None
+            conv.selected_service_id = None
             conv.awaiting_input = "doctor_choice"
 
-    # 2. Resolve Service using cached roster
-    service_roster = BookingService.get_services(conv.business_id)
+    # 2. Resolve Service using cached roster (doctor-scoped if doctor is chosen)
+    active_doc_id = matched_doc["id"] if matched_doc else conv.selected_doctor_id
+    if active_doc_id:
+        service_roster = BookingService.get_services(conv.business_id, doctor_id=active_doc_id)
+    else:
+        service_roster = BookingService.get_services(conv.business_id)
+
     matched_svc = _fuzzy_match_roster(user_content, service_roster)
+    if not matched_svc and active_doc_id and not matched_doc:
+        all_services = BookingService.get_services(conv.business_id)
+        matched_svc = _fuzzy_match_roster(user_content, all_services)
     if matched_svc:
         if not conv.selected_service_id or is_explicit_change or conv.awaiting_input == "service_choice" or not _msg_is_question:
             if conv.selected_service_id and conv.selected_service_id != matched_svc["id"]:
                 conv.requested_time = None
             conv.selected_service_id = matched_svc["id"]
+            if matched_svc.get("doctor_id") and not matched_doc:
+                if conv.selected_doctor_id and conv.selected_doctor_id != matched_svc["doctor_id"]:
+                    conv.requested_time = None
+                conv.selected_doctor_id = matched_svc["doctor_id"]
             if conv.awaiting_input == "service_choice":
-                conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
+                conv.awaiting_input = "date_choice" if not conv.requested_date else None
     elif not conv.selected_service_id:
         consultation_keywords = [
             "dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain",
@@ -388,8 +461,11 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
             consult_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else None)
             if consult_svc:
                 conv.selected_service_id = consult_svc["id"]
-                if conv.awaiting_input in [None, "service_choice"]:
-                    conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
+                if not conv.selected_doctor_id and consult_svc.get("doctor_id"):
+                    conv.selected_doctor_id = consult_svc["doctor_id"]
+    if not conv.selected_doctor_id and not conv.selected_service_id and conv.intent == "BOOK_APPOINTMENT":
+        if not conv.awaiting_input or conv.awaiting_input == "service_choice":
+            conv.awaiting_input = "doctor_choice"
 
     # 3. Resolve Date using robust date resolver (relative & explicit formats)
     parsed_date = resolve_date_string(user_content, business_id=conv.business_id)
@@ -493,8 +569,20 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         conv.selected_service_id = None
 
     # 9. Reschedule trigger
-    if any(k in text_lower for k in ["move it to", "move to", "reschedule", "change time to", "change appointment time", "postpone to"]):
+    reschedule_keywords = [
+        "move it to", "move to", "reschedule", "change time to", "change appointment time", "postpone to",
+        "change my doctor", "change doctor", "different doctor", "switch doctor", "switch my doctor",
+        "change my appointment", "change appointment", "update my appointment"
+    ]
+    if any(k in text_lower for k in reschedule_keywords):
         conv.intent = "RESCHEDULE_APPOINTMENT"
+        if conv.workflow_state == "BOOKED":
+            conv.workflow_state = "COLLECTING_INFO"
+        if any(w in text_lower for w in ["change my doctor", "change doctor", "different doctor", "switch doctor", "switch my doctor"]):
+            if not matched_doc:
+                conv.selected_doctor_id = None
+                conv.requested_time = None
+                conv.awaiting_input = "doctor_choice"
         time_token = _extract_time_token(user_content)
         if time_token:
             conv.requested_time = time_token
@@ -508,16 +596,12 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         if not any(w in text_lower for w in ["appointment", "book", "reserve", "with", "dr "]):
             conv.intent = "INQUIRY"
 
-    # Default consultation service only when full booking payload is present
-    if conv.pending_customer_name and conv.pending_customer_phone and conv.requested_date and conv.requested_time:
+    # Default consultation service only when full booking payload is present AND doctor is selected
+    if conv.selected_doctor_id and conv.pending_customer_name and conv.pending_customer_phone and conv.requested_date and conv.requested_time:
         if not conv.selected_service_id:
-            def_svc = service_roster[0] if service_roster else None
-            if def_svc:
-                conv.selected_service_id = def_svc["id"]
-        if not conv.selected_doctor_id:
-            def_doc = doctor_roster[0] if doctor_roster else None
-            if def_doc:
-                conv.selected_doctor_id = def_doc["id"]
+            doc_services = BookingService.get_services(conv.business_id, doctor_id=conv.selected_doctor_id)
+            if doc_services:
+                conv.selected_service_id = doc_services[0]["id"]
 
     # Update intent/state when customer wants appointment or gives parameters
     if conv.intent not in ["CANCEL_APPOINTMENT", "INQUIRY"] and (
@@ -537,7 +621,9 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         # Calculate the next missing field in logical sequence:
         if conv.workflow_state != "BOOKED":
             if conv.selected_doctor_id:
-                if not conv.requested_date:
+                if conv.intent == "RESCHEDULE_APPOINTMENT" and not conv.selected_service_id:
+                    conv.awaiting_input = "service_choice"
+                elif not conv.requested_date:
                     conv.awaiting_input = "date_choice"
                 elif not conv.requested_time:
                     conv.awaiting_input = "time_choice"
@@ -561,10 +647,7 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                 else:
                     conv.awaiting_input = "confirmation"
             else:
-                if any(w in text_lower for w in ["dentist", "doctor"]):
-                    conv.awaiting_input = "doctor_choice"
-                else:
-                    conv.awaiting_input = "service_choice"
+                conv.awaiting_input = "doctor_choice"
 
     if is_explicit_change and not any(w in text_lower for w in ["dr ", "doctor ", "03", "am", "pm", "baje"]):
         conv.requested_time = None
@@ -976,7 +1059,7 @@ class Agent:
                 result = dispatcher.execute(tool_name, tool_args)
                 tool_results.append({"tool": tool_name, "result": result})
 
-                if tool_name == "book_appointment" and result.get("success"):
+                if tool_name in ["book_appointment", "reschedule_appointment"] and result.get("success"):
                     cust_id = result.get("customer_id") or (result.get("appointment") or {}).get("customer_id")
                     if cust_id:
                         conv.customer_id = int(cust_id)
@@ -1015,7 +1098,8 @@ class Agent:
             # Deterministic localized response generation (Instant, no LLM #2!)
             t_gen = time.perf_counter()
             state_dict = _build_state_dict(conv)
-            primary_tool = tool_results[0]
+            booking_tool = next((tr for tr in tool_results if tr["tool"] in ["book_appointment", "reschedule_appointment"] and tr["result"].get("success")), None)
+            primary_tool = booking_tool or tool_results[0]
             final_content = generate_tool_response(
                 tool_name=primary_tool["tool"],
                 tool_result=primary_tool["result"],
@@ -1050,19 +1134,38 @@ class Agent:
             )
             if not has_booking_tool_success and any(m in final_content.lower() for m in confirmation_markers):
                 if conv.workflow_state != "BOOKED":
-                    avail = BookingService.check_availability(
-                        business_id=self.business_id,
-                        doctor_id=conv.selected_doctor_id,
-                        service_id=conv.selected_service_id,
-                        date_str=conv.requested_date
-                    )
-                    final_content = generate_tool_response(
-                        tool_name="check_availability",
-                        tool_result=avail,
-                        conversation_state=_build_state_dict(conv),
-                        user_message=user_content,
-                        history_messages=formatted_messages
-                    )
+                    real_appt = Appointment.query.filter(
+                        Appointment.business_id == self.business_id,
+                        Appointment.status == "CONFIRMED"
+                    ).filter(
+                        (Appointment.idempotency_key.like(f"conv-{conv.id}-%")) |
+                        ((Appointment.customer_id == conv.customer_id) if conv.customer_id else False)
+                    ).order_by(Appointment.id.desc()).first()
+
+                    if real_appt:
+                        conv.workflow_state = "BOOKED"
+                        conv.awaiting_input = None
+                        final_content = generate_tool_response(
+                            tool_name="book_appointment",
+                            tool_result={"success": True, "appointment": real_appt.to_dict()},
+                            conversation_state=_build_state_dict(conv),
+                            user_message=user_content,
+                            history_messages=formatted_messages
+                        )
+                    else:
+                        avail = BookingService.check_availability(
+                            business_id=self.business_id,
+                            doctor_id=conv.selected_doctor_id,
+                            service_id=conv.selected_service_id,
+                            date_str=conv.requested_date
+                        )
+                        final_content = generate_tool_response(
+                            tool_name="check_availability",
+                            tool_result=avail,
+                            conversation_state=_build_state_dict(conv),
+                            user_message=user_content,
+                            history_messages=formatted_messages
+                        )
 
         ui_act = _build_ui_action(conv)
 
@@ -1158,6 +1261,16 @@ class Agent:
                 conv.requested_date = str(args["new_date"])
             if args.get("new_time"):
                 conv.requested_time = str(args["new_time"])
+            if args.get("new_doctor_id"):
+                try:
+                    conv.selected_doctor_id = int(args["new_doctor_id"])
+                except Exception:
+                    pass
+            if args.get("new_service_id"):
+                try:
+                    conv.selected_service_id = int(args["new_service_id"])
+                except Exception:
+                    pass
 
         elif tool_name == "human_handoff":
             conv.status = "HUMAN"

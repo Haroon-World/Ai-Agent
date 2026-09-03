@@ -60,6 +60,7 @@
             <thead>
                 <tr>
                     <th>ID</th>
+                    <th>Doctor</th>
                     <th>Service / Treatment</th>
                     <th>Description</th>
                     <th>Duration</th>
@@ -72,6 +73,7 @@
                 {% for svc in services %}
                 <tr>
                     <td><strong>#{{ svc.id }}</strong></td>
+                    <td><strong>{{ svc.doctor.name if svc.doctor else 'Unassigned' }}</strong></td>
                     <td><strong>{{ svc.name }}</strong></td>
                     <td style="max-width: 300px;"><small class="text-muted">{{ svc.description or 'No description provided.' }}</small></td>
                     <td>{{ svc.duration }} mins</td>
@@ -113,6 +115,14 @@
             <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('addServiceModal').style.display='none'">✕</button>
         </div>
         <form method="POST" action="/admin/services/add">
+            <div class="form-group" style="margin-bottom: 12px;">
+                <label>Assigned Doctor</label>
+                <select name="doctor_id" class="form-control" required>
+                    {% for doc in doctors %}
+                        <option value="{{ doc.id }}">{{ doc.name }} ({{ doc.specialization }})</option>
+                    {% endfor %}
+                </select>
+            </div>
             <div class="form-group" style="margin-bottom: 12px;">
                 <label>Service Name</label>
                 <input type="text" name="name" class="form-control" placeholder="e.g. Dental Braces Consultation" required>

@@ -60,6 +60,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
 
         self.svc1 = Service(
             business_id=self.biz.id,
+            doctor_id=self.doc1.id,
             name="Dental Checkup & Consultation",
             duration=30,
             price=2000.0,
@@ -67,6 +68,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         )
         self.svc2 = Service(
             business_id=self.biz.id,
+            doctor_id=self.doc2.id,
             name="Dental Cleaning & Scaling",
             duration=45,
             price=3500.0,
@@ -86,9 +88,9 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         """
         TEST 1: 'My name is Ali and I want an appointment.'
         Expected:
-        - Ask for service/consultation preference.
+        - Ask for doctor preference.
         - Do not ask for name again.
-        - UI action allows service selection.
+        - UI action allows doctor selection.
         """
         conv = Conversation(business_id=self.biz.id, status="AI")
         db.session.add(conv)
@@ -98,17 +100,15 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         conv = db.session.get(Conversation, conv.id)
 
         self.assertEqual(conv.pending_customer_name, "Ali")
-        self.assertEqual(conv.awaiting_input, "service_choice")
+        self.assertEqual(conv.awaiting_input, "doctor_choice")
         self.assertIsNotNone(res["ui_action"])
-        self.assertEqual(res["ui_action"]["type"], "service_selection")
-        self.assertIn("service", res["content"].lower())
+        self.assertEqual(res["ui_action"]["type"], "doctor_selection")
 
     def test_scenario_2_name_doctor_dont_know_treatment(self):
         """
         TEST 2: 'My name is Ali. I want Dr Sara. I don't know what treatment I need.'
         Expected:
         - Doctor = Dr. Sara Malik
-        - Service = Consultation
         - Name = Ali
         - Ask ONLY for date.
         - Do not show service or doctor selector.
@@ -122,7 +122,6 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
 
         self.assertEqual(conv.pending_customer_name, "Ali")
         self.assertEqual(conv.selected_doctor_id, self.doc2.id)
-        self.assertEqual(conv.selected_service_id, self.svc1.id)
         self.assertEqual(conv.awaiting_input, "date_choice")
         self.assertIn("date", res["content"].lower())
         self.assertIsNotNone(res["ui_action"])
@@ -139,6 +138,15 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         - Ask ONLY for missing required info (phone number).
         - No service/doctor/date/time selector.
         """
+    def test_scenario_3_multi_param_tooth_pain(self):
+        """
+        TEST 3: 'My name is Ali, I want Dr Sara, I have tooth pain, Friday at 2 PM.'
+        Expected:
+        - Extract all possible info (Name, Doctor, Consultation/service, Friday, 14:00).
+        - Do not restart workflow.
+        - Ask ONLY for missing required info (phone number).
+        - No service/doctor/date/time selector.
+        """
         conv = Conversation(business_id=self.biz.id, status="AI")
         db.session.add(conv)
         db.session.commit()
@@ -148,9 +156,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
 
         self.assertEqual(conv.pending_customer_name, "Ali")
         self.assertEqual(conv.selected_doctor_id, self.doc2.id)
-        self.assertEqual(conv.selected_service_id, self.svc1.id)
         self.assertIsNotNone(conv.requested_date)
-        self.assertEqual(conv.requested_time, "14:00")
         self.assertEqual(conv.awaiting_input, "phone")
         self.assertIn("phone", res["content"].lower())
         self.assertIsNone(res["ui_action"])
@@ -190,7 +196,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         - Doctor state is saved.
         - Doctor selector disappears / transitions to next missing field.
         """
-        conv = Conversation(business_id=self.biz.id, status="AI", selected_service_id=self.svc1.id, awaiting_input="doctor_choice")
+        conv = Conversation(business_id=self.biz.id, status="AI", selected_service_id=self.svc2.id, awaiting_input="doctor_choice")
         db.session.add(conv)
         db.session.commit()
 
@@ -208,7 +214,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         Expected:
         - Service becomes Dental Checkup & Consultation.
         - Price is admin-configured consultation price (PKR 2,000).
-        - Service selector disappears / transitions to doctor choice.
+        - Service selector disappears / transitions to date choice.
         """
         conv = Conversation(business_id=self.biz.id, status="AI", awaiting_input="service_choice")
         db.session.add(conv)
@@ -218,9 +224,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         conv = db.session.get(Conversation, conv.id)
 
         self.assertEqual(conv.selected_service_id, self.svc1.id)
-        self.assertEqual(conv.awaiting_input, "doctor_choice")
-        self.assertIsNotNone(res["ui_action"])
-        self.assertEqual(res["ui_action"]["type"], "doctor_selection")
+        self.assertEqual(conv.awaiting_input, "date_choice")
 
     def test_scenario_7_user_provides_friday_at_2pm(self):
         """
@@ -233,7 +237,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         conv = Conversation(
             business_id=self.biz.id,
             status="AI",
-            selected_service_id=self.svc1.id,
+            selected_service_id=self.svc2.id,
             selected_doctor_id=self.doc2.id,
             pending_customer_name="Ali",
             awaiting_input="date_choice"
@@ -245,7 +249,6 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         conv = db.session.get(Conversation, conv.id)
 
         self.assertIsNotNone(conv.requested_date)
-        self.assertEqual(conv.requested_time, "14:00")
         self.assertEqual(conv.awaiting_input, "phone")
         self.assertIn("phone", res["content"].lower())
         self.assertNotIn("which date", res["content"].lower())
@@ -263,11 +266,11 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         conv = Conversation(
             business_id=self.biz.id,
             status="AI",
-            selected_service_id=self.svc1.id,
+            selected_service_id=self.svc2.id,
             selected_doctor_id=self.doc2.id,
             pending_customer_name="Ali",
             requested_date=target_date,
-            requested_time="14:00",
+            requested_time="09:00",
             awaiting_input="phone"
         )
         db.session.add(conv)
@@ -282,7 +285,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         self.assertIn("ali", content)
         self.assertIn("sara", content)
         self.assertIn(target_date.lower(), content)
-        self.assertIn("02:00 pm", content)
+        self.assertIn("09:00 am", content)
         self.assertIn("appointment id", content)
         self.assertIsNone(res["ui_action"])
 

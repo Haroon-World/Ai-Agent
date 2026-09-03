@@ -20,6 +20,7 @@ class Doctor(db.Model):
 
     # Relationships
     appointments = db.relationship("Appointment", backref="doctor", lazy=True)
+    services = db.relationship("Service", backref="doctor", lazy=True, cascade="all, delete-orphan")
     schedules = db.relationship("DoctorSchedule", backref="doctor", lazy=True, cascade="all, delete-orphan")
     leaves = db.relationship("DoctorLeave", backref="doctor", lazy=True, cascade="all, delete-orphan")
 
