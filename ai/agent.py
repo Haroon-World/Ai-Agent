@@ -466,6 +466,36 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         conv.requested_time = None
         conv.awaiting_input = None
 
+    # If in BOOKED state and user initiates a new message (inquiry, new booking, doctor question, etc.)
+    if conv.workflow_state == "BOOKED":
+        is_ack = any(k in text_lower for k in ["confirm", "yes", "yeah", "sure", "ok", "okay", "haan", "theek", "thanks", "thank you", "done", "alright"])
+        if not is_ack and not is_cancel_msg:
+            contact_update_phrases = [
+                "change my mobile", "change my number", "change my phone", "change mobile number", "change phone number",
+                "update my mobile", "update my number", "update my phone", "update phone", "update mobile",
+                "wrong number", "wrong mobile", "wrong phone", "number was of", "number was wrong", "mobile was of",
+                "correct my number", "correct my phone", "correct my name", "change my name", "update my name",
+                "write my mobile", "write my phone", "write my number", "mera number change", "number badal", "phone change",
+                "change number", "change name", "update contact", "change contact"
+            ]
+            is_contact_update = any(k in text_lower for k in contact_update_phrases) or (
+                _extract_phone_number(user_content) and any(w in text_lower for w in ["change", "update", "correct", "wrong", "instead", "brother", "sister", "badal"])
+            )
+            reschedule_keywords = [
+                "move it to", "move to", "reschedule", "change time to", "change appointment time", "postpone to",
+                "change my doctor", "change doctor", "different doctor", "switch doctor", "switch my doctor",
+                "change my appointment", "change appointment", "update my appointment"
+            ]
+            is_reschedule = any(k in text_lower for k in reschedule_keywords)
+            if not is_contact_update and not is_reschedule:
+                conv.workflow_state = "START"
+                conv.intent = None
+                conv.selected_doctor_id = None
+                conv.selected_service_id = None
+                conv.requested_date = None
+                conv.requested_time = None
+                conv.awaiting_input = None
+
     # Shared question-detection for the roster guards below.
     # Condition (d): allow a roster match to overwrite state when the message
     # is NOT phrased as a question.  _is_question_query() catches "?"-terminated
@@ -689,9 +719,20 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     # 10. Inquiry trigger
     has_doc_term = any(w in text_lower for w in ["doctor", "doctors", "dentist", "dentists"])
     has_inquiry_term = any(w in text_lower for w in ["tell", "show", "list", "who", "which", "what", "available", "names", "info", "about"])
-    if (has_doc_term and has_inquiry_term) or any(w in text_lower for w in ["what doctors are available", "who are your doctors", "list doctors", "available doctors"]):
-        if not any(w in text_lower for w in ["appointment", "book", "reserve", "with", "dr "]):
-            conv.intent = "INQUIRY"
+    is_doc_inquiry = ((has_doc_term and has_inquiry_term) or any(w in text_lower for w in ["what doctors are available", "who are your doctors", "list doctors", "available doctors"])) and not any(w in text_lower for w in ["appointment", "book", "reserve", "booking", "fix"])
+
+    has_svc_inquiry_phrase = any(phrase in text_lower for phrase in [
+        "what does he provide", "what does he provides", "what does she provide", "what does she provides",
+        "what do they provide", "what do you provide", "what does dr", "what does doctor",
+        "what services", "which services", "services offered", "services does", "services provide",
+        "what does he offer", "what does she offer", "what do they offer", "what does he do", "what does she do",
+        "tell me services", "show services", "list services", "prices", "pricing", "charges", "fees", "cost",
+        "kya provide", "kya service", "kya services", "kya karte hain", "kya karti hain", "کیا سروس", "کیا فراہم"
+    ]) and not any(w in text_lower for w in ["book", "reserve", "اپائنٹمنٹ", "بک"])
+
+    if is_doc_inquiry or has_svc_inquiry_phrase:
+        conv.intent = "INQUIRY"
+        conv.awaiting_input = None
 
     # Default consultation service only when full booking payload is present AND doctor is selected
     if conv.selected_doctor_id and conv.pending_customer_name and conv.pending_customer_phone and conv.requested_date and conv.requested_time:
@@ -777,6 +818,7 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
 
     # 1. Final Booking Confirmation Card
     if (
+        conv.intent not in ["INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"] and
         conv.selected_doctor_id and
         conv.requested_date and
         conv.requested_time and
@@ -821,7 +863,7 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
         }
 
     # 2. Time Slot Selection
-    if not conv.requested_time and conv.selected_doctor_id and conv.requested_date:
+    if conv.intent not in ["INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"] and not conv.requested_time and conv.selected_doctor_id and conv.requested_date:
         slots = []
         last_tool = Message.query.filter_by(conversation_id=conv.id, role="tool", tool_name="check_availability").order_by(Message.created_at.desc()).first()
         effective_date_str = conv.requested_date
@@ -909,7 +951,7 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
             }
 
     # 4. Date Selection (Strictly personalized to the chosen doctor's active weekly schedule)
-    if not conv.requested_date and conv.awaiting_input != "service_choice" and (conv.selected_doctor_id or conv.awaiting_input in ["date_choice", "date"]):
+    if conv.intent not in ["INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"] and not conv.requested_date and conv.awaiting_input != "service_choice" and (conv.selected_doctor_id or conv.awaiting_input in ["date_choice", "date"]):
         tz = _get_business_tz(conv.business_id)
         today = datetime.now(tz).date()
         doc = next((d for d in doctor_roster if d["id"] == conv.selected_doctor_id), None) if conv.selected_doctor_id else None

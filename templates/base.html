@@ -23,7 +23,7 @@
                     <span class="live-dot"></span>
                 </a>
                 {% if session.get('admin_logged_in') %}
-                    <a href="/admin" class="nav-item {% if request.path == '/admin' %}active{% endif %}">Admin Dashboard</a>
+                    <a href="/admin" class="nav-item {% if request.path == '/admin' %}active{% endif %}">Dashboard</a>
                     <a href="/admin/appointments" class="nav-item {% if request.path.startswith('/admin/appointments') %}active{% endif %}">Appointments</a>
                     <a href="/admin/slots" class="nav-item {% if request.path.startswith('/admin/slots') %}active{% endif %}">Slot Occupancy</a>
                     <a href="/admin/doctors" class="nav-item {% if request.path.startswith('/admin/doctors') %}active{% endif %}">Doctor Schedules</a>

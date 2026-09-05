@@ -2152,29 +2152,41 @@ class MockAdapter(BaseLLMAdapter):
             }
 
         is_dont_know_treatment = any(phrase in user_text for phrase in ["dont know", "don't know", "not sure", "unsure", "pata nahi", "nahi pata", "maloom nahi"])
-        is_service_inquiry = not is_dont_know_treatment and any(w in user_text for w in ["which service", "what service", "what services", "dental service", "dental services", "medical service", "medical services", "list service", "list services", "treatment", "treatments", "price", "prices", "cost", "costs", "charge", "charges", "what do you offer", "how much"])
+        is_service_inquiry = not is_dont_know_treatment and any(w in user_text for w in [
+            "which service", "what service", "what services", "dental service", "dental services",
+            "medical service", "medical services", "list service", "list services", "treatment",
+            "treatments", "price", "prices", "cost", "costs", "charge", "charges", "what do you offer",
+            "how much", "what does he provide", "what does he provides", "what does she provide",
+            "what does she provides", "what do they provide", "what does dr", "what does doctor",
+            "what do you provide", "what does he offer", "what does she offer", "what do they offer",
+            "what does he do", "what does she do", "kya provide", "kya service", "kya services",
+            "kya karte hain", "kya karti hain", "کیا سروس", "کیا فراہم"
+        ])
         if is_service_inquiry:
-            if doc_id:
+            target_d_entry = _doc_override or (next((d for d in doctor_roster if d["id"] == doc_id), None) if doc_id else None)
+            target_d_id = target_d_entry["id"] if target_d_entry else doc_id
+            target_d_name = target_d_entry["name"] if target_d_entry else doc_name
+            if target_d_id:
                 return {
-                    "content": f"Let me fetch the services and pricing for {doc_name or 'your selected doctor'}.",
-                    "tool_calls": [{"name": "get_services", "arguments": {"doctor_id": doc_id}}]
+                    "content": f"Let me fetch the services and pricing for {target_d_name or 'your selected doctor'}.",
+                    "tool_calls": [{"name": "get_services", "arguments": {"doctor_id": target_d_id}}]
                 }
             else:
                 roster_bullets = "\n".join(f"• **{d['name']}** - {d.get('specialization', 'Specialist')}" for d in doctor_roster)
                 roster_inline = " aur ".join(f"{d['name']} ({d.get('specialization', 'Specialist')})" for d in doctor_roster)
                 if lang == "urdu":
                     return {
-                        "content": f"کلینک ایک پولی کلینک ہے جہاں ہر ڈاکٹر کی سروسز اور فیس الگ ہے۔ براہ کرم بتائیے کہ آپ کس ڈاکٹر کی سروسز دیکھنا چاہتے ہیں؟ ہمارے پاس {roster_inline} موجود ہیں۔",
+                        "content": f"{clinic_name} ایک پولی کلینک ہے جہاں ہر ڈاکٹر کی سروسز اور فیس الگ ہے۔ براہ کرم بتائیے کہ آپ کس ڈاکٹر کی سروسز دیکھنا چاہتے ہیں؟ ہمارے پاس {roster_inline} موجود ہیں۔",
                         "tool_calls": []
                     }
                 elif lang == "roman_urdu":
                     return {
-                        "content": f"ClinicConnect ek polyclinic hai jahan har doctor ki services aur pricing alag hai. Aap kis doctor ki services dekhna chahte hain? Hamare paas {roster_inline} available hain.",
+                        "content": f"{clinic_name} ek polyclinic hai jahan har doctor ki services aur pricing alag hai. Aap kis doctor ki services dekhna chahte hain? Hamare paas {roster_inline} available hain.",
                         "tool_calls": []
                     }
                 else:
                     return {
-                        "content": f"ClinicConnect is a polyclinic where each doctor offers their own separate set of medical and dental services and pricing. Which doctor would you like to see services for?\n\n{roster_bullets}",
+                        "content": f"{clinic_name} is a polyclinic where each doctor offers their own separate set of medical and dental services and pricing. Which doctor would you like to see services for?\n\n{roster_bullets}",
                         "tool_calls": []
                     }
 
@@ -2444,7 +2456,7 @@ class MockAdapter(BaseLLMAdapter):
                 }
             elif lang == "roman_urdu":
                 return {
-                    "content": f"Hello! Main {clinic_name} ka AI receptionist hoon. Main bilkul theek hoon! Main aap ke doctor appointment aur medical ya dental consultation ke liye hazir hoon. Aaj main aap ki kya madad kar sakta hoon?",
+                    "content": f"Hello! Main {clinic_name} ka AI receptionist hoon. Main bilkul theek hoon! Main aap ke doctor appointment aur polyclinic consultation ke liye hazir hoon. Aaj main aap ki kya madad kar sakta hoon?",
                     "tool_calls": []
                 }
             return {
@@ -2670,7 +2682,7 @@ class MockAdapter(BaseLLMAdapter):
             }
 
         return {
-            "content": f"I am here to assist you with all your healthcare and dental care needs at {clinic_name}! You can ask me about our available services, check doctor schedules, or book a consultation. How can I help you today?",
+            "content": f"I am here to assist you with all your healthcare needs at {clinic_name}! You can ask me about our available services, check doctor schedules, or book a consultation. How can I help you today?",
             "tool_calls": []
         }
 

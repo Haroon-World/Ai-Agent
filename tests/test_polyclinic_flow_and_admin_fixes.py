@@ -374,5 +374,50 @@ class TestPolyclinicFlowAndAdminFixes(unittest.TestCase):
         # Dr. Ahmed's service must NOT be in the options:
         self.assertNotIn("Dental Checkup & Consultation", option_names)
 
+    def test_polyclinic_chat_template_has_no_dental_cleaning_quick_chip(self):
+        """12. Chat template contains polyclinic 'Book an Appointment' chip and no 'Book Dental Cleaning' chip."""
+        with open("templates/chat.html", "r", encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn("🩺 Book an Appointment", html)
+        self.assertNotIn("🦷 Book Dental Cleaning", html)
+
+    def test_doctor_service_inquiry_does_not_return_time_slots_or_stale_booking_date(self):
+        """13. Asking what services a doctor provides after a booking must NOT output time slots or retain stale date."""
+        conv = Conversation(
+            business_id=1,
+            status="AI",
+            intent="BOOK_APPOINTMENT",
+            workflow_state="BOOKED",
+            selected_doctor_id=2,
+            requested_date="2026-09-07",
+            requested_time="10:00",
+            pending_customer_name="Haroon",
+            pending_customer_phone="03001234567"
+        )
+        db.session.add(conv)
+        db.session.commit()
+
+        # User asks what services Dr. Ahmed Khan provides
+        res = self.agent.process_message(conv.id, "and dr ahmad what does he provides")
+
+        conv_state = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_state.intent, "INQUIRY")
+        self.assertIsNone(conv_state.requested_date, "Stale date from completed booking must be cleared")
+        self.assertIsNone(conv_state.requested_time, "Stale time from completed booking must be cleared")
+        self.assertEqual(conv_state.selected_doctor_id, 1, "Doctor should resolve to Dr. Ahmed Khan")
+
+        # UI action MUST NOT be time_slot_selection
+        ui_act = res.get("ui_action")
+        if ui_act:
+            self.assertNotEqual(ui_act.get("type"), "time_slot_selection")
+            self.assertNotEqual(ui_act.get("type"), "booking_confirmation")
+
+        # Response content should mention services / pricing
+        self.assertTrue(
+            "service" in res["content"].lower() or "pricing" in res["content"].lower() or "fee" in res["content"].lower(),
+            f"Response should present services/pricing info, got: {res['content']}"
+        )
+
 if __name__ == "__main__":
     unittest.main()
+
