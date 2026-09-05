@@ -49,62 +49,82 @@
     </form>
 </div>
 
-<!-- Services Directory -->
-<div class="section-card">
-    <div class="section-header">
-        <h2>🦷 Configured Dental Treatments & Services ({{ services|length }})</h2>
-    </div>
-    {% if services %}
-    <div class="table-responsive">
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Doctor</th>
-                    <th>Service / Treatment</th>
-                    <th>Description</th>
-                    <th>Duration</th>
-                    <th>Price</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for svc in services %}
-                <tr>
-                    <td><strong>#{{ svc.id }}</strong></td>
-                    <td><strong>{{ svc.doctor.name if svc.doctor else 'Unassigned' }}</strong></td>
-                    <td><strong>{{ svc.name }}</strong></td>
-                    <td style="max-width: 300px;"><small class="text-muted">{{ svc.description or 'No description provided.' }}</small></td>
-                    <td>{{ svc.duration }} mins</td>
-                    <td><strong style="color: #00a884;">PKR {{ "{:,.0f}".format(svc.price) }}</strong></td>
-                    <td>
-                        {% if svc.is_active %}
-                            <span class="badge badge-success">ACTIVE</span>
-                        {% else %}
-                            <span class="badge badge-secondary">INACTIVE</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <div style="display: flex; gap: 6px;">
-                            <button class="btn btn-sm btn-secondary" onclick="openEditModal('{{ svc.id }}', '{{ svc.name|escape }}', '{{ svc.description|escape }}', '{{ svc.duration }}', '{{ svc.price }}', {{ 'true' if svc.is_active else 'false' }})">Edit</button>
-                            <form method="POST" action="/admin/services/toggle/{{ svc.id }}" style="display: inline;">
-                                <button type="submit" class="btn btn-sm {{ 'btn-danger' if svc.is_active else 'btn-primary' }}">
+<!-- Services Directory Grouped by Doctor -->
+<div style="display: flex; flex-direction: column; gap: 24px; margin-bottom: 30px;">
+    {% for doc_item in doctors_data %}
+    {% set doc = doc_item.doctor %}
+    <div class="section-card" id="doctor-section-{{ doc.id }}">
+        <div class="section-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+            <div>
+                <h2 style="display: flex; align-items: center; gap: 10px; margin: 0;">
+                    <span>👨‍⚕️ {{ doc.name }}</span>
+                    <span class="badge badge-secondary" style="font-size: 0.8rem; font-weight: normal;">{{ doc.specialization }}</span>
+                </h2>
+                <small class="text-muted">Working Days: {{ doc.working_days }} • Slot Duration: {{ doc.slot_interval or 30 }} mins</small>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span class="badge badge-success" id="doc-active-count-{{ doc.id }}">{{ doc_item.active_count }} Active Services</span>
+                <button class="btn btn-sm btn-primary" onclick="openAddModal('{{ doc.id }}')">➕ Add Service</button>
+            </div>
+        </div>
+
+        {% if not doc_item.has_consultation %}
+        <div style="background: rgba(0, 168, 132, 0.08); border-left: 4px solid #00a884; padding: 10px 14px; border-radius: 4px; margin-bottom: 16px; font-size: 0.9rem; color: #1f2937;">
+            🩺 <strong>Default Consultation Service Active:</strong> General Checkup & Consultation is automatically available for Dr. {{ doc.name }} using the clinic fee of <strong>PKR {{ "{:,.0f}".format(doc_item.default_consultation_fee) }}</strong>.
+        </div>
+        {% endif %}
+
+        {% if doc_item.services %}
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 60px;">ID</th>
+                        <th>Service / Treatment</th>
+                        <th>Description</th>
+                        <th style="width: 100px;">Duration</th>
+                        <th style="width: 120px;">Price</th>
+                        <th style="width: 100px;">Status</th>
+                        <th style="width: 200px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for svc in doc_item.services %}
+                    <tr id="service-row-{{ svc.id }}">
+                        <td><strong>#{{ svc.id }}</strong></td>
+                        <td><strong>{{ svc.name }}</strong></td>
+                        <td style="max-width: 320px;"><small class="text-muted">{{ svc.description or 'Standard clinical treatment.' }}</small></td>
+                        <td>{{ svc.duration }} mins</td>
+                        <td><strong style="color: #00a884;">PKR {{ "{:,.0f}".format(svc.price) }}</strong></td>
+                        <td>
+                            <span id="status-badge-{{ svc.id }}" class="badge {{ 'badge-success' if svc.is_active else 'badge-secondary' }}">
+                                {{ 'ACTIVE' if svc.is_active else 'INACTIVE' }}
+                            </span>
+                        </td>
+                        <td>
+                            <div style="display: flex; gap: 6px; align-items: center;">
+                                <button class="btn btn-sm btn-secondary" onclick="openEditModal('{{ svc.id }}', '{{ svc.name|escape }}', '{{ svc.description|escape }}', '{{ svc.duration }}', '{{ svc.price }}', {{ 'true' if svc.is_active else 'false' }})">Edit</button>
+                                <button type="button" id="toggle-btn-{{ svc.id }}" class="btn btn-sm {{ 'btn-danger' if svc.is_active else 'btn-primary' }}" onclick="toggleServiceAjax(this, '{{ svc.id }}')">
                                     {{ 'Deactivate' if svc.is_active else 'Activate' }}
                                 </button>
-                            </form>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+                                <button type="button" class="btn btn-sm" style="background: #ef4444; color: white;" onclick="deleteServiceAjax('{{ svc.id }}', '{{ svc.name|escape }}')">
+                                    🗑️ Delete
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state" style="padding: 20px; text-align: center;">
+            <p class="text-muted" style="margin-bottom: 8px;">No custom services configured for Dr. {{ doc.name }} yet.</p>
+            <button class="btn btn-sm btn-primary" onclick="openAddModal('{{ doc.id }}')">➕ Add Service for Dr. {{ doc.name }}</button>
+        </div>
+        {% endif %}
     </div>
-    {% else %}
-    <div class="empty-state">
-        <p>No services found in the database. Click 'Add New Service' above to configure clinical treatments.</p>
-    </div>
-    {% endif %}
+    {% endfor %}
 </div>
 
 <!-- Add Service Modal -->
@@ -117,7 +137,7 @@
         <form method="POST" action="/admin/services/add">
             <div class="form-group" style="margin-bottom: 12px;">
                 <label>Assigned Doctor</label>
-                <select name="doctor_id" class="form-control" required>
+                <select name="doctor_id" id="addServiceDoctorSelect" class="form-control" required>
                     {% for doc in doctors %}
                         <option value="{{ doc.id }}">{{ doc.name }} ({{ doc.specialization }})</option>
                     {% endfor %}
@@ -125,11 +145,11 @@
             </div>
             <div class="form-group" style="margin-bottom: 12px;">
                 <label>Service Name</label>
-                <input type="text" name="name" class="form-control" placeholder="e.g. Dental Braces Consultation" required>
+                <input type="text" name="name" class="form-control" placeholder="e.g. Neurological Consultation / Dental Cleaning" required>
             </div>
             <div class="form-group" style="margin-bottom: 12px;">
                 <label>Description</label>
-                <textarea name="description" class="form-control" rows="2" placeholder="Short explanation of treatment..."></textarea>
+                <textarea name="description" class="form-control" rows="2" placeholder="Short description of procedure or treatment..."></textarea>
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
                 <div class="form-group">
@@ -198,6 +218,14 @@
 
 {% block scripts %}
 <script>
+function openAddModal(doctorId) {
+    if (doctorId) {
+        const select = document.getElementById('addServiceDoctorSelect');
+        if (select) select.value = doctorId;
+    }
+    document.getElementById('addServiceModal').style.display = 'flex';
+}
+
 function openEditModal(id, name, desc, duration, price, isActive) {
     document.getElementById('editServiceForm').action = '/admin/services/edit/' + id;
     document.getElementById('editServiceName').value = name;
@@ -206,6 +234,80 @@ function openEditModal(id, name, desc, duration, price, isActive) {
     document.getElementById('editServicePrice').value = price;
     document.getElementById('editServiceActive').checked = isActive;
     document.getElementById('editServiceModal').style.display = 'flex';
+}
+
+// In-place AJAX toggle without full page refresh
+async function toggleServiceAjax(btn, serviceId) {
+    btn.disabled = true;
+    const prevText = btn.textContent.trim();
+    btn.textContent = '...';
+
+    try {
+        const res = await fetch('/admin/services/toggle/' + serviceId, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        });
+
+        const data = await res.json();
+        if (data.success) {
+            const badge = document.getElementById('status-badge-' + serviceId);
+            if (data.is_active) {
+                if (badge) {
+                    badge.className = 'badge badge-success';
+                    badge.textContent = 'ACTIVE';
+                }
+                btn.className = 'btn btn-sm btn-danger';
+                btn.textContent = 'Deactivate';
+            } else {
+                if (badge) {
+                    badge.className = 'badge badge-secondary';
+                    badge.textContent = 'INACTIVE';
+                }
+                btn.className = 'btn btn-sm btn-primary';
+                btn.textContent = 'Activate';
+            }
+        } else {
+            alert(data.error || 'Failed to toggle service status.');
+            btn.textContent = prevText;
+        }
+    } catch (e) {
+        alert('Network error: ' + e.message);
+        btn.textContent = prevText;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// In-place service deletion with confirmation
+async function deleteServiceAjax(serviceId, serviceName) {
+    if (!confirm(`Are you sure you want to delete the service "${serviceName}"?`)) return;
+
+    try {
+        const res = await fetch('/admin/services/delete/' + serviceId, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        });
+
+        const data = await res.json();
+        if (data.success) {
+            const row = document.getElementById('service-row-' + serviceId);
+            if (row) {
+                row.remove();
+            } else {
+                window.location.reload();
+            }
+        } else {
+            alert(data.error || 'Failed to delete service.');
+        }
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    }
 }
 </script>
 {% endblock %}

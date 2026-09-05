@@ -13,8 +13,8 @@ def seed_database(app=None):
         if not clinic:
             clinic = Business(
                 id=Config.DEFAULT_BUSINESS_ID,
-                name="SmileCare Dental Clinic",
-                business_type="dental_clinic",
+                name="Arfa Polyclinic",
+                business_type="polyclinic",
                 address="Plot 42-B, Main Boulevard, Gulberg III, Lahore",
                 phone="+92 42 35789000",
                 timezone="Asia/Karachi",
@@ -120,6 +120,15 @@ def seed_database(app=None):
                     description="Advanced laser teeth whitening for a bright, radiant smile.",
                     duration=60,
                     price=8000.0
+                ),
+                Service(
+                    id=7,
+                    business_id=clinic.id,
+                    doctor_id=dr_sara.id,
+                    name="Pediatric & General Consultation",
+                    description="Oral health checkup, pediatric examination, and general consultation.",
+                    duration=30,
+                    price=2000.0
                 ),
             ]
             db.session.add_all(services)

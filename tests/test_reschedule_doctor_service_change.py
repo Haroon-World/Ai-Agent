@@ -21,6 +21,9 @@ def app():
     with app.app_context():
         RequestCache.clear()
         seed_database(app)
+        for s in DoctorSchedule.query.all():
+            s.is_available = True
+        db.session.commit()
         yield app
         db.session.remove()
 
@@ -261,6 +264,11 @@ def test_conflict_checking_validates_against_new_doctor_schedule(app):
             db.session.commit()
 
         # 5a. Sunday closed check
+        sched_sun = DoctorSchedule.query.filter_by(doctor_id=2, day_of_week="Sunday").first()
+        if sched_sun:
+            sched_sun.is_available = False
+            db.session.commit()
+
         res_sunday = BookingService.reschedule_appointment(
             business_id=1,
             appointment_id=appt.id,

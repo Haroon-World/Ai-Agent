@@ -224,7 +224,7 @@ class TestStrictStateAwareWorkflow(unittest.TestCase):
         conv = db.session.get(Conversation, conv.id)
 
         self.assertEqual(conv.selected_service_id, self.svc1.id)
-        self.assertEqual(conv.awaiting_input, "date_choice")
+        self.assertEqual(conv.awaiting_input, "doctor_choice")
 
     def test_scenario_7_user_provides_friday_at_2pm(self):
         """

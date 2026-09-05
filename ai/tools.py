@@ -8,7 +8,7 @@ from services.handoff_service import HandoffService
 CANONICAL_TOOLS = [
     {
         "name": "get_clinic_info",
-        "description": "Get general information about the dental clinic including address, phone number, operating hours, and policies.",
+        "description": "Get general information about the polyclinic including address, phone number, operating hours, and policies.",
         "parameters": {
             "type": "object",
             "properties": {},
@@ -17,7 +17,7 @@ CANONICAL_TOOLS = [
     },
     {
         "name": "get_services",
-        "description": "Get the list of dental treatments, descriptions, durations, and pricing offered by a specific doctor.",
+        "description": "Get the list of medical treatments, consultation services, descriptions, durations, and pricing offered by a specific doctor.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -54,7 +54,7 @@ CANONICAL_TOOLS = [
                 },
                 "service_id": {
                     "type": "integer",
-                    "description": "Optional ID of the dental service"
+                    "description": "Optional ID of the medical service"
                 }
             },
             "required": ["date"]
@@ -62,7 +62,7 @@ CANONICAL_TOOLS = [
     },
     {
         "name": "book_appointment",
-        "description": "Book a confirmed dental appointment after validating slot availability and collecting patient details.",
+        "description": "Book a confirmed appointment after validating slot availability and collecting patient details.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -80,7 +80,7 @@ CANONICAL_TOOLS = [
                 },
                 "service_id": {
                     "type": "integer",
-                    "description": "ID of the dental service"
+                    "description": "ID of the medical service"
                 },
                 "appointment_date": {
                     "type": "string",

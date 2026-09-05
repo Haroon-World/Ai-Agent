@@ -61,7 +61,7 @@ def _get_business_info(business_id: int) -> Dict[str, Any]:
         else:
             info = {
                 "id": business_id,
-                "name": "SmileCare Dental Clinic",
+                "name": "ClinicConnect Polyclinic",
                 "address": "Plot 42-B, Main Boulevard, Gulberg III, Lahore",
                 "phone": "+92 42 35789000",
                 "timezone": _DEFAULT_TZ,
@@ -205,12 +205,77 @@ class BookingService:
         return business.to_dict()
 
     @staticmethod
+    def ensure_doctor_consultation_service(business_id: int, doctor_id: int) -> Optional[Service]:
+        """
+        Ensure the doctor has an active consultation/checkup service.
+        If no consultation service exists for this doctor, create or activate one
+        using the business default consultation fee.
+        """
+        doc = db.session.get(Doctor, doctor_id)
+        if not doc or doc.business_id != business_id:
+            return None
+
+        # 1. Look for existing active consultation service for this doctor
+        active_consult = Service.query.filter(
+            Service.business_id == business_id,
+            Service.doctor_id == doctor_id,
+            Service.is_active == True,
+            db.or_(
+                Service.name.ilike("%consultation%"),
+                Service.name.ilike("%checkup%"),
+                Service.name.ilike("%check up%"),
+                Service.name.ilike("%examination%")
+            )
+        ).first()
+        if active_consult:
+            return active_consult
+
+        biz = db.session.get(Business, business_id)
+        fee = getattr(biz, "consultation_fee", 2000.0) or 2000.0
+
+        # 2. Look for existing inactive consultation service to reactivate
+        inactive_consult = Service.query.filter(
+            Service.business_id == business_id,
+            Service.doctor_id == doctor_id,
+            db.or_(
+                Service.name.ilike("%consultation%"),
+                Service.name.ilike("%checkup%"),
+                Service.name.ilike("%check up%"),
+                Service.name.ilike("%examination%")
+            )
+        ).first()
+        if inactive_consult:
+            inactive_consult.is_active = True
+            if inactive_consult.price <= 0:
+                inactive_consult.price = fee
+            db.session.commit()
+            RequestCache.clear()
+            return inactive_consult
+
+        # 3. Create a consultation service for this doctor
+        new_svc = Service(
+            business_id=business_id,
+            doctor_id=doctor_id,
+            name="Consultation & Checkup",
+            description=f"Clinical evaluation and general consultation with {doc.name}.",
+            duration=30,
+            price=fee,
+            is_active=True
+        )
+        db.session.add(new_svc)
+        db.session.commit()
+        RequestCache.clear()
+        return new_svc
+
+    @staticmethod
     def get_services(business_id: int, doctor_id: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Fetch dental services offered by the business or a specific doctor."""
+        """Fetch active services offered by the business or a specific doctor (inactive services are excluded)."""
         cache_key = f"services_dict_{business_id}_{doctor_id}"
         svcs = RequestCache.get(cache_key)
         if svcs is None:
-            query = Service.query.filter_by(business_id=business_id)
+            if doctor_id:
+                BookingService.ensure_doctor_consultation_service(business_id, doctor_id)
+            query = Service.query.filter_by(business_id=business_id, is_active=True)
             if doctor_id:
                 query = query.filter_by(doctor_id=doctor_id)
             services = query.all()
@@ -443,10 +508,17 @@ class BookingService:
         if not service:
             return {"success": False, "error": f"Service with ID {service_id} not found."}
         if service.doctor_id != doctor.id:
-            return {
-                "success": False,
-                "error": f"{doctor.name} does not offer {service.name} - would you like to see available services for {doctor.name}, or book {service.name} with a doctor who offers it?"
-            }
+            # If the requested service was a consultation/checkup, map to this doctor's consultation service
+            if any(k in service.name.lower() for k in ["consultation", "checkup", "check up", "examination"]):
+                doc_consult = BookingService.ensure_doctor_consultation_service(business_id, doctor.id)
+                if doc_consult:
+                    service = doc_consult
+                    service_id = doc_consult.id
+            if service.doctor_id != doctor.id:
+                return {
+                    "success": False,
+                    "error": f"{doctor.name} does not offer {service.name} - would you like to see available services for {doctor.name}, or book {service.name} with a doctor who offers it?"
+                }
 
         # --- Validate Date & Day of Week ---
         tz = _get_business_tz(business_id)

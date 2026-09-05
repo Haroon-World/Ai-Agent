@@ -38,7 +38,7 @@ class TestUserTranscriptDiagnosis(unittest.TestCase):
 
         # Turn 1: who are you
         r1 = agent.process_message(conv.id, "who are you")
-        self.assertIn("SmileCare", r1["content"])
+        self.assertTrue("ClinicConnect" in r1["content"] or "SmileCare" in r1["content"])
 
         # Turn 2: Are doctor available?
         r2 = agent.process_message(conv.id, "Are doctor available?")

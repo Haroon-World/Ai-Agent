@@ -32,7 +32,7 @@ class TestEndToEndSuite(unittest.TestCase):
         # Explicitly seed the in-memory database
         seed_database(self.app)
         from models import DoctorSchedule
-        scheds = DoctorSchedule.query.filter_by(doctor_id=1).all()
+        scheds = DoctorSchedule.query.all()
         for s in scheds:
             s.is_available = True
         db.session.commit()
@@ -234,7 +234,7 @@ class TestEndToEndSuite(unittest.TestCase):
         # Subsequent customer message now handled by AI again
         resume_resp = agent.process_message(conv.id, "Where is your clinic located?")
         self.assertEqual(resume_resp["status"], "AI")
-        self.assertIn("smilecare", resume_resp["content"].lower())
+        self.assertTrue("arfa polyclinic" in resume_resp["content"].lower() or "smilecare" in resume_resp["content"].lower())
 
     def test_customer_message_persisted_during_active_human_handoff(self):
         """

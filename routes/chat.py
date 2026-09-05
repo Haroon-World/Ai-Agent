@@ -48,13 +48,15 @@ def get_or_create_conversation(
     db.session.commit()
 
     # Initial welcome message
+    biz = db.session.get(Business, business_id)
+    clinic_name = biz.name if biz else "ClinicConnect Polyclinic"
     welcome_msg = Message(
         conversation_id=conv.id,
         role="assistant",
         content=(
-            "Hello! Welcome to SmileCare Dental Clinic. "
+            f"Hello! Welcome to {clinic_name}. "
             "I am your AI receptionist. How can I help you today? "
-            "You can ask about our dental services, doctor schedules, "
+            "You can ask about our doctors, services, schedules, "
             "or book/reschedule an appointment."
         )
     )

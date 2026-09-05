@@ -151,22 +151,22 @@ def _fmt_time_ampm(t_str: str) -> str:
 
 def _prompt_doctor_choice(doctor_roster, lang="english", effective_name=None):
     """Return structured response prompting user to select a doctor from the roster."""
-    roster_lines = "\n".join(f"• **{d['name']}** - {d.get('specialization', 'Dentist')}" for d in doctor_roster)
+    roster_lines = "\n".join(f"• **{d['name']}** - {d.get('specialization', 'Specialist')}" for d in doctor_roster)
     if lang == "urdu":
         greeting = f"ہیلو {effective_name} صاحب! " if effective_name else "ہیلو! "
         return {
-            "content": f"{greeting}سمائل کیئر کلینک میں ہمارے پاس درج ذیل ڈاکٹرز دستیاب ہیں:\n\n{roster_lines}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا چاہیں گے؟",
+            "content": f"{greeting}ہمارے کلینک میں دستیاب ڈاکٹرز اور اسپیشلسٹس درج ذیل ہیں:\n\n{roster_lines}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا چاہیں گے؟",
             "tool_calls": []
         }
     elif lang == "roman_urdu":
         greeting = f"Hello {effective_name}! " if effective_name else "Hello! "
         return {
-            "content": f"{greeting}SmileCare Clinic mein hamare practicing doctors yeh hain:\n\n{roster_lines}\n\nAap kis doctor se appointment book karwana chahte hain?",
+            "content": f"{greeting}Arfa Polyclinic mein hamare practicing doctors aur specialists yeh hain:\n\n{roster_lines}\n\nAap kis doctor se appointment book karwana chahte hain?",
             "tool_calls": []
         }
     greeting = f"Hello {effective_name}! " if effective_name else ""
     return {
-        "content": f"{greeting}SmileCare is a polyclinic where each doctor offers their own separate set of services and schedules. Our practicing dentists are:\n\n{roster_lines}\n\nWhich doctor would you like to see for your appointment?",
+        "content": f"{greeting}Arfa Polyclinic is a multi-specialty polyclinic where each doctor offers their own separate set of services and schedules. Our practicing doctors and specialists are:\n\n{roster_lines}\n\nWhich doctor would you like to see for your appointment?",
         "tool_calls": []
     }
 
@@ -913,9 +913,12 @@ class MockAdapter(BaseLLMAdapter):
         tools: List[Dict[str, Any]],
         conversation_state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
+        clinic_name_match = re.search(r'Clinic Name:\s*(.+)', system_prompt)
+        clinic_name = clinic_name_match.group(1).strip() if clinic_name_match else "Arfa Polyclinic"
+
         if not messages:
             return {
-                "content": "Hello! Welcome to SmileCare Dental Clinic. How can I assist you with your dental care today?",
+                "content": f"Hello! Welcome to {clinic_name}. How can I assist you with your appointment or healthcare today?",
                 "tool_calls": []
             }
 
@@ -1066,33 +1069,34 @@ class MockAdapter(BaseLLMAdapter):
                     end_str = _fmt_time_ampm(d.get("end_time")) if d.get("end_time") else None
                     hours_str = f", Hours: {start_str} – {end_str}" if (start_str and end_str) else ""
                     lunch_str = f" | Lunch: {_fmt_time_ampm(d['break_start_time'])}–{_fmt_time_ampm(d['break_end_time'])}" if (d.get("break_start_time") and d.get("break_end_time")) else ""
-                    doc_items.append(f"• **{d['name']}** - {d.get('specialization', 'Dentist')} (Working Days: {wk_str}{hours_str}{lunch_str})")
+                    doc_items.append(f"• **{d['name']}** - {d.get('specialization', 'Specialist')} (Working Days: {wk_str}{hours_str}{lunch_str})")
                 body = "\n\n".join(doc_items)
                 if lang == "urdu":
                     return {
-                        "content": f"مسکراہٹ کلینک میں ہمارے دستیاب ڈاکٹرز درج ذیل ہیں:\n\n{body}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا پسند کریں گے؟",
+                        "content": f"ہمارے کلینک میں دستیاب ڈاکٹرز اور اسپیشلسٹس درج ذیل ہیں:\n\n{body}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا پسند کریں گے؟",
                         "tool_calls": []
                     }
                 elif lang == "roman_urdu":
                     return {
-                        "content": f"SmileCare ke practicing dentists yeh hain:\n\n{body}\n\nAap kis doctor ke sath appointment book karna pasand karein ge?",
+                        "content": f"ClinicConnect ke practicing doctors aur specialists yeh hain:\n\n{body}\n\nAap kis doctor ke sath appointment book karna pasand karein ge?",
                         "tool_calls": []
                     }
                 return {
-                    "content": "Of course. Here are our practicing dentists at SmileCare:\n\n" + body + "\n\nWhich doctor would you prefer?",
+                    "content": "Of course. Here are our practicing doctors and specialists at ClinicConnect:\n\n" + body + "\n\nWhich doctor would you prefer?",
                     "tool_calls": []
                 }
 
             elif "services" in tool_data:
                 svc_list = [f"• **{s['name']}** ({s['duration']} mins) - PKR {s['price']:,.0f}: {s['description']}" for s in tool_data.get("services", [])]
                 return {
-                    "content": "Here is our complete list of dental services:\n\n" + "\n\n".join(svc_list) + "\n\nWould you like to book an appointment for any of these services?",
+                    "content": "Here is our list of services:\n\n" + "\n\n".join(svc_list) + "\n\nWould you like to book an appointment for any of these services?",
                     "tool_calls": []
                 }
 
             elif "opening_hours" in tool_data:
+                clinic_title = tool_data.get("name", "ClinicConnect Polyclinic")
                 return {
-                    "content": f"**SmileCare Dental Clinic Information:**\n• **Address:** {tool_data.get('address')}\n• **Phone:** {tool_data.get('phone')}\n• **Hours:** {tool_data.get('opening_hours')}\n• **Policies:** {tool_data.get('policies')}\n\nHow else can I help you?",
+                    "content": f"**{clinic_title} Information:**\n• **Address:** {tool_data.get('address')}\n• **Phone:** {tool_data.get('phone')}\n• **Hours:** {tool_data.get('opening_hours')}\n• **Policies:** {tool_data.get('policies')}\n\nHow else can I help you?",
                     "tool_calls": []
                 }
 
@@ -1170,15 +1174,15 @@ class MockAdapter(BaseLLMAdapter):
                 doc_display_requested = f"Dr. {_mentioned_doc_raw.title()}" if not bool(re.search(r'[؀-ۿ]', _mentioned_doc_raw)) else f"ڈاکٹر {_mentioned_doc_raw}"
                 doc_bullets = []
                 for d in doctor_roster:
-                    d_spec = d.get("specialization", "General Dentist")
+                    d_spec = d.get("specialization", "Specialist")
                     doc_bullets.append(f"• **{d.get('name')}** - {d_spec}")
-                docs_list_str = "\n".join(doc_bullets) if doc_bullets else "Our practicing dental specialists"
+                docs_list_str = "\n".join(doc_bullets) if doc_bullets else "Our practicing specialists"
 
                 if lang == "urdu":
                     greeting = f"{effective_name} صاحب، " if effective_name else ""
                     return {
                         "content": (
-                            f"معذرت، {greeting}سمائل کیئر ڈینٹل کلینک میں {doc_display_requested} پریکٹس نہیں کرتے۔\n\n"
+                            f"معذرت، {greeting}ہمارے کلینک میں {doc_display_requested} پریکٹس نہیں کرتے۔\n\n"
                             f"ہمارے کلینک میں دستیاب ڈاکٹرز درج ذیل ہیں:\n{docs_list_str}\n\n"
                             f"آپ کس ڈاکٹر سے اپائنٹمنٹ لینا پسند کریں گے؟"
                         ),
@@ -1188,8 +1192,8 @@ class MockAdapter(BaseLLMAdapter):
                     greeting = f"{effective_name}, " if effective_name else ""
                     return {
                         "content": (
-                            f"SmileCare Dental Clinic mein {doc_display_requested} available nahi hain.\n\n"
-                            f"Hamare practicing dentists yeh hain:\n{docs_list_str}\n\n"
+                            f"ClinicConnect mein {doc_display_requested} available nahi hain.\n\n"
+                            f"Hamare practicing doctors aur specialists yeh hain:\n{docs_list_str}\n\n"
                             f"{greeting}Aap kis doctor ke sath appointment book karwana chahein ge?"
                         ),
                         "tool_calls": []
@@ -1198,8 +1202,8 @@ class MockAdapter(BaseLLMAdapter):
                     greeting = f", {effective_name}" if effective_name else ""
                     return {
                         "content": (
-                            f"We do not have {doc_display_requested} practicing at SmileCare Dental Clinic.\n\n"
-                            f"Our available practicing dentists are:\n{docs_list_str}\n\n"
+                            f"We do not have {doc_display_requested} practicing at ClinicConnect.\n\n"
+                            f"Our available practicing doctors and specialists are:\n{docs_list_str}\n\n"
                             f"Which doctor would you prefer for your appointment{greeting}?"
                         ),
                         "tool_calls": []
@@ -1210,7 +1214,7 @@ class MockAdapter(BaseLLMAdapter):
             svc_id = _svc_override["id"]
             svc_name = _svc_override["name"]
 
-        # --- OUT-OF-SCOPE & SPECIALTY CHECKS (Run FIRST regardless of awaiting_input) ---
+        # --- OUT-OF-SCOPE & DYNAMIC SPECIALTY CHECKS ---
         specialist_terms = [
             "neurosurgeon", "neurologist", "neurology", "cardiologist", "cardiology",
             "dermatologist", "dermatology", "oncologist", "oncology", "orthopedic",
@@ -1221,17 +1225,86 @@ class MockAdapter(BaseLLMAdapter):
             "eye", "eyes", "eyesight", "vision", "optometrist", "optometry", "glasses",
             "skin", "acne", "heart", "ear", "ears", "hearing", "lung", "stomach"
         ]
-        if any(s in user_text for s in specialist_terms) or ("pediatrician" in user_text and "dent" not in user_text):
-            return {
-                "content": "SmileCare is a dedicated dental clinic and does not offer non-dental medical specialties. I am connecting you with our human receptionist to see if they can assist or refer you.",
-                "tool_calls": [{"name": "human_handoff", "arguments": {"reason": f"Customer inquired about non-dental medical specialty: {user_text}"}}]
-            }
 
-        if any(w in user_text for w in non_dental_terms):
-            return {
-                "content": "SmileCare is a dedicated dental clinic specializing exclusively in teeth and oral healthcare (such as teeth cleaning, dental checkups, root canals, braces, extractions, and whitening). We do not offer eye checkups or general medical services. However, if you or a family member need any dental care, checkups, or teeth cleaning, I'd be happy to assist you with booking an appointment or checking our doctor schedules!",
-                "tool_calls": []
-            }
+        # Check if any doctor in our dynamic roster offers this specialty
+        matched_specialist_doc = None
+        spec_aliases = {
+            "skin": ["derma", "cosmetic", "skin"],
+            "acne": ["derma", "cosmetic", "skin"],
+            "dermatologist": ["derma", "skin"],
+            "dermatology": ["derma", "skin"],
+            "teeth": ["dent", "ortho", "teeth", "tooth", "oral"],
+            "tooth": ["dent", "ortho", "teeth", "tooth", "oral"],
+            "dental": ["dent", "ortho", "teeth", "tooth", "oral"],
+            "child": ["pediatric", "child"],
+            "kid": ["pediatric", "child"],
+            "pediatrician": ["pediatric", "child"],
+            "heart": ["cardio", "heart"],
+            "cardiologist": ["cardio", "heart"],
+            "bone": ["orthopedic", "bone"],
+            "eye": ["ophthalm", "optom", "eye", "vision"],
+            "ophthalmologist": ["ophthalm", "eye"]
+        }
+        for doc in doctor_roster:
+            doc_spec_l = doc.get("specialization", "").lower()
+            for kw, aliases in spec_aliases.items():
+                if kw in user_text and any(a in doc_spec_l for a in aliases):
+                    matched_specialist_doc = doc
+                    break
+            if matched_specialist_doc:
+                break
+            # Token match
+            spec_tokens = [t.strip() for t in re.split(r'[,/&|]+', doc_spec_l) if len(t.strip()) >= 3]
+            for st in spec_tokens:
+                if st in user_text:
+                    matched_specialist_doc = doc
+                    break
+            if matched_specialist_doc:
+                break
+
+        is_schedule_check = (
+            any(w in user_text for w in ["tomorrow", "kal", "today", "aaj", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "am", "pm", "clock"])
+            or bool(re.search(r'\b\d{1,2}:\d{2}\b', user_text))
+            or bool(re.search(r'\b\d{4}-\d{2}-\d{2}\b', user_text))
+        )
+        is_svc_token_present = any(
+            (s.get("name", "").lower() in user_text)
+            for s in service_roster if s.get("name") and len(s.get("name", "")) > 4
+        )
+
+        if matched_specialist_doc and not is_schedule_check and not is_svc_token_present and not any(w in user_text for w in ["insurance", "prescription", "antibiotic", "diagnose", "severe bleeding"]):
+            m_name = matched_specialist_doc["name"]
+            m_spec = matched_specialist_doc.get("specialization", "Specialist")
+            if any(w in user_text for w in ["do you have", "is there", "any doctor", "any specialist", "doctor available", "specialist available"]) or ("available" in user_text and any(dw in user_text for dw in ["doctor", "dr", "dr.", "specialist", "physician", "expert", "consultant"])):
+                if lang == "urdu":
+                    return {
+                        "content": f"جی بالکل! ہمارے کلینک میں **{m_name}** ({m_spec}) دستیاب ہیں۔ کیا آپ ان کے ساتھ اپائنٹمنٹ بک کرنا چاہتے ہیں؟",
+                        "tool_calls": []
+                    }
+                elif lang == "roman_urdu":
+                    return {
+                        "content": f"Jee bilkul! Hamare clinic mein **{m_name}** ({m_spec}) available hain. Kya aap in ke sath appointment book karwana chahte hain?",
+                        "tool_calls": []
+                    }
+                appt_type = "a dental consultation or checkup" if "dent" in m_spec.lower() else "an appointment"
+                return {
+                    "content": f"Yes, we do! At ClinicConnect, **{m_name}** specializes in {m_spec}. Would you like to check their availability or book {appt_type}?",
+                    "tool_calls": []
+                }
+
+        if not matched_specialist_doc and not is_schedule_check and not is_svc_token_present:
+            if any(s in user_text for s in specialist_terms) or ("pediatrician" in user_text and "dent" not in user_text):
+                return {
+                    "content": "ClinicConnect is a multi-specialty polyclinic, but we do not currently have a specialist for that department. I am connecting you with our human receptionist to see if they can assist or refer you.",
+                    "tool_calls": [{"name": "human_handoff", "arguments": {"reason": f"Customer inquired about medical specialty not currently in roster: {user_text}"}}]
+                }
+
+            if any(w in user_text for w in non_dental_terms):
+                available_specs = ", ".join(f"{d['name']} ({d.get('specialization', 'Specialist')})" for d in doctor_roster)
+                return {
+                    "content": f"ClinicConnect is a multi-specialty polyclinic, but we do not currently offer eye checkups or non-rostered services. Our available practicing doctors and specialties are: {available_specs}. However, if you or a family member need a dental checkup or consultation with any of our available specialists, I'd be happy to assist you with booking an appointment or checking our doctor schedules!",
+                    "tool_calls": []
+                }
 
         if any(w in user_text for w in ["insurance", "prescription", "antibiotic", "diagnose", "severe bleeding"]):
             return {
@@ -1245,16 +1318,16 @@ class MockAdapter(BaseLLMAdapter):
             if any(w in user_text for w in ["yes", "yeah", "confirm", "sure", "go ahead", "ok", "okay", "haan", "theek", "book it", "please book", "book", "thanks", "thank you", "done", "alright"]):
                 if lang == "urdu":
                     return {
-                        "content": "🎉 **آپ کی اپائنٹمنٹ پہلے ہی تصدیق شدہ ہے!** ہم سمائل کیئر ڈینٹل کلینک میں آپ کے منتظر ہیں۔ کیا میں آپ کی مزید کوئی مدد کر سکتا ہوں؟",
+                        "content": "🎉 **آپ کی اپائنٹمنٹ پہلے ہی تصدیق شدہ ہے!** ہم کلینک میں آپ کے منتظر ہیں۔ کیا میں آپ کی مزید کوئی مدد کر سکتا ہوں؟",
                         "tool_calls": []
                     }
                 elif lang == "roman_urdu":
                     return {
-                        "content": "Aap ki appointment already confirmed hai! Hum SmileCare Dental Clinic mein aap ke muntazir hain. Agar koi mazeed sawal ho to zaroor batayein!",
+                        "content": "Aap ki appointment already confirmed hai! Hum ClinicConnect Polyclinic mein aap ke muntazir hain. Agar koi mazeed sawal ho to zaroor batayein!",
                         "tool_calls": []
                     }
                 return {
-                    "content": "Your appointment is already confirmed! We look forward to seeing you at SmileCare Dental Clinic. Please let us know if you need anything else.",
+                    "content": "Your appointment is already confirmed! We look forward to seeing you at ClinicConnect Polyclinic. Please let us know if you need anything else.",
                     "tool_calls": []
                 }
 
@@ -1809,19 +1882,20 @@ class MockAdapter(BaseLLMAdapter):
                 elif not is_question and (not target_date_str or conv_state.get("intent") == "RESCHEDULE_APPOINTMENT"):
                     if doc_id:
                         return _prompt_service_choice(doc_id, doc_name, service_roster, lang, effective_name)
-                    else:
+                        roster_bullets = "\n".join(f"• **{d['name']}** - {d.get('specialization', 'Specialist')}" for d in doctor_roster)
+                        roster_inline = " aur ".join(f"{d['name']} ({d.get('specialization', 'Specialist')})" for d in doctor_roster)
                         if lang == "urdu":
                             return {
-                                "content": "سمائل کیئر ایک پولی کلینک ہے جہاں ہر ڈاکٹر کی سروسز اور فیس الگ ہے۔ براہ کرم بتائیے کہ آپ کس ڈاکٹر کی سروسز دیکھنا چاہتے ہیں؟ ہمارے پاس Dr. Ahmed Khan (General & Ortho) اور Dr. Sara Malik (Pediatric & Cosmetic) موجود ہیں۔",
+                                "content": f"کلینک ایک پولی کلینک ہے جہاں ہر ڈاکٹر کی سروسز اور فیس الگ ہے۔ براہ کرم بتائیے کہ آپ کس ڈاکٹر کی سروسز دیکھنا چاہتے ہیں؟ ہمارے پاس {roster_inline} موجود ہیں۔",
                                 "tool_calls": []
                             }
                         elif lang == "roman_urdu":
                             return {
-                                "content": "SmileCare ek polyclinic hai jahan har doctor ki services aur pricing alag hai. Aap kis doctor ki services dekhna chahte hain? Hamare paas Dr. Ahmed Khan (General Dentistry & Orthodontics) aur Dr. Sara Malik (Pediatric & Cosmetic Dentistry) available hain.",
+                                "content": f"Arfa Polyclinic ek polyclinic hai jahan har doctor ki services aur pricing alag hai. Aap kis doctor ki services dekhna chahte hain? Hamare paas {roster_inline} available hain.",
                                 "tool_calls": []
                             }
                         return {
-                            "content": "SmileCare is a polyclinic where each doctor offers their own separate set of services and pricing. Which doctor would you like to see services for?\n\n• **Dr. Ahmed Khan** - General Dentistry & Orthodontics\n• **Dr. Sara Malik** - Pediatric & Cosmetic Dentistry",
+                            "content": f"Arfa Polyclinic is a multi-specialty polyclinic where each doctor offers their own separate set of services and pricing. Which doctor would you like to see services for?\n\n{roster_bullets}",
                             "tool_calls": []
                         }
 
@@ -1924,10 +1998,10 @@ class MockAdapter(BaseLLMAdapter):
                             "content": f"Thanks, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
                             "tool_calls": []
                         }
-                    else:
                         svc_str = f" for {svc_name}" if svc_name else ""
+                        doc_disp = doc_name or "our doctor"
                         return {
-                            "content": f"I have selected the {_fmt_time_ampm(time_token)} slot on {target_date_str or 'the requested date'} with {doc_name or 'Dr. Ahmed Khan'}{svc_str}. To complete and confirm your booking, please provide your full name and contact phone number.",
+                            "content": f"I have selected the {_fmt_time_ampm(time_token)} slot on {target_date_str or 'the requested date'} with {doc_disp}{svc_str}. To complete and confirm your booking, please provide your full name and contact phone number.",
                             "tool_calls": []
                         }
 
@@ -2025,27 +2099,29 @@ class MockAdapter(BaseLLMAdapter):
             }
 
         is_dont_know_treatment = any(phrase in user_text for phrase in ["dont know", "don't know", "not sure", "unsure", "pata nahi", "nahi pata", "maloom nahi"])
-        is_service_inquiry = not is_dont_know_treatment and any(w in user_text for w in ["which service", "what service", "what services", "list service", "list services", "treatment", "treatments", "price", "prices", "cost", "costs", "charge", "charges", "what do you offer", "how much"])
+        is_service_inquiry = not is_dont_know_treatment and any(w in user_text for w in ["which service", "what service", "what services", "dental service", "dental services", "medical service", "medical services", "list service", "list services", "treatment", "treatments", "price", "prices", "cost", "costs", "charge", "charges", "what do you offer", "how much"])
         if is_service_inquiry:
             if doc_id:
                 return {
-                    "content": f"Let me fetch the dental services and pricing for {doc_name or 'your selected doctor'}.",
+                    "content": f"Let me fetch the services and pricing for {doc_name or 'your selected doctor'}.",
                     "tool_calls": [{"name": "get_services", "arguments": {"doctor_id": doc_id}}]
                 }
             else:
+                roster_bullets = "\n".join(f"• **{d['name']}** - {d.get('specialization', 'Specialist')}" for d in doctor_roster)
+                roster_inline = " aur ".join(f"{d['name']} ({d.get('specialization', 'Specialist')})" for d in doctor_roster)
                 if lang == "urdu":
                     return {
-                        "content": "سمائل کیئر ایک پولی کلینک ہے جہاں ہر ڈاکٹر کی سروسز اور فیس الگ ہے۔ براہ کرم بتائیے کہ آپ کس ڈاکٹر کی سروسز دیکھنا چاہتے ہیں؟ ہمارے پاس Dr. Ahmed Khan (General & Ortho) اور Dr. Sara Malik (Pediatric & Cosmetic) موجود ہیں۔",
+                        "content": f"کلینک ایک پولی کلینک ہے جہاں ہر ڈاکٹر کی سروسز اور فیس الگ ہے۔ براہ کرم بتائیے کہ آپ کس ڈاکٹر کی سروسز دیکھنا چاہتے ہیں؟ ہمارے پاس {roster_inline} موجود ہیں۔",
                         "tool_calls": []
                     }
                 elif lang == "roman_urdu":
                     return {
-                        "content": "SmileCare ek polyclinic hai jahan har doctor ki services aur pricing alag hai. Aap kis doctor ki services dekhna chahte hain? Hamare paas Dr. Ahmed Khan (General Dentistry & Orthodontics) aur Dr. Sara Malik (Pediatric & Cosmetic Dentistry) available hain.",
+                        "content": f"ClinicConnect ek polyclinic hai jahan har doctor ki services aur pricing alag hai. Aap kis doctor ki services dekhna chahte hain? Hamare paas {roster_inline} available hain.",
                         "tool_calls": []
                     }
                 else:
                     return {
-                        "content": "SmileCare is a polyclinic where each doctor offers their own separate set of services and pricing. Which doctor would you like to see services for?\n\n• **Dr. Ahmed Khan** - General Dentistry & Orthodontics\n• **Dr. Sara Malik** - Pediatric & Cosmetic Dentistry",
+                        "content": f"ClinicConnect is a polyclinic where each doctor offers their own separate set of medical and dental services and pricing. Which doctor would you like to see services for?\n\n{roster_bullets}",
                         "tool_calls": []
                     }
 
@@ -2310,32 +2386,32 @@ class MockAdapter(BaseLLMAdapter):
         if any(w in user_text for w in ["how are you", "who are you", "what is your name", "what can you do", "good morning", "good afternoon", "good evening", "hi there", "hello there", "kaise ho", "kese ho", "kia haal", "kya haal"]):
             if lang == "urdu":
                 return {
-                    "content": "ہیلو! میں سمائل کیئر ڈینٹل کلینک کا AI اسسٹنٹ ہوں۔ میں بالکل ٹھیک ہوں اور آپ کی مدد کے لیے حاضر ہوں۔ آج میں آپ کے دانتوں کی کیا خدمت کر سکتا ہوں؟",
+                    "content": f"ہیلو! میں {clinic_name} کا AI اسسٹنٹ ہوں۔ میں بالکل ٹھیک ہوں اور آپ کی مدد کے لیے حاضر ہوں۔ آج میں آپ کی کیا خدمت کر سکتا ہوں؟",
                     "tool_calls": []
                 }
             elif lang == "roman_urdu":
                 return {
-                    "content": "Hello! Main SmileCare Dental Clinic ka AI receptionist hoon. Main bilkul theek hoon! Main aap ke daanton ke ilaj aur appointment ke liye hazir hoon. Aaj main aap ki kya madad kar sakta hoon?",
+                    "content": f"Hello! Main {clinic_name} ka AI receptionist hoon. Main bilkul theek hoon! Main aap ke doctor appointment aur medical ya dental consultation ke liye hazir hoon. Aaj main aap ki kya madad kar sakta hoon?",
                     "tool_calls": []
                 }
             return {
-                "content": "Hello! I am your AI receptionist at SmileCare Dental Clinic. I'm doing great and ready to assist you! I can help you check doctor schedules, explore our dental services, or book an appointment. How can I help with your teeth today?",
+                "content": f"Hello! I am your AI receptionist at {clinic_name} (powered by ClinicConnect AI). I'm doing great and ready to assist you! I can help you check doctor schedules, explore our medical and dental services, or book an appointment. How can I help you today?",
                 "tool_calls": []
             }
 
         if any(w in user_text for w in ["thank you", "thanks", "thx", "appreciation", "great", "awesome", "perfect", "shukriya", "meharbani"]):
             if lang == "urdu":
                 return {
-                    "content": "آپ کا بہت شکریہ! اگر آپ کو دانتوں کی دیکھ بھال کے حوالے سے کچھ اور پوچھنا ہو تو ضرور بتائیے گا۔",
+                    "content": "آپ کا بہت شکریہ! اگر آپ کو کلینک سروسز یا اپائنٹمنٹ کے حوالے سے کچھ اور پوچھنا ہو تو ضرور بتائیے گا۔",
                     "tool_calls": []
                 }
             elif lang == "roman_urdu":
                 return {
-                    "content": "Bohat shukriya! Agar aap ko dental care ya appointment ke hawalay se mazeed kuch poochna ho to zaroor batayein.",
+                    "content": "Bohat shukriya! Agar aap ko clinic services ya appointment ke hawalay se mazeed kuch poochna ho to zaroor batayein.",
                     "tool_calls": []
                 }
             return {
-                "content": "You're very welcome! Is there anything else I can assist you with regarding your dental care or appointments today?",
+                "content": "You're very welcome! Is there anything else I can assist you with regarding your healthcare or appointments today?",
                 "tool_calls": []
             }
 
@@ -2371,7 +2447,11 @@ class MockAdapter(BaseLLMAdapter):
             }
 
         # Service Selection (e.g. "For Braces i want to applied", "teeth whitening", "i need braces", "root canal", "consultation", "tooth hurts")
-        matched_svc_any = _fuzzy_match_roster(user_text, service_roster)
+        is_general_consultation = any(w in user_text for w in [
+            "dont know", "don't know", "not sure", "unsure", "need a consultation", "i need a consultation",
+            "general consultation", "pata nahi", "nahi pata", "maloom nahi", "check karwana", "check krwana"
+        ])
+        matched_svc_any = None if is_general_consultation else _fuzzy_match_roster(user_text, service_roster)
         if matched_svc_any and not is_question:
             svc_id = matched_svc_any["id"]
             svc_name = matched_svc_any["name"]
@@ -2407,16 +2487,16 @@ class MockAdapter(BaseLLMAdapter):
                     o_spec = offering_doc.get("specialization", "")
                     if lang == "urdu":
                         return {
-                            "content": f"سمائل کیئر میں {svc_name} کے ماہر {o_name} ({o_spec}) ہیں۔ کیا آپ {o_name} کے ساتھ بکنگ آگے بڑھانا چاہیں گے؟",
+                            "content": f"ہمارے کلینک میں {svc_name} کے ماہر {o_name} ({o_spec}) ہیں۔ کیا آپ {o_name} کے ساتھ بکنگ آگے بڑھانا چاہیں گے؟",
                             "tool_calls": []
                         }
                     elif lang == "roman_urdu":
                         return {
-                            "content": f"SmileCare mein {svc_name} **{o_name}** ({o_spec}) offer karte hain. Kya aap {o_name} ke sath proceed karna chahenge?",
+                            "content": f"Hamare clinic mein {svc_name} **{o_name}** ({o_spec}) offer karte hain. Kya aap {o_name} ke sath proceed karna chahenge?",
                             "tool_calls": []
                         }
                     return {
-                        "content": f"At SmileCare Dental Clinic, {svc_name} is offered by **{o_name}** ({o_spec}). Would you like to proceed with {o_name}?",
+                        "content": f"At our clinic, {svc_name} is offered by **{o_name}** ({o_spec}). Would you like to proceed with {o_name}?",
                         "tool_calls": []
                     }
                 else:
@@ -2435,13 +2515,13 @@ class MockAdapter(BaseLLMAdapter):
                         "tool_calls": []
                     }
         elif any(w in user_text for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup"]):
-            consultation_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else {"id": 1, "name": "Dental Checkup & Consultation", "price": 2000})
+            consultation_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else {"id": 1, "name": "General Consultation", "price": 2000})
             fee = consultation_svc.get("price", 2000.0)
             if doc_name:
                 if lang == "urdu":
                     greeting = f"جی {effective_name} صاحب! " if effective_name else "جی بالکل! "
                     return {
-                        "content": f"{greeting}ہم {doc_name} کے ساتھ ڈینٹل چیک اپ اور مشورہ (فیس: PKR {fee:,.0f}) طے کر لیتے ہیں۔ آپ کس تاریخ کو تشریف لانا چاہیں گے؟",
+                        "content": f"{greeting}ہم {doc_name} کے ساتھ مشورہ (فیس: PKR {fee:,.0f}) طے کر لیتے ہیں۔ آپ کس تاریخ کو تشریف لانا چاہیں گے؟",
                         "tool_calls": []
                     }
                 elif lang == "roman_urdu":
@@ -2452,28 +2532,32 @@ class MockAdapter(BaseLLMAdapter):
                     }
                 greeting = f"Sure {effective_name}. " if effective_name else "Sure! "
                 return {
-                    "content": f"{greeting}We'll arrange a Dental Checkup & Consultation with {doc_name} (Fee: PKR {fee:,.0f}). What date would you prefer for your appointment?",
+                    "content": f"{greeting}We'll arrange a Consultation with {doc_name} (Fee: PKR {fee:,.0f}). What date would you prefer for your appointment?",
                     "tool_calls": []
                 }
+            roster_bullets = "\n\n".join(
+                f"• **{d['name']}** - {d.get('specialization', 'Specialist')} (Working Days: {d.get('working_days', 'Monday to Saturday')})"
+                for d in doctor_roster
+            )
             if lang == "urdu":
                 return {
-                    "content": f"کوئی مسئلہ نہیں۔ ہم مشورہ بک کر لیتے ہیں (فیس: PKR {fee:,.0f})۔ آپ کس ڈاکٹر کو ترجیح دیں گے؟",
+                    "content": f"ہمارے کلینک میں دستیاب ڈاکٹرز اور اسپیشلسٹس درج ذیل ہیں:\n\n{roster_bullets}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا پسند کریں گے؟",
                     "tool_calls": []
                 }
             elif lang == "roman_urdu":
                 return {
-                    "content": f"Koi masla nahi! Hum consultation book kar lete hain (Fee: PKR {fee:,.0f}). Aap kis doctor ko prefer karein ge?",
+                    "content": f"ClinicConnect ke practicing doctors aur specialists yeh hain:\n\n{roster_bullets}\n\nAap kis doctor ke sath appointment book karna pasand karein ge?",
                     "tool_calls": []
                 }
             return {
-                "content": f"No problem. We can book a consultation. The consultation fee is PKR {fee:,.0f}. Which doctor would you prefer?",
+                "content": f"Of course. Here are our practicing doctors and specialists:\n\n{roster_bullets}\n\nWhich doctor would you prefer?",
                 "tool_calls": []
             }
 
         # 6. Booking intent or explicit date provided in active booking context -> Check availability if date is known, or ask for service/doctor/date
         if _has_booking_intent(user_text) or (explicit_date_given and target_date_str and (workflow_state in ["CHECKING_AVAILABILITY", "COLLECTING_INFO", "START"] or conv_state.get("intent") in ["BOOK_APPOINTMENT", "UNKNOWN"])):
             if explicit_date_given and target_date_str:
-                disp_doc = doc_name or "our practicing dentists"
+                disp_doc = doc_name or "our practicing doctors"
                 return {
                     "content": f"Checking open slots for {disp_doc} on {target_date_str}...",
                     "tool_calls": [{
@@ -2487,21 +2571,22 @@ class MockAdapter(BaseLLMAdapter):
                 }
             else:
                 if not doc_id:
+                    roster_bullets = "\n".join(f"• **{d['name']}** - {d.get('specialization', 'Specialist')}" for d in doctor_roster)
                     if lang == "urdu":
                         greeting = f"ہیلو {effective_name} صاحب! " if effective_name else "ہیلو! "
                         return {
-                            "content": f"{greeting}سمائل کیئر کلینک میں ہمارے دو ڈاکٹرز پریکٹس کر رہے ہیں: ڈاکٹر احمد خان اور ڈاکٹر سارہ ملک۔ آپ کس ڈاکٹر سے اپائنٹمنٹ لینا چاہیں گے؟",
+                            "content": f"{greeting}ہمارے کلینک میں دستیاب ڈاکٹرز درج ذیل ہیں:\n\n{roster_bullets}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا چاہیں گے؟",
                             "tool_calls": []
                         }
                     elif lang == "roman_urdu":
                         greeting = f"Hello {effective_name}! " if effective_name else "Hello! "
                         return {
-                            "content": f"{greeting}SmileCare Dental Clinic mein hamare 2 practicing dentists hain: Dr. Ahmed Khan aur Dr. Sara Malik. Aap kis doctor ke sath appointment prefer karein ge?",
+                            "content": f"{greeting}Hamare clinic mein practicing doctors yeh hain:\n\n{roster_bullets}\n\nAap kis doctor ke sath appointment prefer karein ge?",
                             "tool_calls": []
                         }
                     greeting = f"Hello {effective_name}! " if effective_name else "Hello! "
                     return {
-                        "content": f"{greeting}We have two practicing dentists at SmileCare: Dr. Ahmed Khan and Dr. Sara Malik. Which doctor would you prefer for your appointment?",
+                        "content": f"{greeting}Our practicing doctors and specialists are:\n\n{roster_bullets}\n\nWhich doctor would you prefer for your appointment?",
                         "tool_calls": []
                     }
                 else:
@@ -2527,12 +2612,12 @@ class MockAdapter(BaseLLMAdapter):
         # 11. Smart Active Guidance Fallback (Never cold/robot fallback)
         if user_message_count <= 1 and not has_prior_assistant:
             return {
-                "content": "Hello! Welcome to SmileCare Dental Clinic. I am your AI receptionist. How can I help you today? You can ask about our dental services, doctor schedules, or book an appointment!",
+                "content": f"Hello! Welcome to {clinic_name}. I am your AI receptionist. How can I help you today? You can ask about our doctor schedules, medical and dental services, or book an appointment!",
                 "tool_calls": []
             }
 
         return {
-            "content": "I am here to assist you with all your dental care needs at SmileCare Dental Clinic! You can ask me about our available dental services, check doctor schedules, or book a consultation. How can I help you today?",
+            "content": f"I am here to assist you with all your healthcare and dental care needs at {clinic_name}! You can ask me about our available services, check doctor schedules, or book a consultation. How can I help you today?",
             "tool_calls": []
         }
 

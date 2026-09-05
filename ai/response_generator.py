@@ -426,18 +426,19 @@ def _format_booking(
             return f"Maazrat, aap ki booking complete nahi ho saki: {err}"
         return f"Sorry, we could not complete your booking: {err}"
 
+    clinic_name = (conv_state or {}).get("clinic_name") or tool_data.get("clinic_name") or "Arfa Polyclinic"
     if tool_data.get("is_duplicate_request"):
         if lang == "urdu":
-            return "🎉 **آپ کی اپائنٹمنٹ پہلے ہی تصدیق شدہ ہے!** ہم سمائل کیئر ڈینٹل کلینک میں آپ کے منتظر ہیں۔ کیا میں آپ کی مزید کوئی مدد کر سکتا ہوں؟"
+            return f"🎉 **آپ کی اپائنٹمنٹ پہلے ہی تصدیق شدہ ہے!** ہم {clinic_name} میں آپ کے منتظر ہیں۔ کیا میں آپ کی مزید کوئی مدد کر سکتا ہوں؟"
         elif lang == "roman_urdu":
-            return "Aap ki appointment already confirmed hai! Hum SmileCare Dental Clinic mein aap ke muntazir hain. Agar koi mazeed sawal ho to zaroor batayein!"
-        return "Your appointment has already been confirmed! We look forward to seeing you at SmileCare Dental Clinic."
+            return f"Aap ki appointment already confirmed hai! Hum {clinic_name} mein aap ke muntazir hain. Agar koi mazeed sawal ho to zaroor batayein!"
+        return f"Your appointment has already been confirmed! We look forward to seeing you at {clinic_name}."
 
     appt = tool_data.get("appointment", {})
     appt_id = appt.get("id", 1)
     patient = appt.get("patient_name") or appt.get("customer_name") or conv_state.get("pending_customer_name") or "Valued Patient"
     doctor = appt.get("doctor_name", "Dr. Ahmed Khan")
-    service = appt.get("service_name", "Dental Consultation")
+    service = appt.get("service_name", "Consultation")
     date_str = appt.get("appointment_date", "")
     time_str = appt.get("appointment_time", "")
     formatted_time = _fmt_time_ampm(time_str)
@@ -663,14 +664,14 @@ def _format_doctors(
         st = _fmt_time_ampm(d.get("start_time")) if d.get("start_time") else None
         et = _fmt_time_ampm(d.get("end_time")) if d.get("end_time") else None
         hours_part = f", Hours: {st} – {et}" if (st and et) else ""
-        lines.append(f"• **{d['name']}** - {d.get('specialization', 'General Dentistry')} (Working Days: {wk_days}{hours_part})")
+        lines.append(f"• **{d['name']}** - {d.get('specialization', 'Specialist')} (Working Days: {wk_days}{hours_part})")
 
     docs_body = "\n\n".join(lines)
     if lang == "urdu":
-        return f"سمائل کیئر میں ہمارے پریکٹس کرنے والے دانتوں کے ڈاکٹر یہ ہیں:\n\n{docs_body}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا پسند کریں گے؟"
+        return f"ہمارے کلینک میں پریکٹس کرنے والے دستیاب ڈاکٹرز اور اسپیشلسٹس یہ ہیں:\n\n{docs_body}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا پسند کریں گے؟"
     elif lang == "roman_urdu":
-        return f"SmileCare ke available doctors yeh hain:\n\n{docs_body}\n\nBarah-e-karam batayein aap kis doctor ke sath appointment book karwana chahein ge?"
-    return f"Of course. Here are our practicing dentists at SmileCare:\n\n{docs_body}\n\nWhich doctor would you prefer?"
+        return f"ClinicConnect ke available doctors aur specialists yeh hain:\n\n{docs_body}\n\nBarah-e-karam batayein aap kis doctor ke sath appointment book karwana chahein ge?"
+    return f"Of course. Here are our practicing doctors and specialists:\n\n{docs_body}\n\nWhich doctor would you prefer?"
 
 
 def _format_services(tool_data: Dict[str, Any], lang: str, conv_state: Optional[Dict[str, Any]] = None) -> str:
@@ -693,20 +694,21 @@ def _format_services(tool_data: Dict[str, Any], lang: str, conv_state: Optional[
     doc_name = (conv_state or {}).get("selected_doctor_name")
     if doc_name:
         if lang == "urdu":
-            return f"{doc_name} کی دستیاب ڈینٹل سروسز اور فیس درج ذیل ہیں:\n\n{svcs_body}\n\nکیا آپ ان میں سے کسی سروس کے لیے اپائنٹمنٹ لینا چاہتے ہیں؟"
+            return f"{doc_name} کی دستیاب سروسز اور فیس درج ذیل ہیں:\n\n{svcs_body}\n\nکیا آپ ان میں سے کسی سروس کے لیے اپائنٹمنٹ لینا چاہتے ہیں؟"
         elif lang == "roman_urdu":
-            return f"{doc_name} ki available dental services aur unki pricing yeh hai:\n\n{svcs_body}\n\nKya aap in mein se kisi service ke liye appointment book karna chahte hain?"
+            return f"{doc_name} ki available services aur unki pricing yeh hai:\n\n{svcs_body}\n\nKya aap in mein se kisi service ke liye appointment book karna chahte hain?"
         return f"Here are the services and pricing offered by {doc_name}:\n\n{svcs_body}\n\nWould you like to book an appointment with {doc_name} for any of these services?"
 
     if lang == "urdu":
-        return f"ڈاکٹر کی ڈینٹل سروسز درج ذیل ہیں:\n\n{svcs_body}\n\nکیا آپ ان میں سے کسی سروس کے لیے بکنگ کروانا چاہتے ہیں؟"
+        return f"ڈاکٹر کی دستیاب سروسز درج ذیل ہیں:\n\n{svcs_body}\n\nکیا آپ ان میں سے کسی سروس کے لیے بکنگ کروانا چاہتے ہیں؟"
     elif lang == "roman_urdu":
-        return f"Doctor ki dental services aur unki pricing yeh hai:\n\n{svcs_body}\n\nKya aap in mein se kisi service ke liye appointment book karna chahte hain?"
+        return f"Doctor ki available services aur unki pricing yeh hai:\n\n{svcs_body}\n\nKya aap in mein se kisi service ke liye appointment book karna chahte hain?"
     return f"Here is the list of services for your selected doctor:\n\n{svcs_body}\n\nWould you like to book an appointment for any of these services?"
 
 
 def _format_clinic_info(tool_data: Dict[str, Any], lang: str) -> str:
-    name = tool_data.get("name", "SmileCare Dental Clinic")
+    name = tool_data.get("name", "ClinicConnect Polyclinic")
+    display_name = f"{name} (SmileCare)" if "clinicconnect" in name.lower() and "smilecare" not in name.lower() else name
     address = tool_data.get("address", "Plot 42-B, Main Boulevard, Gulberg III, Lahore")
     phone = tool_data.get("phone", "+92 42 35789000")
     hours = tool_data.get("opening_hours", "Monday to Saturday: 09:00 AM - 05:00 PM, Sunday: Closed")
@@ -715,7 +717,7 @@ def _format_clinic_info(tool_data: Dict[str, Any], lang: str) -> str:
 
     if lang == "urdu":
         return (
-            f"**{name} معلومات:**\n\n"
+            f"**{display_name} معلومات:**\n\n"
             f"• **پتہ:** {address}\n"
             f"• **فون نمبر:** {phone}\n"
             f"• **اوقات کار:** {hours}\n"
@@ -725,7 +727,7 @@ def _format_clinic_info(tool_data: Dict[str, Any], lang: str) -> str:
         )
     elif lang == "roman_urdu":
         return (
-            f"**{name} Clinic Information:**\n\n"
+            f"**{display_name} Information:**\n\n"
             f"• **Address:** {address}\n"
             f"• **Phone:** {phone}\n"
             f"• **Hours:** {hours}\n"
@@ -734,7 +736,7 @@ def _format_clinic_info(tool_data: Dict[str, Any], lang: str) -> str:
             f"Kya aap appointment book karwana chahein ge?"
         )
     return (
-        f"**{name} Information:**\n\n"
+        f"**{display_name} Information:**\n\n"
         f"• **Address:** {address}\n"
         f"• **Phone:** {phone}\n"
         f"• **Hours:** {hours}\n"

@@ -21,6 +21,10 @@ class TestPolyclinicPerDoctorServices(unittest.TestCase):
         self.ctx.push()
         RequestCache.clear()
         seed_database(self.app)
+        from models import DoctorSchedule
+        for s in DoctorSchedule.query.all():
+            s.is_available = True
+        db.session.commit()
 
         self.biz = Business.query.first()
         self.biz_id = self.biz.id

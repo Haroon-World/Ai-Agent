@@ -186,7 +186,7 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         d = self._send(c_id, "I don't know what treatment I need.")
         conv = db.session.get(Conversation, c_id)
         self.assertEqual(conv.selected_service_id, self.svc_consult.id)
-        self.assertEqual(d.get("ui_action", {}).get("type"), "date_selection")
+        self.assertEqual(d.get("ui_action", {}).get("type"), "doctor_selection")
 
     # 9. Doctor selected through UI
     def test_09_doctor_selected_ui(self):
@@ -376,7 +376,7 @@ class TestMasterWorkflowStabilityAudit(unittest.TestCase):
         hist = self.client.get(f"/api/chat/history/{c_id}").get_json()
         self.assertTrue(hist["success"])
         last_asst = [m for m in hist["messages"] if m["role"] == "assistant"][-1]
-        self.assertEqual(last_asst.get("interactive_data", {}).get("type"), "date_selection")
+        self.assertEqual(last_asst.get("interactive_data", {}).get("type"), "doctor_selection")
 
     # 28. Booking completion
     def test_28_booking_completion(self):

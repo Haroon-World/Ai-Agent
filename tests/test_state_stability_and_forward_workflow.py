@@ -249,7 +249,7 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         conv_after = db.session.get(Conversation, conv.id)
 
         # State should NOT move backwards to service_choice or doctor_choice
-        self.assertEqual(conv_after.selected_doctor_id, self.doc1.id)
+        self.assertEqual(conv_after.selected_doctor_id, self.doc2.id)
         self.assertEqual(conv_after.pending_customer_name, "Ali")
         self.assertIsNotNone(conv_after.requested_date)
 

@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+
+{% block title %}Slot Occupancy & Scheduling - {{ business.name }}{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <div>
+        <h1 class="page-title">Doctor Slot Occupancy & Capacity</h1>
+        <p class="page-subtitle">Real-time visibility into per-doctor capacity, occupied slots, remaining slots, and manual appointment booking.</p>
+    </div>
+    <div class="header-actions">
+        <button class="btn btn-primary" onclick="openManualBookModal()">➕ Manual Appointment Booking</button>
+    </div>
+</div>
+
+<!-- Filter & Date Control Bar -->
+<div class="section-card" style="margin-bottom: 24px;">
+    <form method="GET" action="/admin/slots" style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;">
+        <div class="form-group" style="min-width: 200px;">
+            <label>Select Date</label>
+            <input type="date" name="date" class="form-control" value="{{ selected_date }}" required>
+        </div>
+        <div class="form-group" style="min-width: 240px;">
+            <label>Filter by Doctor</label>
+            <select name="doctor_id" class="form-control">
+                <option value="">All Practicing Doctors</option>
+                {% for doc in doctors %}
+                    <option value="{{ doc.id }}" {% if selected_doctor_id == doc.id %}selected{% endif %}>
+                        {{ doc.name }} ({{ doc.specialization }})
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="display: flex; gap: 8px;">
+            <button type="submit" class="btn btn-primary">🔍 View Slots</button>
+            <a href="/admin/slots" class="btn btn-secondary">📅 Today</a>
+        </div>
+    </form>
+</div>
+
+<!-- Doctor Slot Occupancy Cards -->
+<div style="display: flex; flex-direction: column; gap: 24px; margin-bottom: 30px;">
+    {% for item in occupancy_data %}
+    {% set doc = item.doctor %}
+    <div class="section-card">
+        <div class="section-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
+            <div>
+                <h2 style="display: flex; align-items: center; gap: 10px; margin: 0;">
+                    <span>👨‍⚕️ {{ doc.name }}</span>
+                    <span class="badge badge-secondary" style="font-size: 0.8rem; font-weight: normal;">{{ doc.specialization }}</span>
+                </h2>
+                <small class="text-muted">Working Days: {{ doc.working_days }} • Hours: {{ doc.start_time or '09:00' }} - {{ doc.end_time or '17:00' }}</small>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <span class="badge badge-secondary">Total: {{ item.total_slots }} Slots</span>
+                <span class="badge badge-danger">Booked: {{ item.occupied_slots }}</span>
+                <span class="badge badge-success">Available: {{ item.remaining_slots }}</span>
+                <button class="btn btn-sm btn-primary" onclick="openManualBookModal('{{ doc.id }}', '', '{{ selected_date }}')">➕ Book Slot</button>
+            </div>
+        </div>
+
+        <!-- Occupancy Progress Bar -->
+        {% if item.total_slots > 0 %}
+        <div style="margin: 12px 0 16px 0;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;">
+                <span class="text-muted">Occupancy Rate: <strong>{{ item.occupancy_percent }}%</strong></span>
+                <span class="text-muted"><strong>{{ item.occupied_slots }}</strong> of <strong>{{ item.total_slots }}</strong> slots filled</span>
+            </div>
+            <div style="width: 100%; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden;">
+                <div style="height: 100%; width: {{ item.occupancy_percent }}%; background: {% if item.occupancy_percent > 80 %}#ef4444{% elif item.occupancy_percent > 50 %}#f59e0b{% else %}#10b981{% endif %}; border-radius: 4px; transition: width 0.3s ease;"></div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Time Slots Grid -->
+        {% if item.is_closed %}
+        <div style="background: #f9fafb; padding: 16px; border-radius: 6px; text-align: center; color: #6b7280;">
+            🏥 Dr. {{ doc.name }} is closed or has no scheduled clinical hours on <strong>{{ selected_date }}</strong>.
+        </div>
+        {% elif item.slots_detail %}
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;">
+            {% for s in item.slots_detail %}
+                {% if s.status == 'OCCUPIED' %}
+                <div style="background: #fee2e2; border: 1px solid #fca5a5; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 4px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <strong style="color: #991b1b;">⏰ {{ s.time }}</strong>
+                        <span class="badge badge-danger" style="font-size: 0.7rem;">BOOKED</span>
+                    </div>
+                    <div style="font-size: 0.85rem; font-weight: 600; color: #1f2937; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        👤 {{ s.patient_name }}
+                    </div>
+                    <div style="font-size: 0.75rem; color: #4b5563; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        {{ s.service_name }}
+                    </div>
+                </div>
+                {% else %}
+                <div onclick="openManualBookModal('{{ doc.id }}', '', '{{ selected_date }}', '{{ s.time }}')" style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 4px; cursor: pointer; transition: all 0.15s ease;" onmouseover="this.style.borderColor='#10b981'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.05)'" onmouseout="this.style.borderColor='#a7f3d0'; this.style.boxShadow='none'">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <strong style="color: #065f46;">⏰ {{ s.time }}</strong>
+                        <span class="badge badge-success" style="font-size: 0.7rem;">OPEN</span>
+                    </div>
+                    <div style="font-size: 0.75rem; color: #059669;">
+                        ➕ Click to Book
+                    </div>
+                </div>
+                {% endif %}
+            {% endfor %}
+        </div>
+        {% else %}
+        <div style="background: #f9fafb; padding: 16px; border-radius: 6px; text-align: center; color: #6b7280;">
+            No slot data found for this date.
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Manual Booking Modal -->
+<div id="manualBookModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 999; align-items: center; justify-content: center;">
+    <div class="section-card" style="width: 100%; max-width: 520px; margin: 20px;">
+        <div class="section-header">
+            <h2>➕ Staff Manual Appointment Booking</h2>
+            <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('manualBookModal').style.display='none'">✕</button>
+        </div>
+        <form id="manualBookForm" onsubmit="submitManualBooking(event)">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                <div class="form-group">
+                    <label>Doctor</label>
+                    <select name="doctor_id" id="manualDoctorSelect" class="form-control" onchange="filterServicesByDoctor()" required>
+                        {% for doc in doctors %}
+                            <option value="{{ doc.id }}">{{ doc.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Service / Treatment</label>
+                    <select name="service_id" id="manualServiceSelect" class="form-control" required>
+                        {% for svc in services %}
+                            <option value="{{ svc.id }}" data-doc-id="{{ svc.doctor_id }}">
+                                {{ svc.name }} (PKR {{ "{:,.0f}".format(svc.price) }})
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                <div class="form-group">
+                    <label>Appointment Date</label>
+                    <input type="date" name="appointment_date" id="manualDateInput" class="form-control" value="{{ selected_date }}" required>
+                </div>
+                <div class="form-group">
+                    <label>Time (HH:MM)</label>
+                    <input type="text" name="appointment_time" id="manualTimeInput" class="form-control" placeholder="e.g. 10:00" required>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                <div class="form-group">
+                    <label>Patient Full Name</label>
+                    <input type="text" name="customer_name" id="manualPatientName" class="form-control" placeholder="e.g. Muhammad Ali" required>
+                </div>
+                <div class="form-group">
+                    <label>Patient Phone Number</label>
+                    <input type="text" name="customer_phone" id="manualPatientPhone" class="form-control" placeholder="e.g. 03001234567" required>
+                </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label>Staff Notes</label>
+                <input type="text" name="notes" id="manualNotes" class="form-control" placeholder="e.g. Walk-in patient, paid cash at reception">
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 8px;">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('manualBookModal').style.display='none'">Cancel</button>
+                <button type="submit" id="manualBookSubmitBtn" class="btn btn-primary">✅ Confirm & Book</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterServicesByDoctor() {
+    const docId = document.getElementById('manualDoctorSelect').value;
+    const svcSelect = document.getElementById('manualServiceSelect');
+    let firstMatch = null;
+
+    for (let opt of svcSelect.options) {
+        const optDocId = opt.getAttribute('data-doc-id');
+        if (!optDocId || optDocId === docId) {
+            opt.style.display = '';
+            if (!firstMatch) firstMatch = opt.value;
+        } else {
+            opt.style.display = 'none';
+        }
+    }
+    if (firstMatch) svcSelect.value = firstMatch;
+}
+
+function openManualBookModal(doctorId, serviceId, dateStr, timeStr) {
+    if (doctorId) {
+        document.getElementById('manualDoctorSelect').value = doctorId;
+    }
+    filterServicesByDoctor();
+    if (serviceId) {
+        document.getElementById('manualServiceSelect').value = serviceId;
+    }
+    if (dateStr) {
+        document.getElementById('manualDateInput').value = dateStr;
+    }
+    if (timeStr) {
+        document.getElementById('manualTimeInput').value = timeStr;
+    }
+    document.getElementById('manualBookModal').style.display = 'flex';
+}
+
+async function submitManualBooking(e) {
+    e.preventDefault();
+    const btn = document.getElementById('manualBookSubmitBtn');
+    btn.disabled = true;
+    btn.textContent = 'Booking...';
+
+    const payload = {
+        doctor_id: parseInt(document.getElementById('manualDoctorSelect').value),
+        service_id: parseInt(document.getElementById('manualServiceSelect').value),
+        appointment_date: document.getElementById('manualDateInput').value.trim(),
+        appointment_time: document.getElementById('manualTimeInput').value.trim(),
+        customer_name: document.getElementById('manualPatientName').value.trim(),
+        customer_phone: document.getElementById('manualPatientPhone').value.trim(),
+        notes: document.getElementById('manualNotes').value.trim()
+    };
+
+    try {
+        const res = await fetch('/api/admin/appointments/manual-book', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+            alert('🎉 Appointment booked successfully!');
+            window.location.reload();
+        } else {
+            alert('Booking Error: ' + (data.error || 'Failed to book appointment.'));
+            btn.disabled = false;
+            btn.textContent = '✅ Confirm & Book';
+        }
+    } catch (err) {
+        alert('Network Error: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = '✅ Confirm & Book';
+    }
+}
+
+// Initial filter on load
+document.addEventListener('DOMContentLoaded', filterServicesByDoctor);
+</script>
+{% endblock %}

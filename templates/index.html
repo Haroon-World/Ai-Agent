@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 
-{% block title %}AI Business Agent SaaS - Phase 1 Prototype{% endblock %}
+{% block title %}ClinicConnect AI - Multi-Specialty Polyclinic Platform{% endblock %}
 
 {% block content %}
 <div class="hero-section">
-    <div class="hero-badge">Phase 1 Prototype Live</div>
-    <h1 class="hero-title">Autonomous AI Business Agent for Healthcare & Clinics</h1>
+    <div class="hero-badge">ClinicConnect AI Polyclinic</div>
+    <h1 class="hero-title">ClinicConnect AI: Autonomous Polyclinic Agent</h1>
     <p class="hero-subtitle">
-        Not just a chatbot. A complete business workflow agent that understands patient intent, checks real doctor availability, prevents double booking, confirms appointments in the database, schedules automated reminders, and supports live human handoffs.
+        Not just a chatbot. A complete multi-specialty polyclinic workflow agent that understands patient intent, checks real doctor availability, prevents double booking, confirms appointments in the database, schedules automated reminders, and supports live human handoffs.
     </p>
 
     <div class="hero-actions">
@@ -60,7 +60,7 @@
 
 <div class="demo-clinic-card">
     <div class="demo-clinic-header">
-        <h2>🏥 Active Demo Business: {{ business.name if business else "SmileCare Dental Clinic" }}</h2>
+        <h2>🏥 Active Polyclinic: {{ business.name if business else "ClinicConnect Polyclinic" }}</h2>
         <span class="badge badge-success">Tenant ID: #{{ business.id if business else 1 }}</span>
     </div>
     <div class="demo-clinic-details">

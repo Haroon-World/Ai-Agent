@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Customer Web Chat - SmileCare Dental Clinic{% endblock %}
+{% block title %}Customer Web Chat - ClinicConnect AI{% endblock %}
 
 {% block content %}
 <div class="chat-wrapper">
@@ -8,9 +8,9 @@
         <!-- Chat Header -->
         <div class="chat-header">
             <div class="chat-header-info">
-                <div class="avatar">🦷</div>
+                <div class="avatar">🏥</div>
                 <div>
-                    <h2 class="chat-title">{{ business.name if business else "SmileCare Dental Clinic" }}</h2>
+                    <h2 class="chat-title">{{ business.name if business else "ClinicConnect Polyclinic" }}</h2>
                     <div class="chat-status" id="chatStatusText">
                         <span class="status-indicator online" id="statusDot"></span>
                         <span id="agentModeLabel">AI Receptionist • Active</span>

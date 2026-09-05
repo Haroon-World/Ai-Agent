@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}AI Business Agent{% endblock %}</title>
+    <title>{% block title %}ClinicConnect AI{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,8 +13,8 @@
     <nav class="navbar">
         <div class="nav-container">
             <a href="/" class="nav-brand">
-                <span class="brand-logo">🦷</span>
-                <span class="brand-name">SmileCare <strong>AI Agent</strong></span>
+                <span class="brand-logo">🏥</span>
+                <span class="brand-name">Arfa <strong>Polyclinic</strong></span>
             </a>
             <div class="nav-links">
                 <a href="/" class="nav-item">Overview</a>
@@ -25,6 +25,7 @@
                 {% if session.get('admin_logged_in') %}
                     <a href="/admin" class="nav-item">Admin Dashboard</a>
                     <a href="/admin/appointments" class="nav-item">Appointments</a>
+                    <a href="/admin/slots" class="nav-item">Slot Occupancy</a>
                     <a href="/admin/doctors" class="nav-item">Doctor Schedules</a>
                     <a href="/admin/services" class="nav-item">Services & Pricing</a>
                     <a href="/admin/conversations" class="nav-item">Conversations</a>
@@ -53,8 +54,8 @@
 
     <footer class="footer">
         <div class="footer-container">
-            <p>© 2026 SmileCare Dental Clinic • Powered by <strong>AI Business Agent Platform (Phase 1)</strong></p>
-            <p class="footer-sub">Multi-tenant Architecture • Centralized Agent Core • Controlled Tool Dispatcher</p>
+            <p>© 2026 Arfa Polyclinic • Powered by <strong>ClinicConnect AI Platform</strong></p>
+            <p class="footer-sub">Multi-Specialty Polyclinic Architecture • Dynamic Specialization & Services Discovery</p>
         </div>
     </footer>
 

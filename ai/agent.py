@@ -147,10 +147,18 @@ def _build_state_dict(conv: Conversation) -> Dict[str, Any]:
     # Validate that selected_service_id actually belongs to selected_doctor_id
     if conv.selected_doctor_id and conv.selected_service_id:
         if not any(s["id"] == conv.selected_service_id for s in service_roster):
-            conv.selected_service_id = None
-            conv.requested_time = None
-            if conv.awaiting_input not in ["doctor_choice", "doctor"]:
-                conv.awaiting_input = "service_choice"
+            all_clinic_svcs = BookingService.get_services(conv.business_id)
+            is_consult = any("consultation" in s.get("name", "").lower() or "checkup" in s.get("name", "").lower() for s in all_clinic_svcs if s.get("id") == conv.selected_service_id)
+            if is_consult and conv.intent != "RESCHEDULE_APPOINTMENT":
+                doc_consult = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else None)
+                if doc_consult:
+                    conv.selected_service_id = doc_consult["id"]
+                # If doctor has no specific services registered, keep the consultation service without wiping
+            else:
+                conv.selected_service_id = None
+                conv.requested_time = None
+                if conv.awaiting_input not in ["doctor_choice", "doctor"]:
+                    conv.awaiting_input = "service_choice"
             db.session.flush()
 
     doc_name = None
@@ -386,6 +394,25 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         db.session.flush()
         return
 
+    # If user previously cancelled an appointment and is now sending a new request, reset state cleanly
+    cancel_keywords = [
+        "cancel booking", "cancel appointment", "cancel my appointment", "cancel my booking",
+        "appointment cancel", "booking cancel", "cancel kr do", "cancel kar do", "cancel kar dein",
+        "cancel kardein", "cancel krdein", "cancel kardo", "cancel please", "please cancel",
+        "کینسل", "منسوخ"
+    ]
+    is_cancel_msg = any(k in text_lower for k in cancel_keywords) or (
+        "cancel" in text_lower and any(w in text_lower for w in ["appointment", "booking", "slot", "meri", "my"])
+    )
+    if conv.intent == "CANCEL_APPOINTMENT" and not is_cancel_msg:
+        conv.intent = "BOOK_APPOINTMENT"
+        conv.workflow_state = "START"
+        conv.selected_doctor_id = None
+        conv.selected_service_id = None
+        conv.requested_date = None
+        conv.requested_time = None
+        conv.awaiting_input = None
+
     # Shared question-detection for the roster guards below.
     # Condition (d): allow a roster match to overwrite state when the message
     # is NOT phrased as a question.  _is_question_query() catches "?"-terminated
@@ -406,12 +433,18 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     matched_doc = _fuzzy_match_roster(user_content, doctor_roster)
     if matched_doc:
         if not conv.selected_doctor_id or is_explicit_change or conv.awaiting_input == "doctor_choice" or not _msg_is_question:
-            if (conv.selected_doctor_id and conv.selected_doctor_id != matched_doc["id"]) or conv.intent == "RESCHEDULE_APPOINTMENT":
+            if conv.selected_doctor_id != matched_doc["id"] or conv.intent == "RESCHEDULE_APPOINTMENT":
                 conv.requested_time = None
-                # Doctor changed mid-conversation or in reschedule: revalidate selected_service_id against new doctor's roster
+                # Doctor selected or changed mid-conversation or in reschedule: revalidate selected_service_id against new doctor's roster
                 if conv.selected_service_id:
                     new_doc_services = BookingService.get_services(conv.business_id, doctor_id=matched_doc["id"])
-                    if not any(s["id"] == conv.selected_service_id for s in new_doc_services):
+                    all_clinic_svcs = BookingService.get_services(conv.business_id)
+                    is_consult = any("consultation" in s.get("name", "").lower() or "checkup" in s.get("name", "").lower() for s in all_clinic_svcs if s.get("id") == conv.selected_service_id)
+                    if is_consult and conv.intent != "RESCHEDULE_APPOINTMENT":
+                        doc_consult = next((s for s in new_doc_services if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), new_doc_services[0] if new_doc_services else None)
+                        if doc_consult:
+                            conv.selected_service_id = doc_consult["id"]
+                    elif not any(s["id"] == conv.selected_service_id for s in new_doc_services):
                         conv.selected_service_id = None
                         conv.awaiting_input = "service_choice"
             conv.selected_doctor_id = matched_doc["id"]
@@ -435,6 +468,15 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     else:
         service_roster = BookingService.get_services(conv.business_id)
 
+    has_specific_service_mention = any(k in text_lower for k in [
+        "dental checkup", "dant ki check up", "دانت کی چیک اپ", "scaling", "cleaning", "whitening", "extraction", "root canal", "braces"
+    ])
+    is_general_consultation = any(w in text_lower for w in [
+        "dont know", "don't know", "not sure", "unsure", "need a consultation", "i need a consultation",
+        "general consultation", "pata nahi", "nahi pata", "maloom nahi", "check karwana", "check krwana",
+        "نہیں پتا", "نہیں معلوم"
+    ]) and not has_specific_service_mention
+
     matched_svc = _fuzzy_match_roster(user_content, service_roster)
     if not matched_svc and active_doc_id and not matched_doc:
         all_services = BookingService.get_services(conv.business_id)
@@ -445,11 +487,12 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                 conv.requested_time = None
             conv.selected_service_id = matched_svc["id"]
             if matched_svc.get("doctor_id") and not matched_doc:
-                if conv.selected_doctor_id and conv.selected_doctor_id != matched_svc["doctor_id"]:
-                    conv.requested_time = None
-                conv.selected_doctor_id = matched_svc["doctor_id"]
+                if not is_general_consultation:
+                    if conv.selected_doctor_id and conv.selected_doctor_id != matched_svc["doctor_id"]:
+                        conv.requested_time = None
+                    conv.selected_doctor_id = matched_svc["doctor_id"]
             if conv.awaiting_input == "service_choice":
-                conv.awaiting_input = "date_choice" if not conv.requested_date else None
+                conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
     elif not conv.selected_service_id:
         consultation_keywords = [
             "dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain",
@@ -461,10 +504,10 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
             consult_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else None)
             if consult_svc:
                 conv.selected_service_id = consult_svc["id"]
-                if not conv.selected_doctor_id and consult_svc.get("doctor_id"):
-                    conv.selected_doctor_id = consult_svc["doctor_id"]
-    if not conv.selected_doctor_id and not conv.selected_service_id and conv.intent == "BOOK_APPOINTMENT":
-        if not conv.awaiting_input or conv.awaiting_input == "service_choice":
+                # In a polyclinic, consultation is doctor-agnostic until customer chooses a doctor.
+                # Do NOT auto-assign conv.selected_doctor_id!
+    if not conv.selected_doctor_id and (conv.selected_service_id or conv.intent in ["BOOK_APPOINTMENT", "RESCHEDULE_APPOINTMENT"]):
+        if not conv.awaiting_input or conv.awaiting_input in ["service_choice", "date_choice", "date"]:
             conv.awaiting_input = "doctor_choice"
 
     # 3. Resolve Date using robust date resolver (relative & explicit formats)
@@ -557,9 +600,10 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         "cancel kardein", "cancel krdein", "cancel kardo", "cancel please", "please cancel",
         "کینسل", "منسوخ"
     ]
-    if any(k in text_lower for k in cancel_keywords) or (
+    is_cancel_msg = any(k in text_lower for k in cancel_keywords) or (
         "cancel" in text_lower and any(w in text_lower for w in ["appointment", "booking", "slot", "meri", "my"])
-    ):
+    )
+    if is_cancel_msg:
         conv.workflow_state = "START"
         conv.intent = "CANCEL_APPOINTMENT"
         conv.awaiting_input = None
@@ -604,7 +648,7 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                 conv.selected_service_id = doc_services[0]["id"]
 
     # Update intent/state when customer wants appointment or gives parameters
-    if conv.intent not in ["CANCEL_APPOINTMENT", "INQUIRY"] and (
+    if conv.intent not in ["INQUIRY"] and not is_cancel_msg and (
         conv.selected_service_id or
         conv.selected_doctor_id or
         conv.requested_date or
@@ -613,9 +657,9 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         conv.pending_customer_phone or
         any(w in text_lower for w in ["appointment", "book", "reserve", "consultation", "checkup", "visit", "dentist", "doctor", "اپائنٹمنٹ", "چیک اپ", "بک"])
     ):
-        if conv.intent in [None, "UNKNOWN"]:
+        if conv.intent in [None, "UNKNOWN", "CANCEL_APPOINTMENT"]:
             conv.intent = "BOOK_APPOINTMENT"
-        if conv.workflow_state in [None, "START"]:
+        if conv.workflow_state in [None, "START", "COMPLETED"]:
             conv.workflow_state = "COLLECTING_INFO"
         
         # Calculate the next missing field in logical sequence:
@@ -701,11 +745,11 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
             "interactive_type": "button",
             "title": "Review & Confirm Your Appointment",
             "details": {
-                "service_name": svc.get("name", "Dental Consultation") if svc else "Dental Consultation",
+                "service_name": svc.get("name", "Consultation") if svc else "Consultation",
                 "service_price": f"PKR {svc_price:,.0f}",
                 "service_duration": f"{svc.get('duration', 30)} mins" if svc else "30 mins",
-                "doctor_name": doc.get("name", "Our Practicing Dentist") if doc else "Our Practicing Dentist",
-                "doctor_specialization": doc.get("specialization", "General Dentistry") if doc else "General Dentistry",
+                "doctor_name": doc.get("name", "Our Practicing Specialist") if doc else "Our Practicing Specialist",
+                "doctor_specialization": doc.get("specialization", "Specialist") if doc else "Specialist",
                 "date": conv.requested_date,
                 "formatted_date": formatted_date,
                 "time": conv.requested_time,
@@ -800,8 +844,8 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
                         "title": d["name"],
                         "label": d["name"],
                         "value": d["name"],
-                        "specialization": d.get("specialization", "General Dentistry"),
-                        "description": d.get("specialization") or "General Dentistry",
+                        "specialization": d.get("specialization", "Specialist"),
+                        "description": d.get("specialization") or "Specialist",
                         "working_days": _format_wk(d)
                     }
                     for d in doctor_roster
@@ -898,8 +942,8 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
             "allow_custom_date": True
         }
 
-    # 5. Service Selection (Step 1 of standard flow when neither service nor doctor is chosen, or awaiting service_choice)
-    if not conv.selected_service_id and (conv.awaiting_input == "service_choice" or not conv.selected_doctor_id):
+    # 5. Service Selection (Only during booking flow or when awaiting service_choice; never on casual greetings)
+    if not conv.selected_service_id and (conv.awaiting_input == "service_choice" or (conv.intent in ["BOOK_APPOINTMENT", "RESCHEDULE_APPOINTMENT"] and not conv.selected_doctor_id)):
         if service_roster:
             business = _get_business_info(conv.business_id)
             consultation_fee = business.get("consultation_fee", 2000.0)
@@ -926,12 +970,12 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
                 "duration": 30,
                 "price": consultation_fee,
                 "price_formatted": f"PKR {consultation_fee:,.0f}",
-                "description": "General oral checkup & examination"
+                "description": "General consultation & medical checkup"
             })
             return {
                 "type": "service_selection",
                 "interactive_type": "list",
-                "title": "Select a Dental Service",
+                "title": "Select a Service",
                 "options": options
             }
 
@@ -1109,9 +1153,10 @@ class Agent:
             )
             response_gen_ms = (time.perf_counter() - t_gen) * 1000.0
         else:
+            clinic_display_name = _get_business_info(self.business_id).get("name", "ClinicConnect Polyclinic")
             final_content = response.get(
                 "content",
-                "Thank you for contacting SmileCare Dental Clinic. How else may I assist you?"
+                f"Thank you for contacting {clinic_display_name}. How else may I assist you?"
             )
             if any(phrase in final_content.lower() for phrase in ["is not available", "not available", "no available slots", "unavailable"]):
                 if conv.requested_time and not any(w in final_content.lower() for w in ["confirmed", "id #"]):

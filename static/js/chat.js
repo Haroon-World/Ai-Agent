@@ -150,7 +150,7 @@ function appendMessageBubble(role, content, timestamp) {
     const meta = document.createElement('div');
     meta.className = 'message-meta';
     const timeStr = timestamp ? new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    meta.textContent = `${role === 'user' ? 'You' : 'SmileCare AI'} • ${timeStr}`;
+    meta.textContent = `${role === 'user' ? 'You' : 'ClinicConnect AI'} • ${timeStr}`;
 
     row.appendChild(bubble);
     row.appendChild(meta);
@@ -193,7 +193,7 @@ async function handleSendMessage(e) {
     const thinkingRow = document.createElement('div');
     thinkingRow.className = 'message-row assistant';
     thinkingRow.id = 'thinkingBubble';
-    thinkingRow.innerHTML = '<div class="message-bubble"><em>SmileCare AI is checking clinic records... ⏳</em></div>';
+    thinkingRow.innerHTML = '<div class="message-bubble"><em>ClinicConnect AI is checking clinic records... ⏳</em></div>';
     chatMessages.appendChild(thinkingRow);
     scrollToBottom(true);
 

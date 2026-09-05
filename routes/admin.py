@@ -406,9 +406,33 @@ def delete_doctor_leave(leave_id):
 def services_view():
     business_id = Config.DEFAULT_BUSINESS_ID
     business = db.session.get(Business, business_id)
-    services = Service.query.filter_by(business_id=business_id).order_by(Service.id.asc()).all()
     doctors = Doctor.query.filter_by(business_id=business_id).all()
-    return render_template("services.html", business=business, services=services, doctors=doctors)
+    services = Service.query.filter_by(business_id=business_id).order_by(Service.id.asc()).all()
+    consultation_fee = getattr(business, "consultation_fee", 2000.0) or 2000.0
+
+    doctors_data = []
+    for doc in doctors:
+        doc_svcs = [s for s in services if s.doctor_id == doc.id]
+        has_consultation = any(
+            ("consultation" in s.name.lower() or "checkup" in s.name.lower() or "check up" in s.name.lower())
+            for s in doc_svcs if s.is_active
+        )
+        doctors_data.append({
+            "doctor": doc,
+            "services": doc_svcs,
+            "active_count": len([s for s in doc_svcs if s.is_active]),
+            "has_consultation": has_consultation,
+            "default_consultation_fee": consultation_fee
+        })
+
+    return render_template(
+        "services.html",
+        business=business,
+        services=services,
+        doctors=doctors,
+        doctors_data=doctors_data,
+        default_consultation_fee=consultation_fee
+    )
 
 @admin_bp.route("/admin/services/add", methods=["POST"])
 @login_required
@@ -445,6 +469,8 @@ def add_service():
     )
     db.session.add(service)
     db.session.commit()
+    from services.booking_service import RequestCache
+    RequestCache.clear()
     flash(f"Service '{name}' added successfully at PKR {price:,.0f}.", "success")
     return redirect(url_for("admin_bp.services_view"))
 
@@ -480,6 +506,8 @@ def edit_service(service_id):
     service.is_active = is_active
 
     db.session.commit()
+    from services.booking_service import RequestCache
+    RequestCache.clear()
     flash(f"Service '{name}' pricing and settings updated successfully.", "success")
     return redirect(url_for("admin_bp.services_view"))
 
@@ -488,11 +516,60 @@ def edit_service(service_id):
 def toggle_service(service_id):
     business_id = Config.DEFAULT_BUSINESS_ID
     service = Service.query.filter_by(id=service_id, business_id=business_id).first()
-    if service:
-        service.is_active = not service.is_active
+    if not service:
+        if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"success": False, "error": "Service not found."}), 404
+        flash("Service not found.", "danger")
+        return redirect(url_for("admin_bp.services_view"))
+
+    service.is_active = not service.is_active
+    db.session.commit()
+    from services.booking_service import RequestCache
+    RequestCache.clear()
+    status_text = "activated" if service.is_active else "deactivated"
+
+    if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({
+            "success": True,
+            "service_id": service.id,
+            "is_active": service.is_active,
+            "status_text": "ACTIVE" if service.is_active else "INACTIVE",
+            "message": f"Service '{service.name}' {status_text}."
+        })
+
+    flash(f"Service '{service.name}' {status_text}.", "info")
+    return redirect(url_for("admin_bp.services_view"))
+
+@admin_bp.route("/admin/services/delete/<int:service_id>", methods=["POST"])
+@login_required
+def delete_service(service_id):
+    business_id = Config.DEFAULT_BUSINESS_ID
+    service = Service.query.filter_by(id=service_id, business_id=business_id).first()
+    if not service:
+        if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"success": False, "error": "Service not found."}), 404
+        flash("Service not found.", "danger")
+        return redirect(url_for("admin_bp.services_view"))
+
+    name = service.name
+    # Check for linked appointments to prevent foreign key errors
+    has_appts = Appointment.query.filter_by(service_id=service.id).first()
+    if has_appts:
+        service.is_active = False
         db.session.commit()
-        status_text = "activated" if service.is_active else "deactivated"
-        flash(f"Service '{service.name}' {status_text}.", "info")
+        msg = f"Service '{name}' has existing appointment records, so it was deactivated instead of permanently deleted."
+    else:
+        db.session.delete(service)
+        db.session.commit()
+        msg = f"Service '{name}' deleted successfully."
+
+    from services.booking_service import RequestCache
+    RequestCache.clear()
+
+    if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+        return jsonify({"success": True, "service_id": service_id, "message": msg})
+
+    flash(msg, "info")
     return redirect(url_for("admin_bp.services_view"))
 
 @admin_bp.route("/admin/settings/edit", methods=["POST"])
@@ -517,6 +594,121 @@ def edit_settings():
         pass
 
     db.session.commit()
+    from services.booking_service import RequestCache
+    RequestCache.clear()
     flash("Clinic business information and consultation fee updated successfully.", "success")
     return redirect(url_for("admin_bp.services_view"))
+
+# --- Slot Occupancy Dashboard & Manual Booking Routes ---
+@admin_bp.route("/admin/slots")
+@login_required
+def slots_view():
+    business_id = Config.DEFAULT_BUSINESS_ID
+    business = db.session.get(Business, business_id)
+    today_str = date.today().strftime("%Y-%m-%d")
+    selected_date = request.args.get("date", today_str).strip()
+    selected_doctor_id = request.args.get("doctor_id", "").strip()
+
+    all_active_doctors = Doctor.query.filter_by(business_id=business_id, is_active=True).all()
+    all_active_services = Service.query.filter_by(business_id=business_id, is_active=True).all()
+
+    doctors_to_show = all_active_doctors
+    if selected_doctor_id and selected_doctor_id.isdigit():
+        filtered = [d for d in all_active_doctors if d.id == int(selected_doctor_id)]
+        if filtered:
+            doctors_to_show = filtered
+
+    occupancy_data = []
+    for doc in doctors_to_show:
+        avail_res = BookingService.check_availability(
+            business_id=business_id,
+            doctor_id=doc.id,
+            date_str=selected_date
+        )
+        avail_slots = set(avail_res.get("available_slots", []))
+        
+        # Booked appointments for this doctor on this date
+        booked_appts = Appointment.query.filter_by(
+            business_id=business_id,
+            doctor_id=doc.id,
+            appointment_date=selected_date,
+            status="CONFIRMED"
+        ).order_by(Appointment.appointment_time.asc()).all()
+
+        booked_dict = {a.appointment_time: a for a in booked_appts}
+        all_slots = sorted(list(avail_slots.union(set(booked_dict.keys()))))
+        total_slots = len(all_slots)
+        occupied_count = len(booked_dict)
+        remaining_count = len(avail_slots)
+        occupancy_percent = int((occupied_count / total_slots * 100)) if total_slots > 0 else 0
+
+        slots_detail = []
+        for s in all_slots:
+            if s in booked_dict:
+                appt = booked_dict[s]
+                slots_detail.append({
+                    "time": s,
+                    "status": "OCCUPIED",
+                    "patient_name": appt.customer.name if appt.customer else "Patient",
+                    "patient_phone": appt.customer.phone if appt.customer else "N/A",
+                    "service_name": appt.service.name if appt.service else "Consultation",
+                    "appointment_id": appt.id
+                })
+            else:
+                slots_detail.append({
+                    "time": s,
+                    "status": "AVAILABLE"
+                })
+
+        occupancy_data.append({
+            "doctor": doc,
+            "total_slots": total_slots,
+            "occupied_slots": occupied_count,
+            "remaining_slots": remaining_count,
+            "occupancy_percent": occupancy_percent,
+            "is_closed": len(all_slots) == 0,
+            "slots_detail": slots_detail
+        })
+
+    return render_template(
+        "slots.html",
+        business=business,
+        selected_date=selected_date,
+        selected_doctor_id=int(selected_doctor_id) if selected_doctor_id and selected_doctor_id.isdigit() else None,
+        doctors=all_active_doctors,
+        services=all_active_services,
+        occupancy_data=occupancy_data
+    )
+
+@admin_bp.route("/api/admin/appointments/manual-book", methods=["POST"])
+@login_required
+def admin_manual_book():
+    data = request.get_json() or {}
+    business_id = Config.DEFAULT_BUSINESS_ID
+    customer_name = data.get("customer_name", "").strip()
+    customer_phone = data.get("customer_phone", "").strip()
+    doctor_id = data.get("doctor_id")
+    service_id = data.get("service_id")
+    appointment_date = data.get("appointment_date", "").strip()
+    appointment_time = data.get("appointment_time", "").strip()
+    notes = data.get("notes", "Booked manually by Staff")
+
+    try:
+        doctor_id_int = int(doctor_id)
+        service_id_int = int(service_id)
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "Valid Doctor and Service must be selected."}), 400
+
+    result = BookingService.book_appointment(
+        business_id=business_id,
+        customer_name=customer_name,
+        customer_phone=customer_phone,
+        doctor_id=doctor_id_int,
+        service_id=service_id_int,
+        appointment_date=appointment_date,
+        appointment_time=appointment_time,
+        notes=notes
+    )
+    status_code = 200 if result.get("success") else 400
+    return jsonify(result), status_code
 
