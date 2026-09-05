@@ -418,6 +418,76 @@ class TestPolyclinicFlowAndAdminFixes(unittest.TestCase):
             f"Response should present services/pricing info, got: {res['content']}"
         )
 
+    def test_doctor_first_prompts_services_or_normal_checkup_before_date(self):
+        """14. When user specifies doctor first (e.g. 'My name is Ali Hassan and I will fix my appointment with Dr. Ahmed.'),
+        the assistant must prompt for service or normal checkup rather than jumping straight to date.
+        And saying 'normal checkup' on turn 2 correctly selects the consultation service."""
+        conv = Conversation(business_id=1, status="AI")
+        db.session.add(conv)
+        db.session.commit()
+
+        # Turn 1: User gives name and doctor, no service, no date
+        res1 = self.agent.process_message(conv.id, "My name is Ali Hassan and I will fix my appointment with Dr. Ahmed.")
+        conv_state1 = db.session.get(Conversation, conv.id)
+
+        self.assertEqual(conv_state1.pending_customer_name, "Ali Hassan")
+        self.assertEqual(conv_state1.selected_doctor_id, self.dr_ahmed.id)
+        self.assertIsNone(conv_state1.selected_service_id, "Service should not be auto-selected yet")
+        self.assertIsNone(conv_state1.requested_date, "Date should not be set yet")
+        self.assertEqual(conv_state1.awaiting_input, "service_choice", "State must be awaiting service_choice, not date_choice")
+
+        # Response must ask for service/checkup, NOT for date
+        content1 = res1.get("content", "").lower()
+        self.assertTrue("service" in content1 or "checkup" in content1 or "check up" in content1 or "consultation" in content1)
+        self.assertNotIn("which date would you prefer", content1)
+        self.assertNotIn("could you please let me know your preferred appointment date", content1)
+
+        # UI action must be service_selection
+        ui1 = res1.get("ui_action")
+        self.assertIsNotNone(ui1)
+        self.assertEqual(ui1["type"], "service_selection")
+        self.assertIn("Dr. Ahmed Khan", ui1["title"])
+
+        # Turn 2: User says 'normal checkup'
+        res2 = self.agent.process_message(conv.id, "normal checkup")
+        conv_state2 = db.session.get(Conversation, conv.id)
+
+        self.assertIsNotNone(conv_state2.selected_service_id, "'normal checkup' must select a valid service/consultation")
+        self.assertEqual(conv_state2.awaiting_input, "date_choice", "After service is selected, awaiting_input moves to date_choice")
+        ui2 = res2.get("ui_action")
+        self.assertIsNotNone(ui2)
+        self.assertEqual(ui2["type"], "date_selection")
+
+        # Turn 3: User provides valid date
+        target_date = date.today() + timedelta(days=3)
+        while target_date.strftime("%A") == "Sunday":
+            target_date += timedelta(days=1)
+        date_str = target_date.strftime("%Y-%m-%d")
+
+        res3 = self.agent.process_message(conv.id, date_str)
+        conv_state3 = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_state3.requested_date, date_str)
+        self.assertEqual(conv_state3.awaiting_input, "time_choice")
+
+        # Turn 4: User selects time
+        res4 = self.agent.process_message(conv.id, "14:00")
+        conv_state4 = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_state4.requested_time, "14:00")
+        self.assertEqual(conv_state4.awaiting_input, "phone", "Name was already known, so awaiting_input must be phone")
+
+        # Turn 5: User gives phone
+        res5 = self.agent.process_message(conv.id, "03001234567")
+        appt = Appointment.query.filter_by(
+            business_id=1,
+            doctor_id=self.dr_ahmed.id,
+            appointment_date=date_str,
+            appointment_time="14:00"
+        ).first()
+        self.assertIsNotNone(appt, "Appointment should be confirmed and saved in DB")
+        self.assertEqual(appt.customer.name, "Ali Hassan")
+        self.assertEqual(appt.customer.phone, "03001234567")
+        self.assertEqual(appt.service_id, conv_state2.selected_service_id)
+
 if __name__ == "__main__":
     unittest.main()
 

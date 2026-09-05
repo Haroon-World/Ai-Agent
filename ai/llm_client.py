@@ -180,17 +180,20 @@ def _prompt_service_choice(doc_id, doc_name, service_roster, lang="english", eff
     else:
         roster_names = ", ".join(f"{s['name']} (PKR {s.get('price', 0):,.0f})" for s in service_roster) or "Consultation"
     if lang == "urdu":
+        greeting = f"جی {effective_name} صاحب! " if effective_name else ""
         return {
-            "content": f"براہ کرم {doc_display} کی خدمات میں سے کسی ایک کا انتخاب کریں: {roster_names}",
+            "content": f"{greeting}براہ کرم {doc_display} کے لیے مطلوبہ سروس یا جنرل چیک اپ منتخب کریں: {roster_names}",
             "tool_calls": []
         }
     elif lang == "roman_urdu":
+        greeting = f"Ji {effective_name}! " if effective_name else ""
         return {
-            "content": f"Barah-e-karam {doc_display} ki services mein se select karein: {roster_names}",
+            "content": f"{greeting}Barah-e-karam {doc_display} ke liye service ya checkup select karein: {roster_names}",
             "tool_calls": []
         }
+    greeting = f"Hello {effective_name}! " if effective_name else ""
     return {
-        "content": f"Which of {doc_display}'s available services would you like to select? {roster_names}",
+        "content": f"{greeting}Which service or checkup would you like to book with {doc_display}? Available options: {roster_names}",
         "tool_calls": []
     }
 
@@ -1750,6 +1753,10 @@ class MockAdapter(BaseLLMAdapter):
                             "tool_calls": []
                         }
                     elif doc_name:
+                        active_svc_id = conv_state.get("active_appointment_service_id")
+                        new_doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id]
+                        if (active_svc_id and not any(s["id"] == active_svc_id for s in new_doc_services) and not svc_id) or (conv_state.get("intent") == "RESCHEDULE_APPOINTMENT" and not svc_id):
+                            return _prompt_service_choice(doc_id, doc_name, service_roster, lang, effective_name)
                         if lang == "urdu":
                             greeting = f"بالکل، {effective_name} صاحب! " if effective_name else "بالکل! "
                             return {
@@ -1762,6 +1769,8 @@ class MockAdapter(BaseLLMAdapter):
                                 "content": f"{greeting}Main {doc_name} ke sath aap ki appointment book kar deta hoon. Barah-e-karam apni pasand ki date batayein...",
                                 "tool_calls": []
                             }
+                        if not svc_id:
+                            return _prompt_service_choice(doc_id, doc_name, service_roster, lang, effective_name)
                         greeting = f"Certainly, {effective_name}! " if effective_name else ""
                         return {
                             "content": f"{greeting}{doc_name} selected. Which date would you prefer for your appointment?",
@@ -2485,6 +2494,10 @@ class MockAdapter(BaseLLMAdapter):
         if matched_doc_any and not is_question:
             doc_id = matched_doc_any["id"]
             doc_name = matched_doc_any["name"]
+            active_svc_id = conv_state.get("active_appointment_service_id")
+            new_doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id]
+            if (active_svc_id and not any(s["id"] == active_svc_id for s in new_doc_services) and not svc_id) or (conv_state.get("intent") == "RESCHEDULE_APPOINTMENT" and not svc_id):
+                return _prompt_service_choice(doc_id, doc_name, service_roster, lang, cand_name or effective_name)
             if target_date_str:
                 return {
                     "content": f"Checking open slots for {doc_name} on {target_date_str}...",
@@ -2505,6 +2518,10 @@ class MockAdapter(BaseLLMAdapter):
                     "tool_calls": []
                 }
 
+            # In English: if no service specified, prompt service choice!
+            if not svc_id:
+                return _prompt_service_choice(doc_id, doc_name, service_roster, lang, cand_name or effective_name)
+
             greeting = f"Certainly, {cand_name}! " if cand_name else ""
             return {
                 "content": f"{greeting}{doc_name} selected. Which date would you prefer for your appointment?",
@@ -2514,7 +2531,10 @@ class MockAdapter(BaseLLMAdapter):
         # Service Selection (e.g. "For Braces i want to applied", "teeth whitening", "i need braces", "root canal", "consultation", "tooth hurts")
         is_general_consultation = any(w in user_text for w in [
             "dont know", "don't know", "not sure", "unsure", "need a consultation", "i need a consultation",
-            "general consultation", "pata nahi", "nahi pata", "maloom nahi", "check karwana", "check krwana"
+            "general consultation", "normal checkup", "normal check up", "general checkup", "general check up",
+            "routine checkup", "regular checkup", "doctor consultation", "medical checkup", "just checkup",
+            "aam checkup", "check up", "dikhana", "معائنہ", "چیک اپ",
+            "pata nahi", "nahi pata", "maloom nahi", "check karwana", "check krwana"
         ])
         matched_svc_any = None if is_general_consultation else _fuzzy_match_roster(user_text, service_roster)
         if matched_svc_any and not is_question:
@@ -2579,7 +2599,13 @@ class MockAdapter(BaseLLMAdapter):
                         "content": f"You selected {svc_name}. Which doctor would you prefer?",
                         "tool_calls": []
                     }
-        elif any(w in user_text for w in ["dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain", "hurting", "problem", "consultation", "checkup"]):
+        elif any(w in user_text for w in [
+            "dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain",
+            "hurting", "problem", "consultation", "checkup", "normal checkup", "normal check up",
+            "general checkup", "general check up", "routine checkup", "regular checkup",
+            "doctor consultation", "medical checkup", "just checkup", "aam checkup", "check up",
+            "dikhana", "معائنہ", "چیک اپ"
+        ]):
             consultation_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else {"id": 1, "name": "General Consultation", "price": 2000})
             fee = consultation_svc.get("price", 2000.0)
             if doc_name:

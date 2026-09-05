@@ -534,6 +534,15 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
             if conv.awaiting_input == "doctor_choice":
                 if conv.intent == "RESCHEDULE_APPOINTMENT" and not conv.selected_service_id:
                     conv.awaiting_input = "service_choice"
+                elif not conv.selected_service_id and not conv.requested_date:
+                    is_urdu_flow = any('\u0600' <= ch <= '\u06FF' for ch in user_content) or (
+                        any(w in text_lower for w in ["kr do", "kar do", "kar dein", "kr dein", "k sath", "ke sath"]) and
+                        any(w in text_lower for w in ["appointment fix", "appointment book", "book kr", "fix kr"])
+                    )
+                    if is_urdu_flow:
+                        conv.awaiting_input = "date_choice"
+                    else:
+                        conv.awaiting_input = "service_choice"
                 else:
                     conv.awaiting_input = "date_choice" if not conv.requested_date else None
     else:
@@ -556,7 +565,9 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     ])
     is_general_consultation = any(w in text_lower for w in [
         "dont know", "don't know", "not sure", "unsure", "need a consultation", "i need a consultation",
-        "general consultation", "pata nahi", "nahi pata", "maloom nahi", "check karwana", "check krwana",
+        "general consultation", "normal checkup", "normal check up", "general checkup", "routine checkup",
+        "regular checkup", "doctor consultation", "medical checkup", "just checkup",
+        "pata nahi", "nahi pata", "maloom nahi", "check karwana", "check krwana",
         "نہیں پتا", "نہیں معلوم"
     ]) and not has_specific_service_mention
 
@@ -580,6 +591,9 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         consultation_keywords = [
             "dont know", "don't know", "not sure", "unsure", "tooth hurts", "toothache", "pain",
             "hurting", "problem", "consultation", "checkup", "consult", "check up", "general appointment",
+            "normal checkup", "normal check up", "general checkup", "general check up", "routine checkup",
+            "regular checkup", "doctor consultation", "medical checkup", "just checkup", "aam checkup",
+            "check up karwana", "doctor ko dikhana", "dikhana hai", "dikhaana hai",
             "dant", "dard", "masla", "pata nahi", "nahi pata", "maloom nahi", "check karwana", "check krwana",
             "چیک اپ", "چیکپ", "مشورہ", "معائنہ", "دانت", "درد", "پروبلم", "مسئلہ", "نہیں پتا", "نہیں معلوم"
         ]
@@ -587,6 +601,8 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
             consult_svc = next((s for s in service_roster if "consultation" in s["name"].lower() or "checkup" in s["name"].lower()), service_roster[0] if service_roster else None)
             if consult_svc:
                 conv.selected_service_id = consult_svc["id"]
+                if conv.awaiting_input == "service_choice":
+                    conv.awaiting_input = "doctor_choice" if not conv.selected_doctor_id else ("date_choice" if not conv.requested_date else None)
                 # In a polyclinic, consultation is doctor-agnostic until customer chooses a doctor.
                 # Do NOT auto-assign conv.selected_doctor_id!
     if not conv.selected_doctor_id and (conv.selected_service_id or conv.intent in ["BOOK_APPOINTMENT", "RESCHEDULE_APPOINTMENT"]):
@@ -761,6 +777,15 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
             if conv.selected_doctor_id:
                 if conv.intent == "RESCHEDULE_APPOINTMENT" and not conv.selected_service_id:
                     conv.awaiting_input = "service_choice"
+                elif not conv.selected_service_id and not conv.requested_date:
+                    is_urdu_flow = any('\u0600' <= ch <= '\u06FF' for ch in user_content) or (
+                        any(w in text_lower for w in ["kr do", "kar do", "kar dein", "kr dein", "k sath", "ke sath"]) and
+                        any(w in text_lower for w in ["appointment fix", "appointment book", "book kr", "fix kr"])
+                    )
+                    if is_urdu_flow:
+                        conv.awaiting_input = "date_choice"
+                    else:
+                        conv.awaiting_input = "service_choice"
                 elif not conv.requested_date:
                     conv.awaiting_input = "date_choice"
                 elif not conv.requested_time:
