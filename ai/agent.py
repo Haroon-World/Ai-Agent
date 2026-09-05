@@ -56,7 +56,10 @@ _URDU_ROMAN_NUMBERS = {
     "nau": 9, "no": 9, "نو": 9, "۹": 9,
     "das": 10, "دس": 10, "۱۰": 10,
     "gyarah": 11, "gyara": 11, "gyaarah": 11, "گیارہ": 11, "گہرہ": 11, "گیرہ": 11, "۱۱": 11,
-    "barah": 12, "bara": 12, "baarah": 12, "بارہ": 12, "۱۲": 12
+    "barah": 12, "bara": 12, "baarah": 12, "بارہ": 12, "۱۲": 12,
+    # English spoken words
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12
 }
 
 
@@ -64,47 +67,81 @@ def _extract_time_token(text: str) -> Optional[str]:
     """
     Extract standard HH:MM time string from user text supporting:
     - 24-hour and 12-hour: 14:00, 2:00 PM, 2:30 pm, 02:00 PM
-    - Spoken English/Roman Urdu: 2 PM, 2 pm, 2 baje, do baje, 10 am, subah 10 baje
-    - Urdu script: دو بجے, ۲ بجے, دن دو بجے, دوپہر ۲ بجے, صبح ۱۰ بجے, شام ۴ بجے
-    - Prepositions: at 2, around 2, after 12, before 2, ko 2
+    - Spoken STT with dots / variants: 10 a.m., 10 a.m, 10:00 a.m., 2 p.m., 2 p.m
+    - Spoken English word numbers: ten am, ten a.m., two pm, ten o'clock, two thirty, half past ten
+    - Spoken Roman Urdu / Urdu: 2 baje, do baje, 10 am, subah 10 baje, دو بجے, ۲ بجے
+    - Conversational phrases: i want 10, book at 10, fix at 10, slot 10, for 10
     """
     if not text:
         return None
-    lower = text.lower().strip()
+    raw_lower = text.lower().strip()
+    # Normalize speech-to-text dotted "a.m." and "p.m." to "am" and "pm"
+    norm_text = re.sub(r'\ba\.m\.?', 'am', raw_lower)
+    norm_text = re.sub(r'\bp\.m\.?', 'pm', norm_text)
+
+    # 0. Check compound spoken phrases: "half past X", "X thirty"
+    num_token_pattern = r'(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|ek|aik|do|doo|teen|tin|chaar|char|paanch|panch|che|chay|chhey|saat|sat|aath|ath|nau|no|das|gyarah|gyara|gyaarah|barah|bara|baarah|ایک|دو|تین|چار|پانچ|چھ|سات|آٹھ|نو|دس|گیارہ|گہرہ|گیرہ|بارہ|[۱-۹]|۱۰|۱۱|۱۲)'
+    
+    m_half = re.search(r'\bhalf\s+past\s+' + num_token_pattern + r'\b', norm_text)
+    if m_half:
+        tok = m_half.group(1)
+        h = int(tok) if tok.isdigit() else _URDU_ROMAN_NUMBERS.get(tok)
+        if h is not None:
+            is_pm = any(w in norm_text for w in ["pm", "dopahar", "shaam", "raat", "دوپہر", "شام", "رات"])
+            if is_pm and h < 12:
+                h += 12
+            elif not is_pm and 1 <= h <= 7:
+                h += 12
+            return f"{h:02d}:30"
+
+    m_thirty = re.search(r'\b' + num_token_pattern + r'\s+thirty\s*(am|pm)?\b', norm_text)
+    if m_thirty:
+        tok = m_thirty.group(1)
+        h = int(tok) if tok.isdigit() else _URDU_ROMAN_NUMBERS.get(tok)
+        ampm = m_thirty.group(2)
+        if h is not None:
+            if ampm == "pm" and h < 12:
+                h += 12
+            elif ampm == "am" and h == 12:
+                h = 0
+            elif not ampm and 1 <= h <= 7:
+                h += 12
+            return f"{h:02d}:30"
 
     # 1. Match standard HH:MM or HH.MM (e.g. 9:30, 09:30, 14:00, 2:00 PM, 2.00pm)
-    m = re.search(r'\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b', text, re.IGNORECASE)
+    m = re.search(r'\b(\d{1,2})[:.](\d{2})\s*(am|pm)?\b', norm_text)
     if m:
         h, mn = int(m.group(1)), int(m.group(2))
-        ampm = m.group(3).lower() if m.group(3) else None
+        ampm = m.group(3)
         if ampm == "pm" and h < 12:
             h += 12
         elif ampm == "am" and h == 12:
             h = 0
         return f"{h:02d}:{mn:02d}"
 
-    # 2. Match H am / H pm (e.g. 10 am, 2 pm, 12 pm)
-    m = re.search(r'\b(\d{1,2})\s*(am|pm)\b', text, re.IGNORECASE)
+    # 2. Match H am / H pm (e.g. 10 am, 2 pm, 12 pm, ten am, two pm)
+    m = re.search(r'\b' + num_token_pattern + r'\s*(am|pm)\b', norm_text)
     if m:
-        h = int(m.group(1))
-        ampm = m.group(2).lower()
-        if ampm == "pm" and h < 12:
-            h += 12
-        elif ampm == "am" and h == 12:
-            h = 0
-        return f"{h:02d}:00"
+        token = m.group(1)
+        h = int(token) if token.isdigit() else _URDU_ROMAN_NUMBERS.get(token)
+        if h is not None:
+            ampm = m.group(2)
+            if ampm == "pm" and h < 12:
+                h += 12
+            elif ampm == "am" and h == 12:
+                h = 0
+            return f"{h:02d}:00"
 
-    # 3. Match number/word + baje / بجے / بجی / o'clock (e.g. 2 baje, do baji, دو بجی, دو بجے, دن دو بجی)
-    num_pattern = r'(\d{1,2}|ek|aik|do|doo|teen|tin|chaar|char|paanch|panch|che|chay|chhey|saat|sat|aath|ath|nau|no|das|gyarah|gyara|gyaarah|barah|bara|baarah|ایک|دو|تین|چار|پانچ|چھ|سات|آٹھ|نو|دس|گیارہ|گہرہ|گیرہ|بارہ|[۱-۹]|۱۰|۱۱|۱۲)'
-    baje_pattern = r'(?:baje|bje|bjay|baji|bajy|bajeh|o\'?clock|بجے|بجی)'
+    # 3. Match number/word + baje / بجے / بجی / o'clock / oclock (e.g. 2 baje, do baji, دو بجی, دو بجے, ten o'clock)
+    baje_pattern = r'(?:baje|bje|bjay|baji|bajy|bajeh|o\'?clock|oclock|بجے|بجی)'
     prefix_pattern = r'(?:(?:din|dopahar|shaam|raat|subah|دن|دوپہر|شام|رات|صبح)(?:\s+(?:ko|ke|ki|کو|کے|کی))?\s+)?'
-    m = re.search(prefix_pattern + num_pattern + r'\s*' + baje_pattern, text, re.IGNORECASE)
+    m = re.search(prefix_pattern + num_token_pattern + r'\s*' + baje_pattern, norm_text)
     if m:
-        token = m.group(1).lower()
+        token = m.group(1)
         h = int(token) if token.isdigit() else _URDU_ROMAN_NUMBERS.get(token)
         if h is not None:
-            is_pm = any(w in lower for w in ["pm", "dopahar", "shaam", "raat", "دوپہر", "شام", "رات", "دن"])
-            is_am = any(w in lower for w in ["am", "subah", "صبح"])
+            is_pm = any(w in norm_text for w in ["pm", "dopahar", "shaam", "raat", "دوپہر", "شام", "رات", "دن"])
+            is_am = any(w in norm_text for w in ["am", "subah", "صبح"])
             if is_pm and h < 12:
                 h += 12
             elif is_am and h == 12:
@@ -113,14 +150,15 @@ def _extract_time_token(text: str) -> Optional[str]:
                 h += 12
             return f"{h:02d}:00"
 
-    # 4. Match bare number/word after prepositions like "at 2", "after 12", "ko 2", "ki 2"
-    m = re.search(r'\b(?:after|before|at|around|from|past|ko|ke|ki|pe|par|کو|پر|کے|کی)\s+' + num_pattern + r'\b', text, re.IGNORECASE)
+    # 4. Match conversational phrasing like "want 10", "for 10", "book 10", "slot 10", "fix at 10", "at 2", "after 12", "ko 2"
+    m = re.search(r'\b(?:after|before|at|around|from|past|ko|ke|ki|pe|par|کو|پر|کے|کی|want|for|book|fix|slot|time)\s+' + num_token_pattern + r'(?:\s*(am|pm))?\b', norm_text)
     if m:
-        token = m.group(1).lower()
+        token = m.group(1)
+        ampm = m.group(2)
         h = int(token) if token.isdigit() else _URDU_ROMAN_NUMBERS.get(token)
         if h is not None:
-            is_pm = any(w in lower for w in ["pm", "dopahar", "shaam", "raat", "دوپہر", "شام", "رات", "دن"])
-            is_am = any(w in lower for w in ["am", "subah", "صبح"])
+            is_pm = (ampm == "pm") or any(w in norm_text for w in ["pm", "dopahar", "shaam", "raat", "دوپہر", "شام", "رات", "دن"])
+            is_am = (ampm == "am") or any(w in norm_text for w in ["am", "subah", "صبح"])
             if is_pm and h < 12:
                 h += 12
             elif is_am and h == 12:
@@ -128,6 +166,21 @@ def _extract_time_token(text: str) -> Optional[str]:
             elif not is_pm and not is_am and 1 <= h <= 7:
                 h += 12
             return f"{h:02d}:00"
+
+    # 5. Fallback for clean isolated single/double digit or word number (e.g. user just said "10" or "ten")
+    cleaned = norm_text.strip(". ,!?:")
+    if cleaned.isdigit():
+        val = int(cleaned)
+        if 0 <= val <= 23:
+            h = val
+            if 1 <= h <= 7:
+                h += 12
+            return f"{h:02d}:00"
+    elif cleaned in _URDU_ROMAN_NUMBERS:
+        h = _URDU_ROMAN_NUMBERS[cleaned]
+        if 1 <= h <= 7:
+            h += 12
+        return f"{h:02d}:00"
 
     return None
 
@@ -717,7 +770,10 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
             return str(t_str)
 
     doctor_roster = BookingService.get_doctors(conv.business_id)
-    service_roster = BookingService.get_services(conv.business_id)
+    if conv.selected_doctor_id:
+        service_roster = BookingService.get_services(conv.business_id, doctor_id=conv.selected_doctor_id)
+    else:
+        service_roster = BookingService.get_services(conv.business_id)
 
     # 1. Final Booking Confirmation Card
     if (
@@ -853,7 +909,7 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
             }
 
     # 4. Date Selection (Strictly personalized to the chosen doctor's active weekly schedule)
-    if not conv.requested_date and (conv.selected_doctor_id or conv.awaiting_input in ["date_choice", "date"]):
+    if not conv.requested_date and conv.awaiting_input != "service_choice" and (conv.selected_doctor_id or conv.awaiting_input in ["date_choice", "date"]):
         tz = _get_business_tz(conv.business_id)
         today = datetime.now(tz).date()
         doc = next((d for d in doctor_roster if d["id"] == conv.selected_doctor_id), None) if conv.selected_doctor_id else None
@@ -947,6 +1003,8 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
         if service_roster:
             business = _get_business_info(conv.business_id)
             consultation_fee = business.get("consultation_fee", 2000.0)
+            doc = next((d for d in doctor_roster if d["id"] == conv.selected_doctor_id), None) if conv.selected_doctor_id else None
+            title = f"Select a Service with {doc['name']}" if doc else "Select a Service"
             options = [
                 {
                     "id": f"svc_{s['id']}",
@@ -961,21 +1019,23 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
                 }
                 for s in service_roster
             ]
-            options.append({
-                "id": "svc_consultation",
-                "name": "I don't know / I need a consultation",
-                "title": "I don't know / I need a consultation",
-                "label": "🩺 I don't know / I need a consultation",
-                "value": "I don't know, I need a consultation",
-                "duration": 30,
-                "price": consultation_fee,
-                "price_formatted": f"PKR {consultation_fee:,.0f}",
-                "description": "General consultation & medical checkup"
-            })
+            has_consultation = any("consultation" in s["name"].lower() or "checkup" in s["name"].lower() for s in service_roster)
+            if not has_consultation:
+                options.append({
+                    "id": "svc_consultation",
+                    "name": "I don't know / I need a consultation",
+                    "title": "I don't know / I need a consultation",
+                    "label": "🩺 I don't know / I need a consultation",
+                    "value": "I don't know, I need a consultation",
+                    "duration": 30,
+                    "price": consultation_fee,
+                    "price_formatted": f"PKR {consultation_fee:,.0f}",
+                    "description": "General consultation & medical checkup"
+                })
             return {
                 "type": "service_selection",
                 "interactive_type": "list",
-                "title": "Select a Service",
+                "title": title,
                 "options": options
             }
 
@@ -1211,6 +1271,17 @@ class Agent:
                             user_message=user_content,
                             history_messages=formatted_messages
                         )
+
+        # If assistant explicitly acknowledged/selected a slot (e.g. "I have selected the 10:00 AM slot")
+        # ensure conv.requested_time is synchronized so time_slot_selection is not re-emitted
+        if not conv.requested_time and conv.workflow_state != "BOOKED":
+            m_asst_time = re.search(r'\b(?:selected|booked|fix(?:ed)?|choose|chosen)\s+(?:the\s+)?(\d{1,2}[:.]\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))\b', final_content, re.IGNORECASE)
+            if m_asst_time:
+                cand_t = _extract_time_token(m_asst_time.group(1))
+                if cand_t:
+                    conv.requested_time = cand_t
+                    if conv.awaiting_input == "time_choice":
+                        conv.awaiting_input = "name" if not conv.pending_customer_name else ("phone" if not conv.pending_customer_phone else "confirmation")
 
         ui_act = _build_ui_action(conv)
 

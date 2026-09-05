@@ -265,5 +265,114 @@ class TestPolyclinicFlowAndAdminFixes(unittest.TestCase):
         self.assertEqual(conv_state.pending_customer_name, "Tariq")
         self.assertEqual(conv_state.pending_customer_phone, "03009998877")
 
+    def test_navbar_active_highlighting_and_chat_neutral(self):
+        """8. Issue 1: Navbar active highlighting correctly marks current page and keeps Customer Chat neutral when on admin pages."""
+        with self.client.session_transaction() as sess:
+            sess["admin_logged_in"] = True
+            sess["admin_user"] = "admin"
+
+        # On /admin dashboard
+        resp_admin = self.client.get("/admin")
+        self.assertEqual(resp_admin.status_code, 200)
+        html_admin = resp_admin.data.decode("utf-8")
+        self.assertIn('href="/admin" class="nav-item active"', html_admin)
+        self.assertNotIn('href="/chat" class="nav-item nav-badge-item active"', html_admin)
+
+        # On /admin/appointments
+        resp_appts = self.client.get("/admin/appointments")
+        self.assertEqual(resp_appts.status_code, 200)
+        html_appts = resp_appts.data.decode("utf-8")
+        self.assertIn('href="/admin/appointments" class="nav-item active"', html_appts)
+        self.assertNotIn('href="/chat" class="nav-item nav-badge-item active"', html_appts)
+
+        # On /chat
+        resp_chat = self.client.get("/chat")
+        self.assertEqual(resp_chat.status_code, 200)
+        html_chat = resp_chat.data.decode("utf-8")
+        self.assertIn('href="/chat" class="nav-item nav-badge-item active"', html_chat)
+
+    def test_voice_stt_time_extraction_variants(self):
+        """9. Issue 2: Spoken voice STT time formats (dots, words, phrases) extract cleanly to HH:MM."""
+        from ai.agent import _extract_time_token
+        from ai.llm_client import _extract_time_str
+
+        test_cases = [
+            ("10 a.m.", "10:00"),
+            ("10 a.m", "10:00"),
+            ("10:00 a.m.", "10:00"),
+            ("10:30 a.m.", "10:30"),
+            ("ten am", "10:00"),
+            ("ten a.m.", "10:00"),
+            ("ten o'clock", "10:00"),
+            ("i want 10", "10:00"),
+            ("book at 10", "10:00"),
+            ("two pm", "14:00"),
+            ("2 p.m.", "14:00"),
+            ("two thirty pm", "14:30"),
+            ("half past ten", "10:30"),
+            ("10 baje", "10:00"),
+            ("do baje", "14:00"),
+        ]
+
+        for text, expected in test_cases:
+            res_token = _extract_time_token(text)
+            self.assertEqual(res_token, expected, f"_extract_time_token failed for '{text}': got {res_token}, expected {expected}")
+            res_str = _extract_time_str(text)
+            self.assertEqual(res_str, expected, f"_extract_time_str failed for '{text}': got {res_str}, expected {expected}")
+
+    def test_voice_spoken_time_prevents_redundant_slot_selection(self):
+        """10. Issue 2: Speaking a slot via microphone sets requested_time and does NOT re-show time_slot_selection widget."""
+        target_date = date.today() + timedelta(days=2)
+        while target_date.strftime("%A") == "Sunday":
+            target_date += timedelta(days=1)
+        target_date_str = target_date.strftime("%Y-%m-%d")
+
+        conv = Conversation(
+            business_id=1,
+            status="AI",
+            intent="BOOK_APPOINTMENT",
+            workflow_state="CHECKING_AVAILABILITY",
+            awaiting_input="time_choice",
+            selected_doctor_id=1,
+            requested_date=target_date_str
+        )
+        db.session.add(conv)
+        db.session.commit()
+
+        # User speaks time into microphone: "10 a.m."
+        res = self.agent.process_message(conv.id, "10 a.m.")
+
+        conv_state = db.session.get(Conversation, conv.id)
+        self.assertEqual(conv_state.requested_time, "10:00")
+        # Ensure time_slot_selection is NOT re-rendered!
+        ui_act = res.get("ui_action")
+        if ui_act:
+            self.assertNotEqual(ui_act.get("type"), "time_slot_selection", "Redundant time_slot_selection must not be returned once slot is spoken")
+
+    def test_doctor_scoped_service_selection_interactive_widget(self):
+        """11. Issue 3: When a doctor is selected, service_selection UI widget contains ONLY that doctor's services."""
+        conv = Conversation(
+            business_id=1,
+            status="AI",
+            intent="BOOK_APPOINTMENT",
+            workflow_state="COLLECTING_INFO",
+            awaiting_input="service_choice",
+            selected_doctor_id=2  # Dr. Sara Malik
+        )
+        db.session.add(conv)
+        db.session.commit()
+
+        ui_action = _build_ui_action(conv)
+        self.assertIsNotNone(ui_action)
+        self.assertEqual(ui_action["type"], "service_selection")
+        self.assertIn("Dr. Sara Malik", ui_action["title"])
+
+        option_names = [opt["name"] for opt in ui_action["options"]]
+        # Dr. Sara's services:
+        self.assertIn("Dental Cleaning & Scaling", option_names)
+        self.assertIn("Teeth Whitening", option_names)
+        # Dr. Ahmed's service must NOT be in the options:
+        self.assertNotIn("Dental Checkup & Consultation", option_names)
+
 if __name__ == "__main__":
     unittest.main()
