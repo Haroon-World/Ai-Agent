@@ -17,14 +17,13 @@ def login_required(f):
 
 @admin_bp.route("/admin/login", methods=["GET", "POST"])
 def login():
-    if session.get("admin_logged_in"):
-        return redirect(url_for("admin_bp.dashboard"))
-
     if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
+        username = (request.form.get("username") or "").strip()
+        password = (request.form.get("password") or "").strip()
 
         if username == Config.ADMIN_USERNAME and password == Config.ADMIN_PASSWORD:
+            session.clear()
+            session.permanent = True
             session["admin_logged_in"] = True
             session["admin_user"] = username
             flash("Logged in successfully.", "success")
@@ -32,12 +31,12 @@ def login():
         else:
             flash("Invalid admin username or password.", "danger")
 
-    return render_template("login.html")
+    already_logged_in = bool(session.get("admin_logged_in"))
+    return render_template("login.html", already_logged_in=already_logged_in, current_user=session.get("admin_user", "admin"))
 
 @admin_bp.route("/admin/logout")
 def logout():
-    session.pop("admin_logged_in", None)
-    session.pop("admin_user", None)
+    session.clear()
     flash("You have been logged out.", "info")
     return redirect(url_for("admin_bp.login"))
 

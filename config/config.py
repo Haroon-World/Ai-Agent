@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -7,6 +8,7 @@ basedir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "default-dev-secret-key-12345")
+    PERMANENT_SESSION_LIFETIME = timedelta(minutes=int(os.getenv("SESSION_TIMEOUT_MINUTES", "60")))
     
     # Database
     db_url = os.getenv("DATABASE_URL", "").strip()
