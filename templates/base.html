@@ -30,7 +30,16 @@
                     <a href="/admin/services" class="nav-item {% if request.path.startswith('/admin/services') %}active{% endif %}">Services & Pricing</a>
                     <a href="/admin/conversations" class="nav-item {% if request.path.startswith('/admin/conversations') %}active{% endif %}">Conversations</a>
                     <a href="/admin/reminders" class="nav-item {% if request.path.startswith('/admin/reminders') %}active{% endif %}">Reminders</a>
-                    <a href="/admin/logout" class="nav-item nav-btn-logout">Logout</a>
+                {% endif %}
+            </div>
+            <div class="nav-auth-section">
+                {% if session.get('admin_logged_in') %}
+                    <div class="admin-user-badge">
+                        <span class="admin-user-pill">👤 {{ session.get('admin_user', 'admin') }}</span>
+                        <a href="/admin/logout" class="nav-item nav-btn-logout" title="Sign out of admin session">
+                            <span>🚪 Logout</span>
+                        </a>
+                    </div>
                 {% else %}
                     <a href="/admin/login" class="nav-item nav-btn {% if request.path.startswith('/admin/login') %}active{% endif %}">Admin Portal</a>
                 {% endif %}
