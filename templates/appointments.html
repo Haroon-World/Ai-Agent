@@ -10,7 +10,7 @@
     </div>
     <div class="header-actions" style="display: flex; gap: 8px;">
         <a href="/admin/slots" class="btn btn-secondary">📊 View Slot Occupancy</a>
-        <a href="/chat" target="_blank" class="btn btn-primary">➕ Book New via AI Chat</a>
+        <a href="{% if session.get('business_id') %}/chat/{{ session.get('business_id') }}{% else %}/chat{% endif %}" target="_blank" class="btn btn-primary">➕ Book New via AI Chat</a>
     </div>
 </div>
 

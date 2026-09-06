@@ -160,10 +160,13 @@ class TestDoctorSchedulesAndTypoIntent(unittest.TestCase):
 
     def test_admin_doctor_management_routes(self):
         """Test Admin routes for editing doctor schedules and toggling status."""
-        # Login admin
+        # Login admin (simulate the new session structure)
         with self.client.session_transaction() as sess:
-            sess["admin_logged_in"] = True
+            sess["user_id"] = 1
+            sess["business_id"] = 1
             sess["admin_user"] = "admin"
+            sess["is_platform_admin"] = True
+            sess["clinic_name"] = "Test Clinic"
 
         # Edit Dr. Test Dentist schedule
         res = self.client.post("/admin/doctors/edit/1", data={

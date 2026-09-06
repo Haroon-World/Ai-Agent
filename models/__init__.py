@@ -13,6 +13,7 @@ from models.message import Message
 from models.reminder import Reminder
 from models.doctor_schedule import DoctorSchedule
 from models.doctor_leave import DoctorLeave
+from models.user import User
 
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -73,6 +74,7 @@ __all__ = [
     "Reminder",
     "DoctorSchedule",
     "DoctorLeave",
+    "User",
     "auto_migrate_db",
 ]
 

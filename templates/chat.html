@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Customer Web Chat - ClinicConnect AI{% endblock %}
+{% block title %}{{ business.name if business else "ClinicConnect AI" }} — Customer Chat{% endblock %}
 
 {% block content %}
 <div class="chat-wrapper">
@@ -39,7 +39,7 @@
         <div class="quick-chips" id="quickChips">
             <button class="chip" onclick="sendQuickPrompt('Hi, I would like to book a doctor appointment.')">🩺 Book an Appointment</button>
             <button class="chip" onclick="sendQuickPrompt('What services do you offer and what are the prices?')">📋 Services & Prices</button>
-            <button class="chip" onclick="sendQuickPrompt('Can I check Dr. Ahmed\'s available slots for tomorrow?')">📅 Check Availability</button>
+            <button class="chip" onclick="sendQuickPrompt('Can I check available appointment slots for tomorrow?')">📅 Check Availability</button>
             <button class="chip" onclick="sendQuickPrompt('I want to speak to a human receptionist.')">👨‍💼 Human Handoff</button>
         </div>
 
@@ -70,5 +70,9 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+    window.CURRENT_CLINIC_ID = {{ business.id if business else 1 }};
+    window.CURRENT_CLINIC_NAME = {{ (business.name if business else 'Clinic') | tojson }};
+</script>
 <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
 {% endblock %}

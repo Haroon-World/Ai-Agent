@@ -1,4 +1,6 @@
-let conversationId = localStorage.getItem('ai_business_conv_id');
+const currentClinicId = window.CURRENT_CLINIC_ID || 1;
+const storageKey = `ai_business_conv_id_${currentClinicId}`;
+let conversationId = localStorage.getItem(storageKey);
 const chatMessages = document.getElementById('chatMessages');
 const chatForm = document.getElementById('chatForm');
 const chatInput = document.getElementById('chatInput');
@@ -46,11 +48,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function initNewConversation() {
     try {
-        const res = await fetch('/api/chat/init', { method: 'POST' });
+        const res = await fetch('/api/chat/init', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ business_id: currentClinicId })
+        });
         const data = await res.json();
         if (data.success) {
             conversationId = data.conversation_id;
-            localStorage.setItem('ai_business_conv_id', conversationId);
+            localStorage.setItem(storageKey, conversationId);
             lastRenderedStatus = data.status;
             renderMessages(data.messages, true);
             updateStatusUI(data.status);
@@ -65,7 +71,7 @@ async function loadHistory(convId) {
     try {
         const res = await fetch(`/api/chat/history/${convId}`);
         const data = await res.json();
-        if (data.success) {
+        if (data.success && (!data.business_id || data.business_id === currentClinicId)) {
             lastRenderedStatus = data.status;
             renderMessages(data.messages, true);
             updateStatusUI(data.status);
@@ -203,7 +209,8 @@ async function handleSendMessage(e) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 conversation_id: conversationId,
-                message: text
+                message: text,
+                business_id: currentClinicId
             })
         });
 
@@ -510,11 +517,15 @@ function sendQuickPrompt(promptText) {
 async function resetChat() {
     if (!confirm('Start a new conversation session?')) return;
     try {
-        const res = await fetch('/api/chat/reset', { method: 'POST' });
+        const res = await fetch('/api/chat/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ business_id: currentClinicId })
+        });
         const data = await res.json();
         if (data.success) {
             conversationId = data.conversation_id;
-            localStorage.setItem('ai_business_conv_id', conversationId);
+            localStorage.setItem(storageKey, conversationId);
             renderMessages(data.messages, true);
             updateStatusUI('AI');
         }
@@ -578,6 +589,7 @@ async function sendVoiceBlob(blob, mimeType) {
     const formData = new FormData();
     const ext = mimeType.includes('wav') ? 'wav' : 'webm';
     formData.append('file', blob, `voice_input.${ext}`);
+    formData.append('business_id', currentClinicId);
     if (conversationId) {
         formData.append('conversation_id', conversationId);
     }
@@ -597,7 +609,7 @@ async function sendVoiceBlob(blob, mimeType) {
         if (data.success) {
             if (data.session_reset || !conversationId) {
                 conversationId = data.conversation_id;
-                localStorage.setItem('ai_business_conv_id', conversationId);
+                localStorage.setItem(storageKey, conversationId);
             }
 
             // Show what the system actually heard, not a generic

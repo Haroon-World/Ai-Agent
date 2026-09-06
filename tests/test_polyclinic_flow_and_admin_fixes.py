@@ -178,8 +178,11 @@ class TestPolyclinicFlowAndAdminFixes(unittest.TestCase):
     def test_admin_service_ajax_toggle(self):
         """4. Admin toggle endpoint returns JSON on AJAX request and flips is_active."""
         with self.client.session_transaction() as sess:
-            sess["admin_logged_in"] = True
+            sess["user_id"] = 1
+            sess["business_id"] = 1
             sess["admin_user"] = "admin"
+            sess["is_platform_admin"] = True
+            sess["clinic_name"] = "Arfa Polyclinic"
 
         # Toggle service 2 (Dental Cleaning) to inactive
         resp = self.client.post("/admin/services/toggle/2", headers={"X-Requested-With": "XMLHttpRequest"})
@@ -200,8 +203,11 @@ class TestPolyclinicFlowAndAdminFixes(unittest.TestCase):
     def test_admin_service_delete(self):
         """5. Admin service delete removes unbooked service."""
         with self.client.session_transaction() as sess:
-            sess["admin_logged_in"] = True
+            sess["user_id"] = 1
+            sess["business_id"] = 1
             sess["admin_user"] = "admin"
+            sess["is_platform_admin"] = True
+            sess["clinic_name"] = "Arfa Polyclinic"
 
         # Delete service 3
         resp = self.client.post("/admin/services/delete/3", headers={"X-Requested-With": "XMLHttpRequest"})
@@ -213,8 +219,11 @@ class TestPolyclinicFlowAndAdminFixes(unittest.TestCase):
     def test_admin_slots_view_and_manual_booking(self):
         """6. Slot occupancy endpoint returns data and manual booking endpoint creates appointment."""
         with self.client.session_transaction() as sess:
-            sess["admin_logged_in"] = True
+            sess["user_id"] = 1
+            sess["business_id"] = 1
             sess["admin_user"] = "admin"
+            sess["is_platform_admin"] = True
+            sess["clinic_name"] = "Arfa Polyclinic"
 
         target_date = date.today() + timedelta(days=1)
         while target_date.strftime("%A") == "Sunday":
@@ -268,8 +277,11 @@ class TestPolyclinicFlowAndAdminFixes(unittest.TestCase):
     def test_navbar_active_highlighting_and_chat_neutral(self):
         """8. Issue 1: Navbar active highlighting correctly marks current page and keeps Customer Chat neutral when on admin pages."""
         with self.client.session_transaction() as sess:
-            sess["admin_logged_in"] = True
+            sess["user_id"] = 1
+            sess["business_id"] = 1
             sess["admin_user"] = "admin"
+            sess["is_platform_admin"] = True
+            sess["clinic_name"] = "Arfa Polyclinic"
 
         # On /admin dashboard
         resp_admin = self.client.get("/admin")

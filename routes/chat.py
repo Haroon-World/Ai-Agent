@@ -16,6 +16,49 @@ def _get_or_set_visitor_id() -> str:
     return session["visitor_id"]
 
 
+def _resolve_chat_business_id(clinic_id: int = None) -> int:
+    """
+    Dynamically resolve the target clinic for the customer chat session:
+      1. Explicit route argument: /chat/<clinic_id>
+      2. Query parameter: ?clinic=N or ?business_id=N
+      3. JSON or form payload: {"business_id": N} or {"clinic_id": N}
+      4. Logged-in clinic admin session: session.get("business_id")
+      5. Fallback: Config.DEFAULT_BUSINESS_ID (1)
+    """
+    if clinic_id and isinstance(clinic_id, int):
+        b = db.session.get(Business, clinic_id)
+        if b:
+            return b.id
+
+    clinic_param = request.args.get("clinic") or request.args.get("business_id")
+    if clinic_param and str(clinic_param).isdigit():
+        b = db.session.get(Business, int(clinic_param))
+        if b:
+            return b.id
+
+    if request.is_json:
+        data = request.get_json(silent=True) or {}
+        body_id = data.get("business_id") or data.get("clinic_id")
+        if body_id:
+            try:
+                b = db.session.get(Business, int(body_id))
+                if b:
+                    return b.id
+            except (ValueError, TypeError):
+                pass
+    elif request.form:
+        form_id = request.form.get("business_id") or request.form.get("clinic_id")
+        if form_id and str(form_id).isdigit():
+            b = db.session.get(Business, int(form_id))
+            if b:
+                return b.id
+
+    if session.get("business_id"):
+        return session["business_id"]
+
+    return Config.DEFAULT_BUSINESS_ID
+
+
 def get_or_create_conversation(
     business_id: int,
     conversation_id: int = None,
@@ -66,20 +109,26 @@ def get_or_create_conversation(
 
 
 @chat_bp.route("/chat")
-def chat_view():
+@chat_bp.route("/chat/<int:clinic_id>")
+def chat_view(clinic_id=None):
     _get_or_set_visitor_id()
-    business = db.session.get(Business, Config.DEFAULT_BUSINESS_ID)
+    business_id = _resolve_chat_business_id(clinic_id)
+    business = db.session.get(Business, business_id)
+    if not business:
+        business = db.session.get(Business, Config.DEFAULT_BUSINESS_ID)
     return render_template("chat.html", business=business)
 
 
 @chat_bp.route("/api/chat/init", methods=["POST"])
 def init_chat():
     visitor_id = _get_or_set_visitor_id()
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _resolve_chat_business_id()
     conv, is_new = get_or_create_conversation(business_id, visitor_id=visitor_id)
     return jsonify({
         "success": True,
         "conversation_id": conv.id,
+        "business_id": conv.business_id,
+        "clinic_name": conv.business.name if conv.business else "Clinic",
         "status": conv.status,
         "workflow_state": conv.workflow_state,
         "session_reset": is_new,
@@ -90,8 +139,7 @@ def init_chat():
 @chat_bp.route("/api/chat/history/<int:conversation_id>", methods=["GET"])
 def get_history(conversation_id):
     visitor_id = _get_or_set_visitor_id()
-    business_id = Config.DEFAULT_BUSINESS_ID
-    conv = Conversation.query.filter_by(id=conversation_id, business_id=business_id, visitor_id=visitor_id).first()
+    conv = Conversation.query.filter_by(id=conversation_id, visitor_id=visitor_id).first()
     if not conv:
         return jsonify({"success": False, "error": "Conversation not found"}), 404
 
@@ -101,6 +149,8 @@ def get_history(conversation_id):
     return jsonify({
         "success": True,
         "conversation_id": conv.id,
+        "business_id": conv.business_id,
+        "clinic_name": conv.business.name if conv.business else "Clinic",
         "status": conv.status,
         "workflow_state": conv.workflow_state,
         "handoff_reason": conv.handoff_reason,
@@ -114,20 +164,23 @@ def send_message():
     data = request.get_json() or {}
     message_text = data.get("message", "").strip()
     conversation_id = data.get("conversation_id")
-    business_id = Config.DEFAULT_BUSINESS_ID
 
-    if not message_text:
-        return jsonify({"success": False, "error": "Message text is required"}), 400
+    target_business_id = _resolve_chat_business_id()
+    if conversation_id:
+        conv_obj = db.session.get(Conversation, conversation_id)
+        if not conv_obj or conv_obj.business_id != target_business_id:
+            conversation_id = None
 
     try:
-        conv, is_new = get_or_create_conversation(business_id, conversation_id, visitor_id=visitor_id)
+        conv, is_new = get_or_create_conversation(target_business_id, conversation_id, visitor_id=visitor_id)
         llm_provider = current_app.config.get("LLM_PROVIDER", Config.LLM_PROVIDER)
-        agent = Agent(business_id=business_id, llm_provider=llm_provider)
+        agent = Agent(business_id=target_business_id, llm_provider=llm_provider)
         result = agent.process_message(conversation_id=conv.id, user_content=message_text)
 
         return jsonify({
             "success": True,
             "conversation_id": conv.id,
+            "business_id": conv.business_id,
             "status": result.get("status"),
             "workflow_state": result.get("workflow_state"),
             "reply": result.get("content"),
@@ -147,11 +200,13 @@ def send_message():
 @chat_bp.route("/api/chat/reset", methods=["POST"])
 def reset_chat():
     visitor_id = _get_or_set_visitor_id()
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _resolve_chat_business_id()
     conv, _ = get_or_create_conversation(business_id, visitor_id=visitor_id)
     return jsonify({
         "success": True,
         "conversation_id": conv.id,
+        "business_id": conv.business_id,
+        "clinic_name": conv.business.name if conv.business else "Clinic",
         "status": conv.status,
         "messages": [m.to_dict() for m in conv.messages]
     })
@@ -160,8 +215,6 @@ def reset_chat():
 @chat_bp.route("/api/chat/send-voice", methods=["POST"])
 def send_voice():
     visitor_id = _get_or_set_visitor_id()
-    business_id = Config.DEFAULT_BUSINESS_ID
-
     audio_file = request.files.get("file") or request.files.get("audio")
     conversation_id_str = request.form.get("conversation_id")
     conversation_id = int(conversation_id_str) if conversation_id_str and conversation_id_str.isdigit() else None
@@ -182,12 +235,15 @@ def send_voice():
     except Exception as e:
         return jsonify({"success": False, "error": f"Speech transcription failed: {str(e)}"}), 400
 
-    if not transcript or not transcript.strip():
-        return jsonify({"success": False, "error": "Could not transcribe audio content"}), 400
+    target_business_id = _resolve_chat_business_id()
+    if conversation_id:
+        conv_obj = db.session.get(Conversation, conversation_id)
+        if not conv_obj or conv_obj.business_id != target_business_id:
+            conversation_id = None
 
-    conv, is_new = get_or_create_conversation(business_id, conversation_id, visitor_id=visitor_id)
+    conv, is_new = get_or_create_conversation(target_business_id, conversation_id, visitor_id=visitor_id)
     llm_provider = current_app.config.get("LLM_PROVIDER", Config.LLM_PROVIDER)
-    agent = Agent(business_id=business_id, llm_provider=llm_provider)
+    agent = Agent(business_id=target_business_id, llm_provider=llm_provider)
     result = agent.process_message(conversation_id=conv.id, user_content=transcript)
 
     user_msg = Message.query.filter_by(conversation_id=conv.id, role="user").order_by(Message.created_at.desc()).first()

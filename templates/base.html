@@ -14,26 +14,26 @@
         <div class="nav-container">
             <a href="/" class="nav-brand">
                 <span class="brand-logo">🏥</span>
-                <span class="brand-name">Arfa <strong>Polyclinic</strong></span>
+                <span class="brand-name">{{ session.get('clinic_name', 'ClinicConnect AI') | e }}</span>
             </a>
             <div class="nav-links">
                 <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">Overview</a>
-                <a href="/chat" class="nav-item nav-badge-item {% if request.path.startswith('/chat') %}active{% endif %}">
+                <a href="{% if session.get('business_id') %}/chat/{{ session.get('business_id') }}{% else %}/chat{% endif %}" class="nav-item nav-badge-item {% if request.path.startswith('/chat') %}active{% endif %}">
                     <span>Customer Chat</span>
                     <span class="live-dot"></span>
                 </a>
-                {% if session.get('admin_logged_in') %}
+                {% if session.get('user_id') and session.get('business_id') %}
                     <a href="/admin" class="nav-item {% if request.path == '/admin' %}active{% endif %}">Dashboard</a>
                     <a href="/admin/appointments" class="nav-item {% if request.path.startswith('/admin/appointments') %}active{% endif %}">Appointments</a>
                     <a href="/admin/slots" class="nav-item {% if request.path.startswith('/admin/slots') %}active{% endif %}">Slot Occupancy</a>
                     <a href="/admin/doctors" class="nav-item {% if request.path.startswith('/admin/doctors') %}active{% endif %}">Doctor Schedules</a>
-                    <a href="/admin/services" class="nav-item {% if request.path.startswith('/admin/services') %}active{% endif %}">Services & Pricing</a>
+                    <a href="/admin/services" class="nav-item {% if request.path.startswith('/admin/services') %}active{% endif %}">Services &amp; Pricing</a>
                     <a href="/admin/conversations" class="nav-item {% if request.path.startswith('/admin/conversations') %}active{% endif %}">Conversations</a>
                     <a href="/admin/reminders" class="nav-item {% if request.path.startswith('/admin/reminders') %}active{% endif %}">Reminders</a>
                 {% endif %}
             </div>
             <div class="nav-auth-section">
-                {% if session.get('admin_logged_in') %}
+                {% if session.get('user_id') %}
                     <div class="admin-user-badge">
                         <span class="admin-user-pill">👤 {{ session.get('admin_user', 'admin') }}</span>
                         <a href="/admin/logout" class="nav-item nav-btn-logout" title="Sign out of admin session">
@@ -63,8 +63,8 @@
 
     <footer class="footer">
         <div class="footer-container">
-            <p>© 2026 Arfa Polyclinic • Powered by <strong>ClinicConnect AI Platform</strong></p>
-            <p class="footer-sub">Multi-Specialty Polyclinic Architecture • Dynamic Specialization & Services Discovery</p>
+            <p>© 2026 {{ session.get('clinic_name', 'ClinicConnect AI') | e }} • Powered by <strong>ClinicConnect AI Platform</strong></p>
+            <p class="footer-sub">Multi-Specialty Polyclinic Architecture • Dynamic Specialization &amp; Services Discovery</p>
         </div>
     </footer>
 

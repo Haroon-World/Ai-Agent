@@ -51,6 +51,10 @@ class Config:
     DEFAULT_BUSINESS_ID = int(os.getenv("DEFAULT_BUSINESS_ID", "1"))
     BUSINESS_TIMEZONE = os.getenv("BUSINESS_TIMEZONE", "Asia/Karachi")
     
-    # Admin Credentials
+    # Clinic Admin Defaults
     ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
     ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+
+    # Platform Owner Credentials (Separate from any clinic)
+    PLATFORM_ADMIN_USERNAME = os.getenv("PLATFORM_ADMIN_USERNAME", "clinicconnectaipro")
+    PLATFORM_ADMIN_PASSWORD = os.getenv("PLATFORM_ADMIN_PASSWORD", "@Clinic2026")

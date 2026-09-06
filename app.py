@@ -6,6 +6,7 @@ from models import db, Business, auto_migrate_db
 from routes.chat import chat_bp
 from routes.appointments import appointments_bp
 from routes.admin import admin_bp
+from routes.platform import platform_bp
 from seed import seed_database
 
 # Ensure stdout/stderr use UTF-8 on Windows so emoji in LLM responses
@@ -36,6 +37,7 @@ def create_app(config_class=Config):
     app.register_blueprint(chat_bp)
     app.register_blueprint(appointments_bp)
     app.register_blueprint(admin_bp)
+    app.register_blueprint(platform_bp, url_prefix="/platform")
 
     @app.before_request
     def ensure_db_ready():

@@ -134,7 +134,7 @@
     {% else %}
     <div class="empty-state">
         <p>No upcoming appointments scheduled yet. Try booking one through the customer chat!</p>
-        <a href="/chat" class="btn btn-sm btn-primary" target="_blank">Book in Customer Chat</a>
+        <a href="{% if session.get('business_id') %}/chat/{{ session.get('business_id') }}{% else %}/chat{% endif %}" class="btn btn-sm btn-primary" target="_blank">Book in Customer Chat</a>
     </div>
     {% endif %}
 </div>

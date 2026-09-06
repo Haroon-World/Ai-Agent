@@ -10,7 +10,7 @@ class Business(db.Model):
     address = db.Column(db.String(255), nullable=False)
     phone = db.Column(db.String(50), nullable=False)
     timezone = db.Column(db.String(50), nullable=False, default="Asia/Karachi")
-    opening_hours = db.Column(db.Text, nullable=False)
+    opening_hours = db.Column(db.Text, nullable=False, default="Monday to Saturday: 09:00 AM - 05:00 PM, Sunday: Closed")
     policies = db.Column(db.Text, nullable=True)
     consultation_fee = db.Column(db.Float, nullable=True, default=2000.0)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))

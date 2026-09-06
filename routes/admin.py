@@ -1,19 +1,54 @@
 from datetime import datetime, date
 from functools import wraps
-from flask import Blueprint, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import (
+    Blueprint, render_template, request, redirect, url_for,
+    session, flash, jsonify, abort
+)
 from config.config import Config
 from models import db, Business, Appointment, Conversation, Message, Reminder, Customer, Doctor, Service
+from models.user import User
 from services.handoff_service import HandoffService
 
 admin_bp = Blueprint("admin_bp", __name__)
 
+# ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
 def login_required(f):
+    """Redirect to login if not authenticated or missing clinic context."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not session.get("admin_logged_in"):
+        if not session.get("user_id"):
+            return redirect(url_for("admin_bp.login"))
+        if not session.get("business_id"):
+            if session.get("is_platform_admin"):
+                return redirect(url_for("platform_bp.dashboard"))
             return redirect(url_for("admin_bp.login"))
         return f(*args, **kwargs)
     return decorated_function
+
+
+def platform_admin_required(f):
+    """Allow only users with is_platform_admin=True; 403 for regular clinic admins."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get("user_id"):
+            return redirect(url_for("platform_bp.login"))
+        if not session.get("is_platform_admin"):
+            abort(403)
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def _current_business_id() -> int:
+    """Return the business_id of the currently logged-in admin from the session."""
+    return session["business_id"]
+
+
+# ---------------------------------------------------------------------------
+# Login / Logout
+# ---------------------------------------------------------------------------
 
 @admin_bp.route("/admin/login", methods=["GET", "POST"])
 def login():
@@ -21,18 +56,42 @@ def login():
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
 
-        if username == Config.ADMIN_USERNAME and password == Config.ADMIN_PASSWORD:
+        # Find all users with that username (across all businesses or platform)
+        # and pick the first one whose password hash matches.
+        matched_user = None
+        candidates = User.query.filter_by(username=username).all()
+        for candidate in candidates:
+            if candidate.check_password(password):
+                matched_user = candidate
+                break
+
+        if matched_user:
             session.clear()
             session.permanent = True
-            session["admin_logged_in"] = True
-            session["admin_user"] = username
-            flash("Logged in successfully.", "success")
-            return redirect(url_for("admin_bp.dashboard"))
-        else:
-            flash("Invalid admin username or password.", "danger")
+            session["user_id"] = matched_user.id
+            session["business_id"] = matched_user.business_id
+            session["admin_user"] = matched_user.username
+            session["is_platform_admin"] = matched_user.is_platform_admin
 
-    already_logged_in = bool(session.get("admin_logged_in"))
-    return render_template("login.html", already_logged_in=already_logged_in, current_user=session.get("admin_user", "admin"))
+            if matched_user.business_id:
+                business = db.session.get(Business, matched_user.business_id)
+                session["clinic_name"] = business.name if business else "Clinic"
+                flash(f"Logged in to {session['clinic_name']} Admin Portal.", "success")
+                return redirect(url_for("admin_bp.dashboard"))
+            else:
+                session["clinic_name"] = "ClinicConnectAI Platform"
+                flash("Logged in as SaaS Platform Owner.", "success")
+                return redirect(url_for("platform_bp.dashboard"))
+        else:
+            flash("Invalid username or password.", "danger")
+
+    already_logged_in = bool(session.get("user_id"))
+    return render_template(
+        "login.html",
+        already_logged_in=already_logged_in,
+        current_user=session.get("admin_user", "admin")
+    )
+
 
 @admin_bp.route("/admin/logout")
 def logout():
@@ -40,15 +99,19 @@ def logout():
     flash("You have been logged out.", "info")
     return redirect(url_for("admin_bp.login"))
 
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+
 @admin_bp.route("/admin")
 @login_required
 def dashboard():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     business = db.session.get(Business, business_id)
 
     today_str = date.today().strftime("%Y-%m-%d")
 
-    # Metrics
     today_appointments = Appointment.query.filter_by(
         business_id=business_id,
         appointment_date=today_str,
@@ -77,38 +140,55 @@ def dashboard():
         reminder_count=scheduled_reminders_count
     )
 
+
+# ---------------------------------------------------------------------------
+# Appointments / Conversations / Reminders views
+# ---------------------------------------------------------------------------
+
 @admin_bp.route("/admin/appointments")
 @login_required
 def appointments_view():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     business = db.session.get(Business, business_id)
-    all_appointments = Appointment.query.filter_by(business_id=business_id).order_by(Appointment.appointment_date.desc(), Appointment.appointment_time.asc()).all()
+    all_appointments = Appointment.query.filter_by(business_id=business_id).order_by(
+        Appointment.appointment_date.desc(), Appointment.appointment_time.asc()
+    ).all()
     return render_template("appointments.html", business=business, appointments=all_appointments)
+
 
 @admin_bp.route("/admin/conversations")
 @login_required
 def conversations_view():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     business = db.session.get(Business, business_id)
-    all_conversations = Conversation.query.filter_by(business_id=business_id).order_by(Conversation.updated_at.desc()).all()
+    all_conversations = Conversation.query.filter_by(business_id=business_id).order_by(
+        Conversation.updated_at.desc()
+    ).all()
     return render_template("conversations.html", business=business, conversations=all_conversations)
+
 
 @admin_bp.route("/admin/reminders")
 @login_required
 def reminders_view():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     business = db.session.get(Business, business_id)
-    all_reminders = Reminder.query.filter_by(business_id=business_id).order_by(Reminder.scheduled_for.desc()).all()
+    all_reminders = Reminder.query.filter_by(business_id=business_id).order_by(
+        Reminder.scheduled_for.desc()
+    ).all()
     return render_template("reminders.html", business=business, reminders=all_reminders)
 
+
+# ---------------------------------------------------------------------------
 # Admin API actions
+# ---------------------------------------------------------------------------
+
 @admin_bp.route("/api/admin/takeover", methods=["POST"])
 @login_required
 def takeover_conversation():
     data = request.get_json() or {}
     conversation_id = data.get("conversation_id")
     reason = data.get("reason", "Admin manually took over the conversation")
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
 
     if not conversation_id:
         return jsonify({"success": False, "error": "conversation_id is required"}), 400
@@ -121,12 +201,13 @@ def takeover_conversation():
     status_code = 403 if result.get("code") == 403 else 200
     return jsonify(result), status_code
 
+
 @admin_bp.route("/api/admin/release", methods=["POST"])
 @login_required
 def release_to_ai():
     data = request.get_json() or {}
     conversation_id = data.get("conversation_id")
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
 
     if not conversation_id:
         return jsonify({"success": False, "error": "conversation_id is required"}), 400
@@ -138,13 +219,14 @@ def release_to_ai():
     status_code = 403 if result.get("code") == 403 else 200
     return jsonify(result), status_code
 
+
 @admin_bp.route("/api/admin/reply", methods=["POST"])
 @login_required
 def staff_reply():
     data = request.get_json() or {}
     conversation_id = data.get("conversation_id")
     message = data.get("message", "").strip()
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
 
     if not conversation_id or not message:
         return jsonify({"success": False, "error": "conversation_id and message are required"}), 400
@@ -157,6 +239,7 @@ def staff_reply():
     status_code = 403 if result.get("code") == 403 else 200
     return jsonify(result), status_code
 
+
 from services.booking_service import BookingService
 
 @admin_bp.route("/api/admin/appointments/cancel", methods=["POST"])
@@ -166,7 +249,7 @@ def admin_cancel_appointment():
     data = request.get_json() or {}
     appointment_id = data.get("appointment_id")
     reason = data.get("reason", "Cancelled by Admin Staff")
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
 
     if not appointment_id:
         return jsonify({"success": False, "error": "appointment_id is required"}), 400
@@ -184,21 +267,26 @@ def admin_cancel_appointment():
     status_code = 200 if result.get("success") else 400
     return jsonify(result), status_code
 
+
 from models import DoctorSchedule, DoctorLeave, DAYS_OF_WEEK
 
-# --- Doctor Schedule & Profile Management Routes ---
+# ---------------------------------------------------------------------------
+# Doctor Schedule & Profile Management Routes
+# ---------------------------------------------------------------------------
+
 @admin_bp.route("/admin/doctors")
 @login_required
 def doctors_view():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     business = db.session.get(Business, business_id)
     doctors = Doctor.query.filter_by(business_id=business_id).all()
     return render_template("doctors.html", business=business, doctors=doctors, days_of_week=DAYS_OF_WEEK)
 
+
 @admin_bp.route("/admin/doctors/add", methods=["POST"])
 @login_required
 def add_doctor():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     name = request.form.get("name", "").strip()
     specialization = request.form.get("specialization", "").strip()
     start_time_global = request.form.get("start_time", "09:00").strip()
@@ -236,7 +324,6 @@ def add_doctor():
         db.session.add(doctor)
         db.session.flush()
 
-        # Save per-day DoctorSchedule entries
         active_days = []
         for day in DAYS_OF_WEEK:
             is_avail = (f"is_available_{day}" in request.form) or (day in working_days_form)
@@ -269,10 +356,11 @@ def add_doctor():
 
     return redirect(url_for("admin_bp.doctors_view"))
 
+
 @admin_bp.route("/admin/doctors/edit/<int:doctor_id>", methods=["POST"])
 @login_required
 def edit_doctor(doctor_id):
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     doctor = Doctor.query.filter_by(id=doctor_id, business_id=business_id).first()
     if not doctor:
         flash("Doctor not found.", "danger")
@@ -305,7 +393,6 @@ def edit_doctor(doctor_id):
 
     working_days_form = request.form.getlist("working_days")
 
-    # Update 7-day weekly schedule
     active_days = []
     for day in DAYS_OF_WEEK:
         is_avail = (f"is_available_{day}" in request.form) or (day in working_days_form)
@@ -334,10 +421,11 @@ def edit_doctor(doctor_id):
     flash(f"Weekly schedule & profile for '{doctor.name}' updated successfully.", "success")
     return redirect(url_for("admin_bp.doctors_view"))
 
+
 @admin_bp.route("/admin/doctors/toggle/<int:doctor_id>", methods=["POST"])
 @login_required
 def toggle_doctor(doctor_id):
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     doctor = Doctor.query.filter_by(id=doctor_id, business_id=business_id).first()
     if doctor:
         doctor.is_active = not doctor.is_active
@@ -346,10 +434,11 @@ def toggle_doctor(doctor_id):
         flash(f"Doctor '{doctor.name}' {status_text}.", "info")
     return redirect(url_for("admin_bp.doctors_view"))
 
+
 @admin_bp.route("/admin/doctors/leave/add", methods=["POST"])
 @login_required
 def add_doctor_leave():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     doctor_id = int(request.form.get("doctor_id", 0))
     doctor = Doctor.query.filter_by(id=doctor_id, business_id=business_id).first()
     if not doctor:
@@ -389,6 +478,7 @@ def add_doctor_leave():
     flash(f"Leave/Blocked date on {leave_date} added for Dr. '{doctor.name}'.", "success")
     return redirect(url_for("admin_bp.doctors_view"))
 
+
 @admin_bp.route("/admin/doctors/leave/delete/<int:leave_id>", methods=["POST"])
 @login_required
 def delete_doctor_leave(leave_id):
@@ -399,11 +489,15 @@ def delete_doctor_leave(leave_id):
         flash("Leave entry removed.", "info")
     return redirect(url_for("admin_bp.doctors_view"))
 
-# --- Services & Pricing Management Routes ---
+
+# ---------------------------------------------------------------------------
+# Services & Pricing Management Routes
+# ---------------------------------------------------------------------------
+
 @admin_bp.route("/admin/services")
 @login_required
 def services_view():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     business = db.session.get(Business, business_id)
     doctors = Doctor.query.filter_by(business_id=business_id).all()
     services = Service.query.filter_by(business_id=business_id).order_by(Service.id.asc()).all()
@@ -433,10 +527,11 @@ def services_view():
         default_consultation_fee=consultation_fee
     )
 
+
 @admin_bp.route("/admin/services/add", methods=["POST"])
 @login_required
 def add_service():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     name = request.form.get("name", "").strip()
     description = request.form.get("description", "").strip()
     try:
@@ -473,10 +568,11 @@ def add_service():
     flash(f"Service '{name}' added successfully at PKR {price:,.0f}.", "success")
     return redirect(url_for("admin_bp.services_view"))
 
+
 @admin_bp.route("/admin/services/edit/<int:service_id>", methods=["POST"])
 @login_required
 def edit_service(service_id):
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     service = Service.query.filter_by(id=service_id, business_id=business_id).first()
     if not service:
         flash("Service not found.", "danger")
@@ -510,10 +606,11 @@ def edit_service(service_id):
     flash(f"Service '{name}' pricing and settings updated successfully.", "success")
     return redirect(url_for("admin_bp.services_view"))
 
+
 @admin_bp.route("/admin/services/toggle/<int:service_id>", methods=["POST"])
 @login_required
 def toggle_service(service_id):
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     service = Service.query.filter_by(id=service_id, business_id=business_id).first()
     if not service:
         if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -539,10 +636,11 @@ def toggle_service(service_id):
     flash(f"Service '{service.name}' {status_text}.", "info")
     return redirect(url_for("admin_bp.services_view"))
 
+
 @admin_bp.route("/admin/services/delete/<int:service_id>", methods=["POST"])
 @login_required
 def delete_service(service_id):
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     service = Service.query.filter_by(id=service_id, business_id=business_id).first()
     if not service:
         if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
@@ -551,7 +649,6 @@ def delete_service(service_id):
         return redirect(url_for("admin_bp.services_view"))
 
     name = service.name
-    # Check for linked appointments to prevent foreign key errors
     has_appts = Appointment.query.filter_by(service_id=service.id).first()
     if has_appts:
         service.is_active = False
@@ -571,10 +668,11 @@ def delete_service(service_id):
     flash(msg, "info")
     return redirect(url_for("admin_bp.services_view"))
 
+
 @admin_bp.route("/admin/settings/edit", methods=["POST"])
 @login_required
 def edit_settings():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     business = db.session.get(Business, business_id)
     if not business:
         flash("Business record not found.", "danger")
@@ -593,16 +691,22 @@ def edit_settings():
         pass
 
     db.session.commit()
+    # Update the cached clinic name in the session to reflect the rename
+    session["clinic_name"] = business.name
     from services.booking_service import RequestCache
     RequestCache.clear()
     flash("Clinic business information and consultation fee updated successfully.", "success")
     return redirect(url_for("admin_bp.services_view"))
 
-# --- Slot Occupancy Dashboard & Manual Booking Routes ---
+
+# ---------------------------------------------------------------------------
+# Slot Occupancy Dashboard & Manual Booking Routes
+# ---------------------------------------------------------------------------
+
 @admin_bp.route("/admin/slots")
 @login_required
 def slots_view():
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     business = db.session.get(Business, business_id)
     today_str = date.today().strftime("%Y-%m-%d")
     selected_date = request.args.get("date", today_str).strip()
@@ -625,8 +729,7 @@ def slots_view():
             date_str=selected_date
         )
         avail_slots = set(avail_res.get("available_slots", []))
-        
-        # Booked appointments for this doctor on this date
+
         booked_appts = Appointment.query.filter_by(
             business_id=business_id,
             doctor_id=doc.id,
@@ -654,10 +757,7 @@ def slots_view():
                     "appointment_id": appt.id
                 })
             else:
-                slots_detail.append({
-                    "time": s,
-                    "status": "AVAILABLE"
-                })
+                slots_detail.append({"time": s, "status": "AVAILABLE"})
 
         occupancy_data.append({
             "doctor": doc,
@@ -679,11 +779,12 @@ def slots_view():
         occupancy_data=occupancy_data
     )
 
+
 @admin_bp.route("/api/admin/appointments/manual-book", methods=["POST"])
 @login_required
 def admin_manual_book():
     data = request.get_json() or {}
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_id = _current_business_id()
     customer_name = data.get("customer_name", "").strip()
     customer_phone = data.get("customer_phone", "").strip()
     doctor_id = data.get("doctor_id")
@@ -710,4 +811,15 @@ def admin_manual_book():
     )
     status_code = 200 if result.get("success") else 400
     return jsonify(result), status_code
+
+
+# ---------------------------------------------------------------------------
+# Platform Owner — Onboard New Clinic
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/admin/platform/onboard-clinic", methods=["GET", "POST"])
+@platform_admin_required
+def onboard_clinic():
+    """Forward legacy URL to the dedicated Platform Console."""
+    return redirect(url_for("platform_bp.dashboard"))
 
