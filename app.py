@@ -39,17 +39,6 @@ def create_app(config_class=Config):
     app.register_blueprint(admin_bp)
     app.register_blueprint(platform_bp, url_prefix="/platform")
 
-    @app.before_request
-    def ensure_db_ready():
-        """Self-healing database check before each request to prevent missing table errors."""
-        try:
-            business = db.session.get(Business, Config.DEFAULT_BUSINESS_ID)
-            if not business:
-                seed_database(app)
-        except Exception:
-            db.session.rollback()
-            init_db(app)
-
     @app.route("/")
     @app.route("/clinic/<int:clinic_id>")
     def index(clinic_id=None):

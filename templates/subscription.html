@@ -104,6 +104,24 @@
         </div>
     </div>
 </div>
+{% elif sub_info.latest_rejected_request and not sub_info.pending_request %}
+<div class="section-card" style="margin-bottom: 24px; border-left: 4px solid #ef4444; background: #fef2f2;">
+    <div style="display: flex; gap: 14px; align-items: flex-start;">
+        <span style="font-size: 1.6rem;">❌</span>
+        <div>
+            <h3 style="margin: 0 0 6px 0; font-size: 1.1rem; color: #991b1b;">Previous Subscription Request Rejected</h3>
+            <p style="margin: 0 0 8px 0; font-size: 0.9rem; color: #7f1d1d;">
+                Your request for <strong>{{ sub_info.latest_rejected_request.plan_display_name }}</strong> was rejected by platform administration on {{ sub_info.latest_rejected_request.reviewed_at or 'recently' }}.
+                {% if sub_info.latest_rejected_request.notes %}
+                <br><strong>Reviewer Reason:</strong> {{ sub_info.latest_rejected_request.notes }}
+                {% endif %}
+            </p>
+            <span style="background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; padding: 3px 10px; border-radius: 4px; font-size: 0.8rem; font-weight: 700;">
+                Status: Rejected — Please select a plan below to submit an updated request
+            </span>
+        </div>
+    </div>
+</div>
 {% endif %}
 
 <!-- Select Plan / Request Upgrade Card -->

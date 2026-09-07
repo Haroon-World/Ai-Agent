@@ -592,11 +592,12 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                 if conv.intent == "RESCHEDULE_APPOINTMENT" and not conv.selected_service_id:
                     conv.awaiting_input = "service_choice"
                 elif not conv.selected_service_id and not conv.requested_date:
+                    is_availability_or_schedule = any(w in text_lower for w in ["availab", "slot", "timing", "schedule", "waqt", "kab", "when", "hours"])
                     is_urdu_flow = any('\u0600' <= ch <= '\u06FF' for ch in user_content) or (
                         any(w in text_lower for w in ["kr do", "kar do", "kar dein", "kr dein", "k sath", "ke sath"]) and
                         any(w in text_lower for w in ["appointment fix", "appointment book", "book kr", "fix kr"])
                     )
-                    if is_urdu_flow:
+                    if is_urdu_flow or is_availability_or_schedule:
                         conv.awaiting_input = "date_choice"
                     else:
                         conv.awaiting_input = "service_choice"
@@ -789,6 +790,9 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                 conv.selected_doctor_id = None
                 conv.requested_time = None
                 conv.awaiting_input = "doctor_choice"
+        if any(w in text_lower for w in ["change my appointment", "change appointment", "update my appointment", "change details", "reschedule"]):
+            conv.requested_time = None
+            conv.awaiting_input = "time_choice"
         time_token = _extract_time_token(user_content)
         if time_token:
             conv.requested_time = time_token
@@ -841,17 +845,18 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                 if conv.intent == "RESCHEDULE_APPOINTMENT" and not conv.selected_service_id:
                     conv.awaiting_input = "service_choice"
                 elif not conv.selected_service_id and not conv.requested_date:
+                    is_availability_or_schedule = any(w in text_lower for w in ["availab", "slot", "timing", "schedule", "waqt", "kab", "when", "hours"])
                     is_urdu_flow = any('\u0600' <= ch <= '\u06FF' for ch in user_content) or (
                         any(w in text_lower for w in ["kr do", "kar do", "kar dein", "kr dein", "k sath", "ke sath"]) and
                         any(w in text_lower for w in ["appointment fix", "appointment book", "book kr", "fix kr"])
                     )
-                    if is_urdu_flow:
+                    if is_urdu_flow or is_availability_or_schedule:
                         conv.awaiting_input = "date_choice"
                     else:
                         conv.awaiting_input = "service_choice"
                 elif not conv.requested_date:
                     conv.awaiting_input = "date_choice"
-                elif not conv.requested_time or (conv.awaiting_input == "time_choice" and _extract_time_token(user_content)):
+                elif not conv.requested_time:
                     conv.awaiting_input = "time_choice"
                 elif not conv.pending_customer_name:
                     conv.awaiting_input = "name"
@@ -864,7 +869,7 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                     conv.awaiting_input = "doctor_choice"
                 elif not conv.requested_date:
                     conv.awaiting_input = "date_choice"
-                elif not conv.requested_time or (conv.awaiting_input == "time_choice" and _extract_time_token(user_content)):
+                elif not conv.requested_time:
                     conv.awaiting_input = "time_choice"
                 elif not conv.pending_customer_name:
                     conv.awaiting_input = "name"
@@ -1482,7 +1487,8 @@ class Agent:
         Persist structured booking state into the conversation record after each tool call.
         """
         if tool_name == "check_availability":
-            conv.intent = "BOOK_APPOINTMENT"
+            if conv.intent != "RESCHEDULE_APPOINTMENT":
+                conv.intent = "BOOK_APPOINTMENT"
             if not conv.requested_time:
                 conv.workflow_state = "CHECKING_AVAILABILITY"
                 conv.awaiting_input = "time_choice"

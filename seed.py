@@ -164,22 +164,21 @@ def seed_database(app=None):
             is_platform_admin=True
         ).first()
         if not existing_platform_admin:
-            platform_owner = User(
-                business_id=None,
-                username=Config.PLATFORM_ADMIN_USERNAME,
-                password_hash=generate_password_hash(Config.PLATFORM_ADMIN_PASSWORD),
-                is_platform_admin=True,
-            )
-            db.session.add(platform_owner)
-            db.session.commit()
-            print(f"[Seed] Separate Platform Owner '{Config.PLATFORM_ADMIN_USERNAME}' created.")
+            if Config.PLATFORM_ADMIN_PASSWORD:
+                platform_owner = User(
+                    business_id=None,
+                    username=Config.PLATFORM_ADMIN_USERNAME,
+                    password_hash=generate_password_hash(Config.PLATFORM_ADMIN_PASSWORD),
+                    is_platform_admin=True,
+                )
+                db.session.add(platform_owner)
+                db.session.commit()
+                print(f"[Seed] Separate Platform Owner '{Config.PLATFORM_ADMIN_USERNAME}' created.")
         else:
-            # Ensure credentials and platform status are current
-            platform_owner = existing_platform_admin
-            platform_owner.business_id = None
-            platform_owner.is_platform_admin = True
-            platform_owner.set_password(Config.PLATFORM_ADMIN_PASSWORD)
-            db.session.commit()
+            # Preserve existing platform admin password — NEVER overwrite on startup
+            if existing_platform_admin.business_id is not None:
+                existing_platform_admin.business_id = None
+                db.session.commit()
 
     if app:
         with app.app_context():

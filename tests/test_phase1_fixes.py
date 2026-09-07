@@ -442,6 +442,7 @@ class TestTimezoneAwareness(BaseFixTest):
         future_date = self._next_monday()
         result = BookingService.check_availability(
             business_id=biz_id,
+            doctor_id=1,
             date_str=future_date
         )
         # Should return results, not an error

@@ -376,6 +376,9 @@ def _fuzzy_match_roster(user_text: str, roster: List[Dict[str, Any]], threshold:
                 # Token-level fuzzy ratio (e.g. "ahmad" vs "ahmed")
                 for tok in tokens:
                     if len(tok) >= 3:
+                        # Guard: Action/inquiry verbs must never fuzzy-match service names (e.g. 'check' vs 'checkup')
+                        if tok in ("check", "dekh", "dekhein", "batao", "batayein", "available", "timing", "schedule"):
+                            continue
                         r = difflib.SequenceMatcher(None, cand, tok).ratio()
                         if r >= 0.8:
                             score = max(score, r)
@@ -911,6 +914,10 @@ def _is_appointment_status_inquiry(text: str) -> bool:
         # Unless it specifically has "check again" or "cancelled or not"
         if not any(chk in lower for chk in ["check again", "cancelled or not", "cancel or not", "cancel hua ya nahi"]):
             return False
+
+    # If it is an explicit change / reschedule request, it's NOT a status inquiry
+    if any(sig in lower for sig in ["change my appointment", "change appointment", "change details", "update my appointment", "reschedule", "badal"]):
+        return False
 
     # Direct status inquiry phrases
     inquiry_phrases = [
@@ -1566,18 +1573,18 @@ class MockAdapter(BaseLLMAdapter):
             )
         ):
             from models import Customer, Appointment
-            # Check if an active appointment exists in DB to cancel
+            biz_id = conv_state.get("business_id", 1)
             cust_phone = effective_phone or conversation_state.get("pending_customer_phone")
             existing_appt = None
             if cust_phone:
-                cust = Customer.query.filter_by(phone=cust_phone.strip()).first()
+                cust = Customer.query.filter_by(phone=cust_phone.strip(), business_id=biz_id).first()
                 if cust:
                     existing_appt = Appointment.query.filter_by(
-                        customer_id=cust.id, status="CONFIRMED"
+                        business_id=biz_id, customer_id=cust.id, status="CONFIRMED"
                     ).order_by(Appointment.created_at.desc()).first()
             if not existing_appt:
                 existing_appt = Appointment.query.filter_by(
-                    status="CONFIRMED"
+                    business_id=biz_id, status="CONFIRMED"
                 ).order_by(Appointment.created_at.desc()).first()
 
             if existing_appt:
@@ -1702,9 +1709,12 @@ class MockAdapter(BaseLLMAdapter):
 
         if _is_schedule_intent:
             # Resolve doctor: current message override takes priority over conv_state
-            target_d_entry = _doc_override or (next((d for d in doctor_roster if d["id"] == doc_id), None) if doc_id else None)
-            if not target_d_entry and len(doctor_roster) == 1:
-                target_d_entry = doctor_roster[0]
+            if len(doctor_roster) > 1 and not _doc_override:
+                target_d_entry = None
+            else:
+                target_d_entry = _doc_override or (next((d for d in doctor_roster if d["id"] == doc_id), None) if doc_id else None)
+                if not target_d_entry and len(doctor_roster) == 1:
+                    target_d_entry = doctor_roster[0]
 
             if target_d_entry:
                 t_name = target_d_entry.get("name", "Doctor")
@@ -2101,7 +2111,7 @@ class MockAdapter(BaseLLMAdapter):
                         }
 
             elif awaiting_input == "confirmation":
-                if any(w in user_text for w in ["yes", "yeah", "confirm", "sure", "go ahead", "ok", "okay", "haan", "theek", "book it", "please book", "book"]):
+                if any(w in user_text for w in ["yes", "yeah", "confirm", "sure", "go ahead", "ok", "okay", "haan", "theek", "book it", "please book", "book", "same", "all the other data will be same", "baki sab same", "data will be same"]):
                     if not doc_id:
                         return _prompt_doctor_choice(doctor_roster, lang, effective_name)
                     doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id] if doc_id else service_roster
@@ -2145,18 +2155,20 @@ class MockAdapter(BaseLLMAdapter):
                         "tool_calls": []
                     }
                 else:
+                    chosen_t = time_token or req_time
+                    slot_intro = f"I have selected the {chosen_t} ({_fmt_time_ampm(chosen_t)}) slot on {target_date_str or 'the requested date'}. " if chosen_t else ""
                     if lang == "urdu":
                         return {
-                            "content": "براہ کرم بکنگ مکمل کرنے کے لیے مریض کا پورا نام بتائیں۔",
+                            "content": f"{slot_intro}براہ کرم بکنگ مکمل کرنے کے لیے مریض کا پورا نام اور فون نمبر فراہم کریں۔",
                             "tool_calls": []
                         }
                     elif lang == "roman_urdu":
                         return {
-                            "content": "Booking mukammal karne ke liye barah-e-karam patient ka poora naam batayein.",
+                            "content": f"{slot_intro}Booking mukammal karne ke liye barah-e-karam patient ka poora naam aur phone number provide karein.",
                             "tool_calls": []
                         }
                     return {
-                        "content": "To complete and confirm your booking, please provide the patient's full name.",
+                        "content": f"{slot_intro}To complete and confirm your booking, please provide the patient's full name and contact phone number.",
                         "tool_calls": []
                     }
 
@@ -2222,7 +2234,12 @@ class MockAdapter(BaseLLMAdapter):
                                 "tool_calls": []
                             }
                     req_time = time_token
-                    if effective_name and effective_phone and target_date_str:
+                    if conv_state.get("intent") == "RESCHEDULE_APPOINTMENT":
+                        return {
+                            "content": f"I have selected the {_fmt_time_ampm(time_token)} slot on {target_date_str} with {doc_name or 'our doctor'} for {svc_name or 'your service'}. Please confirm if you would like me to finalize this appointment change.",
+                            "tool_calls": []
+                        }
+                    elif effective_name and effective_phone and target_date_str:
                         doc_services = [s for s in service_roster if s.get("doctor_id") == doc_id] if doc_id else service_roster
                         effective_svc_id = svc_id or (doc_services[0]["id"] if doc_services else None)
                         return _make_booking_or_reschedule_tool(
@@ -2296,9 +2313,12 @@ class MockAdapter(BaseLLMAdapter):
         ]) or (target_weekday is not None and any(w in user_text for w in ["time", "timing", "schedule", "hours", "waqt", "کب", "وقت", "ٹائم", "شیڈول", "kya hai", "btao", "batao", "batayein"]))
 
         if has_schedule_term and not any(w in user_text for w in ["kal", "tomorrow", "today", "aaj"]):
-            target_d_entry = _doc_override or (next((d for d in doctor_roster if d["id"] == doc_id), None) if doc_id else None)
-            if not target_d_entry and len(doctor_roster) == 1:
-                target_d_entry = doctor_roster[0]
+            if len(doctor_roster) > 1 and not _doc_override:
+                target_d_entry = None
+            else:
+                target_d_entry = _doc_override or (next((d for d in doctor_roster if d["id"] == doc_id), None) if doc_id else None)
+                if not target_d_entry and len(doctor_roster) == 1:
+                    target_d_entry = doctor_roster[0]
 
             if target_d_entry:
                 t_name = target_d_entry.get("name", "Doctor")

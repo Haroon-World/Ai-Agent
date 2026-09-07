@@ -5,18 +5,45 @@
 {% block content %}
 <div class="login-wrapper" style="max-width: 620px; margin: 40px auto;">
     <div class="login-card" style="padding: 36px 30px; text-align: center;">
-        <div style="font-size: 3rem; margin-bottom: 16px;">⛔</div>
+        <div style="font-size: 3rem; margin-bottom: 16px;">{% if business and business.subscription_status == 'cancelled' %}🚫{% else %}⛔{% endif %}</div>
         <h1 style="font-size: 1.65rem; font-weight: 800; color: #991b1b; margin-bottom: 8px;">
-            Subscription or Trial Expired
+            {% if business and business.subscription_status == 'cancelled' %}
+                Subscription Cancelled / Suspended
+            {% else %}
+                Subscription or Trial Expired
+            {% endif %}
         </h1>
         <p style="color: #64748b; font-size: 0.95rem; margin-bottom: 24px; line-height: 1.5;">
-            The software access license for <strong>{{ business.name if business else "your clinic" }}</strong> has expired. To resume managing doctors, appointments, and live chat, please renew your subscription below.
+            {% if business and business.subscription_status == 'cancelled' %}
+                The software access license for <strong>{{ business.name if business else "your clinic" }}</strong> has been cancelled or suspended by platform administration. To reactivate your portal access, submit a reactivation request below or contact platform support.
+            {% else %}
+                The software access license for <strong>{{ business.name if business else "your clinic" }}</strong> has expired. To resume managing doctors, appointments, and live chat, please renew your subscription below.
+            {% endif %}
         </p>
+
+        {% if sub_info and sub_info.latest_rejected_request %}
+        <div style="background: #fff1f2; border: 1px solid #fecdd3; border-left: 4px solid #e11d48; border-radius: 8px; padding: 14px 16px; margin-bottom: 20px; text-align: left;">
+            <div style="font-weight: 700; color: #9f1239; font-size: 0.9rem; margin-bottom: 4px;">
+                ⚠️ Recent Renewal Request Rejected
+            </div>
+            <div style="font-size: 0.85rem; color: #881337; line-height: 1.4;">
+                Your request for <strong>{{ sub_info.latest_rejected_request.plan_display_name }}</strong> was reviewed and rejected by platform team on {{ sub_info.latest_rejected_request.reviewed_at or 'recently' }}.
+                {% if sub_info.latest_rejected_request.notes %}
+                <br><strong>Reason:</strong> {{ sub_info.latest_rejected_request.notes }}
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
 
         <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 18px; margin-bottom: 28px; text-align: left;">
             <div style="font-size: 0.85rem; color: #991b1b; margin-bottom: 6px;">
-                <strong>License Status:</strong> Inactive / Expired
+                <strong>License Status:</strong> {% if business and business.subscription_status == 'cancelled' %}<span style="color: #dc2626; font-weight: 700;">Cancelled / Suspended</span>{% else %}Inactive / Expired{% endif %}
             </div>
+            {% if sub_info and sub_info.cancellation_reason %}
+            <div style="font-size: 0.85rem; color: #7f1d1d; margin-bottom: 6px;">
+                <strong>Cancellation Details:</strong> {{ sub_info.cancellation_reason }}
+            </div>
+            {% endif %}
             {% if business and business.effective_expiry_date %}
             <div style="font-size: 0.85rem; color: #7f1d1d;">
                 <strong>Expiration Date:</strong> {{ business.effective_expiry_date.strftime('%B %d, %Y') }}

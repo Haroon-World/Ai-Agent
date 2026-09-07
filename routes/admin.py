@@ -8,6 +8,7 @@ from config.config import Config
 from models import db, Business, Appointment, Conversation, Message, Reminder, Customer, Doctor, Service
 from models.user import User
 from services.handoff_service import HandoffService
+from services.subscription_service import SubscriptionService
 
 admin_bp = Blueprint("admin_bp", __name__)
 
@@ -43,20 +44,45 @@ def login_required(f):
 
 
 def platform_admin_required(f):
-    """Allow only users with is_platform_admin=True; 403 for regular clinic admins."""
+    """Allow only verified platform admins; resilient against multi-tab clinic switching."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not session.get("user_id"):
+        # 1. Check if platform_admin_id exists in session and verify in DB
+        p_id = session.get("platform_admin_id")
+        if p_id:
+            p_user = db.session.get(User, p_id)
+            if p_user and p_user.is_platform_admin:
+                session["is_platform_admin"] = True
+                return f(*args, **kwargs)
+
+        # 2. Check if user_id in session is a verified platform admin in DB
+        u_id = session.get("user_id")
+        if u_id:
+            u_user = db.session.get(User, u_id)
+            if u_user and u_user.is_platform_admin:
+                session["is_platform_admin"] = True
+                session["platform_admin_id"] = u_user.id
+                session["platform_admin_user"] = u_user.username
+                return f(*args, **kwargs)
+
+        if not session.get("user_id") and not session.get("platform_admin_id"):
             return redirect(url_for("platform_bp.login"))
-        if not session.get("is_platform_admin"):
-            abort(403)
-        return f(*args, **kwargs)
+
+        abort(403)
     return decorated_function
 
 
 def _current_business_id() -> int:
     """Return the business_id of the currently logged-in admin from the session."""
-    return session["business_id"]
+    bid = session.get("business_id")
+    if bid is not None:
+        return bid
+    # Fallback when platform admin inspects /admin pages directly
+    clinic_param = request.args.get("clinic") or request.args.get("clinic_id") or session.get("active_clinic_id")
+    if clinic_param and str(clinic_param).isdigit():
+        return int(clinic_param)
+    first_b = Business.query.order_by(Business.id.asc()).first()
+    return first_b.id if first_b else 1
 
 
 # ---------------------------------------------------------------------------
@@ -65,17 +91,85 @@ def _current_business_id() -> int:
 
 @admin_bp.route("/admin/login", methods=["GET", "POST"])
 def login():
+    clinic_param = (
+        request.form.get("clinic") or
+        request.form.get("clinic_id") or
+        request.args.get("clinic") or
+        request.args.get("clinic_id") or
+        ""
+    ).strip()
+
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
 
-        # Find clinic user with that username (clinic tenant admins only)
         matched_user = None
-        candidates = User.query.filter_by(username=username).all()
-        for candidate in candidates:
-            if candidate.check_password(password):
+
+        if clinic_param:
+            target_business = None
+            if clinic_param.isdigit():
+                target_business = db.session.get(Business, int(clinic_param))
+            else:
+                target_business = Business.query.filter_by(name=clinic_param).first()
+
+            if not target_business:
+                flash(f"Clinic '{clinic_param}' not found.", "danger")
+                return render_template(
+                    "login.html",
+                    already_logged_in=bool(session.get("user_id")),
+                    current_user=session.get("admin_user", "admin"),
+                    require_clinic_id=True,
+                    clinic_param=clinic_param
+                )
+
+            candidate = User.query.filter_by(
+                username=username,
+                business_id=target_business.id,
+                is_platform_admin=False
+            ).first()
+            if candidate and candidate.check_password(password):
                 matched_user = candidate
-                break
+            else:
+                flash("Invalid username or password for this clinic.", "danger")
+                return render_template(
+                    "login.html",
+                    already_logged_in=bool(session.get("user_id")),
+                    current_user=session.get("admin_user", "admin"),
+                    require_clinic_id=True,
+                    clinic_param=clinic_param
+                )
+        else:
+            candidates = User.query.filter_by(username=username).all()
+            clinic_candidates = [c for c in candidates if not c.is_platform_admin]
+            platform_candidates = [c for c in candidates if c.is_platform_admin]
+
+            # Check if this username belongs to platform admin
+            for pc in platform_candidates:
+                if pc.check_password(password):
+                    flash("Unauthorized: Platform Owner accounts cannot sign in through the Clinic Client Portal. Please use the dedicated Platform Master Login at /platform/login.", "warning")
+                    return render_template(
+                        "login.html",
+                        already_logged_in=bool(session.get("user_id")),
+                        current_user=session.get("admin_user", "admin")
+                    )
+
+            if len(clinic_candidates) == 0:
+                flash("Invalid username or password.", "danger")
+            elif len(clinic_candidates) == 1:
+                if clinic_candidates[0].check_password(password):
+                    matched_user = clinic_candidates[0]
+                else:
+                    flash("Invalid username or password.", "danger")
+            else:
+                # Multiple clinics share this username — refuse to guess
+                flash(f"Multiple clinics found with username '{username}'. Please specify your Clinic ID to sign in.", "warning")
+                return render_template(
+                    "login.html",
+                    already_logged_in=bool(session.get("user_id")),
+                    current_user=session.get("admin_user", "admin"),
+                    username=username,
+                    require_clinic_id=True
+                )
 
         if matched_user:
             # Block platform owners from using the clinic client login portal
@@ -87,12 +181,23 @@ def login():
                     current_user=session.get("admin_user", "admin")
                 )
 
+            # Preserve active platform admin session if logged in concurrently
+            p_admin_id = session.get("platform_admin_id")
+            p_admin_user = session.get("platform_admin_user")
+
             session.clear()
             session.permanent = True
+
+            if p_admin_id:
+                session["platform_admin_id"] = p_admin_id
+                session["platform_admin_user"] = p_admin_user
+                session["is_platform_admin"] = True
+
             session["user_id"] = matched_user.id
             session["business_id"] = matched_user.business_id
             session["admin_user"] = matched_user.username
-            session["is_platform_admin"] = False
+            if not p_admin_id:
+                session["is_platform_admin"] = False
 
             business = db.session.get(Business, matched_user.business_id)
             session["clinic_name"] = business.name if business else "Clinic"
@@ -104,14 +209,13 @@ def login():
 
             flash(f"Logged in to {session['clinic_name']} Admin Portal.", "success")
             return redirect(url_for("admin_bp.dashboard"))
-        else:
-            flash("Invalid username or password.", "danger")
 
     already_logged_in = bool(session.get("user_id")) and not bool(session.get("is_platform_admin"))
     return render_template(
         "login.html",
         already_logged_in=already_logged_in,
-        current_user=session.get("admin_user", "admin")
+        current_user=session.get("admin_user", "admin"),
+        clinic_param=clinic_param
     )
 
 
@@ -181,6 +285,13 @@ def dashboard():
     human_handoffs = Conversation.query.filter_by(business_id=business_id, status="HUMAN").all()
     scheduled_reminders_count = Reminder.query.filter_by(business_id=business_id, status="SCHEDULED").count()
 
+    sub_info = SubscriptionService.get_subscription_info(business_id)
+    rejection_notice = None
+    if sub_info and sub_info.get("latest_rejected_request"):
+        rej = sub_info["latest_rejected_request"]
+        if not session.get(f"dismissed_rejection_{rej['id']}"):
+            rejection_notice = rej
+
     return render_template(
         "dashboard.html",
         business=business,
@@ -190,7 +301,9 @@ def dashboard():
         total_conversations=total_conversations,
         human_handoff_count=len(human_handoffs),
         human_handoffs=human_handoffs,
-        reminder_count=scheduled_reminders_count
+        reminder_count=scheduled_reminders_count,
+        sub_info=sub_info,
+        rejection_notice=rejection_notice
     )
 
 
@@ -538,10 +651,18 @@ def add_doctor_leave():
 @login_required
 def delete_doctor_leave(leave_id):
     leave = db.session.get(DoctorLeave, leave_id)
-    if leave:
-        db.session.delete(leave)
-        db.session.commit()
-        flash("Leave entry removed.", "info")
+    if not leave:
+        flash("Leave entry not found.", "warning")
+        return redirect(url_for("admin_bp.doctors_view"))
+
+    business_id = _current_business_id()
+    if not leave.doctor or leave.doctor.business_id != business_id:
+        if not session.get("is_platform_admin"):
+            abort(403)
+
+    db.session.delete(leave)
+    db.session.commit()
+    flash("Leave entry removed.", "info")
     return redirect(url_for("admin_bp.doctors_view"))
 
 
@@ -607,9 +728,17 @@ def add_service():
         flash("Service name is required.", "danger")
         return redirect(url_for("admin_bp.services_view"))
 
+    # Verify doctor belongs to this clinic
+    doctor = Doctor.query.filter_by(id=doctor_id, business_id=business_id).first()
+    if not doctor:
+        flash("Selected doctor does not belong to your clinic.", "danger")
+        if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return jsonify({"success": False, "error": "Selected doctor does not belong to your clinic."}), 403
+        return redirect(url_for("admin_bp.services_view"))
+
     service = Service(
         business_id=business_id,
-        doctor_id=doctor_id,
+        doctor_id=doctor.id,
         name=name,
         description=description or None,
         duration=duration,
@@ -875,8 +1004,9 @@ def admin_manual_book():
 @admin_bp.route("/admin/platform/onboard-clinic", methods=["GET", "POST"])
 @platform_admin_required
 def onboard_clinic():
-    """Forward legacy URL to the dedicated Platform Console."""
-    return redirect(url_for("platform_bp.onboard_clinic_view"))
+    """Forward legacy URL directly to the dedicated Platform Console handler."""
+    from routes.platform import onboard_clinic_view
+    return onboard_clinic_view()
 
 
 # ---------------------------------------------------------------------------
@@ -886,12 +1016,8 @@ def onboard_clinic():
 @admin_bp.route("/admin/forgot-password", methods=["GET", "POST"])
 def forgot_password():
     """Allow clinic owners/staff to initiate a secure password reset."""
-    reset_url = None
-    target_username = None
-
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
-        target_username = username
         if not username:
             flash("Please enter your admin username.", "warning")
             return render_template("forgot_password.html")
@@ -899,14 +1025,14 @@ def forgot_password():
         # Find user account (clinic staff only)
         user = User.query.filter_by(username=username, is_platform_admin=False).first()
         if user:
-            token = user.generate_reset_token(expires_in_hours=1)
+            user.generate_reset_token(expires_in_hours=1)
             db.session.commit()
-            reset_url = url_for("admin_bp.reset_password", token=token, _external=True)
-            flash("Password reset token generated successfully. In production, this link is delivered via email or SMS.", "success")
-        else:
-            flash(f"No clinic administrator account found with username '{username}'.", "danger")
 
-    return render_template("forgot_password.html", reset_url=reset_url, username=target_username)
+        # Always return generic success notice to prevent username enumeration and never expose token
+        flash("If an account exists for that username, password reset instructions have been dispatched.", "info")
+        return redirect(url_for("admin_bp.login"))
+
+    return render_template("forgot_password.html")
 
 
 @admin_bp.route("/admin/reset-password/<token>", methods=["GET", "POST"])
@@ -1001,9 +1127,20 @@ def cancel_own_subscription():
 
 @admin_bp.route("/admin/subscription-expired")
 def subscription_expired():
-    """Lockout notice page displayed when a clinic's subscription or trial has expired."""
+    """Lockout notice page displayed when a clinic's subscription or trial has expired or been cancelled."""
     business_id = session.get("business_id")
     business = db.session.get(Business, business_id) if business_id else None
-    return render_template("subscription_expired.html", business=business)
+    sub_info = SubscriptionService.get_subscription_info(business_id) if business_id else None
+    return render_template("subscription_expired.html", business=business, sub_info=sub_info)
+
+
+@admin_bp.route("/admin/subscription/dismiss-notice", methods=["POST"])
+@login_required
+def dismiss_subscription_notice():
+    """Dismiss a rejected subscription request notification for the current admin session."""
+    req_id = request.form.get("request_id")
+    if req_id:
+        session[f"dismissed_rejection_{req_id}"] = True
+    return jsonify({"success": True})
 
 

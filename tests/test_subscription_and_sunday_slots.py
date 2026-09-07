@@ -225,8 +225,8 @@ class TestSubscriptionAndSundaySlots(unittest.TestCase):
         """Clinic admin requests reset token and sets new password."""
         # Step 1: Request reset token
         res = self.client.post("/admin/forgot-password", data={"username": "apex_admin"}, follow_redirects=True)
-        self.assertEqual(res.status_code, 200)
-        self.assertIn(b"Reset Token Generated", res.data)
+        self.assertIn(b"If an account exists for that username, password reset instructions have been dispatched.", res.data)
+        self.assertNotIn(b"Reset Token Generated", res.data)
 
         with self.app.app_context():
             user = User.query.filter_by(username="apex_admin").first()

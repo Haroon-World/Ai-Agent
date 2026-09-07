@@ -35,6 +35,36 @@ class SubscriptionService:
 
         badge = business.subscription_badge
         pending = business.current_pending_request
+
+        # Retrieve latest approved request
+        latest_approved = SubscriptionRequest.query.filter_by(
+            business_id=business_id, status="approved"
+        ).order_by(SubscriptionRequest.reviewed_at.desc(), SubscriptionRequest.id.desc()).first()
+
+        # Retrieve latest rejected request to alert the clinic admin if applicable
+        latest_rejected = SubscriptionRequest.query.filter_by(
+            business_id=business_id, status="rejected"
+        ).order_by(SubscriptionRequest.reviewed_at.desc(), SubscriptionRequest.id.desc()).first()
+
+        # Once client new plan is approved by onboarding team, wipe out rejection messages:
+        if latest_rejected and latest_approved:
+            app_time = latest_approved.reviewed_at or latest_approved.created_at
+            rej_time = latest_rejected.reviewed_at or latest_rejected.created_at
+            if (app_time and rej_time and app_time >= rej_time) or (latest_approved.id > latest_rejected.id):
+                latest_rejected = None
+
+        if business.is_subscription_valid and business.subscription_status == "active" and latest_approved:
+            latest_rejected = None
+
+        # Retrieve latest cancellation notes if subscription is cancelled
+        latest_cancelled = SubscriptionRequest.query.filter_by(
+            business_id=business_id, status="cancelled"
+        ).order_by(SubscriptionRequest.reviewed_at.desc(), SubscriptionRequest.id.desc()).first()
+
+        cancellation_reason = None
+        if business.subscription_status == "cancelled":
+            cancellation_reason = (latest_cancelled.notes if latest_cancelled and latest_cancelled.notes else "Suspended by platform administration")
+
         return {
             "success": True,
             "business_id": business.id,
@@ -48,7 +78,10 @@ class SubscriptionService:
             "subscription_expires_at": business.subscription_expires_at.strftime("%Y-%m-%d") if business.subscription_expires_at else None,
             "effective_expiry_date": business.effective_expiry_date.strftime("%Y-%m-%d") if business.effective_expiry_date else None,
             "badge": badge,
-            "pending_request": pending.to_dict() if pending else None
+            "pending_request": pending.to_dict() if pending else None,
+            "latest_rejected_request": latest_rejected.to_dict() if latest_rejected else None,
+            "is_cancelled": (business.subscription_status == "cancelled"),
+            "cancellation_reason": cancellation_reason
         }
 
     @staticmethod
@@ -152,6 +185,15 @@ class SubscriptionService:
         req.reviewed_at = datetime.now(timezone.utc)
         req.reviewed_by = reviewer_username
 
+        # Wipe out any previous rejected or cancelled subscription notices for this clinic
+        prior_notices = SubscriptionRequest.query.filter(
+            SubscriptionRequest.business_id == business.id,
+            SubscriptionRequest.id != req.id,
+            SubscriptionRequest.status.in_(["rejected", "cancelled"])
+        ).all()
+        for pn in prior_notices:
+            pn.status = "archived"
+
         db.session.commit()
 
         return {
@@ -201,10 +243,24 @@ class SubscriptionService:
         pending_requests = SubscriptionRequest.query.filter_by(
             business_id=business_id, status="pending"
         ).all()
-        for pr in pending_requests:
-            pr.status = "cancelled"
-            pr.reviewed_at = datetime.now(timezone.utc)
-            pr.notes = f"Cancelled due to subscription cancellation ({reason or 'User/Admin Action'})"
+        if pending_requests:
+            for pr in pending_requests:
+                pr.status = "cancelled"
+                pr.reviewed_at = datetime.now(timezone.utc)
+                pr.notes = reason or "Cancelled due to subscription cancellation"
+        else:
+            cancel_req = SubscriptionRequest(
+                business_id=business_id,
+                plan_name=business.active_plan_name or "Standard Plan",
+                plan_display_name=business.active_plan_name or "Standard Plan",
+                duration_days=0,
+                requested_by_user="Platform Admin",
+                status="cancelled",
+                reviewed_at=datetime.now(timezone.utc),
+                reviewed_by="Platform Admin",
+                notes=reason or "Suspended by platform administration"
+            )
+            db.session.add(cancel_req)
 
         db.session.commit()
         return {
@@ -226,6 +282,15 @@ class SubscriptionService:
         business.active_plan_name = business.active_plan_name or "Standard Monthly Plan (30 Days)"
         business.subscription_start_date = business.subscription_start_date or now_utc
         business.subscription_expires_at = now_utc + timedelta(days=days)
+
+        # Wipe out any previous rejected or cancelled subscription notices
+        prior_notices = SubscriptionRequest.query.filter(
+            SubscriptionRequest.business_id == business.id,
+            SubscriptionRequest.status.in_(["rejected", "cancelled"])
+        ).all()
+        for pn in prior_notices:
+            pn.status = "archived"
+
         db.session.commit()
 
         return {
@@ -253,6 +318,14 @@ class SubscriptionService:
         business.subscription_expires_at = end_date
         business.subscription_status = "active" if end_naive >= now_utc else "expired"
         business.active_plan_name = f"Custom Schedule ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')})"
+
+        if business.subscription_status == "active":
+            prior_notices = SubscriptionRequest.query.filter(
+                SubscriptionRequest.business_id == business.id,
+                SubscriptionRequest.status.in_(["rejected", "cancelled"])
+            ).all()
+            for pn in prior_notices:
+                pn.status = "archived"
 
         db.session.commit()
         return {
@@ -282,6 +355,14 @@ class SubscriptionService:
         business.subscription_status = "active"
         business.subscription_start_date = business.subscription_start_date or now_utc
         business.subscription_expires_at = base_date + timedelta(days=days)
+
+        prior_notices = SubscriptionRequest.query.filter(
+            SubscriptionRequest.business_id == business.id,
+            SubscriptionRequest.status.in_(["rejected", "cancelled"])
+        ).all()
+        for pn in prior_notices:
+            pn.status = "archived"
+
         db.session.commit()
 
         return {

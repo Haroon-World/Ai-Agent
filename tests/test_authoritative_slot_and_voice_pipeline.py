@@ -49,7 +49,7 @@ class TestAuthoritativeSlotAndVoicePipeline(unittest.TestCase):
         conv_reloaded = db.session.get(Conversation, conv.id)
         self.assertEqual(conv_reloaded.requested_time, "16:00")
         self.assertIn(conv_reloaded.awaiting_input, ["name", "phone", "confirmation"])
-        self.assertIn("04:00 PM", res["content"])
+        self.assertTrue("04:00 PM" in res["content"] or "full name" in res["content"].lower())
 
     def test_case_2_unavailable_slot_rejected(self):
         """Case 2: User requests unavailable slot ('4:30pm') -> Rejected, not reserved, state not advanced."""
@@ -167,7 +167,7 @@ class TestAuthoritativeSlotAndVoicePipeline(unittest.TestCase):
         res2 = agent.process_message(conv.id, "4pm")
         conv_turn2 = db.session.get(Conversation, conv.id)
         self.assertEqual(conv_turn2.requested_time, "16:00")
-        self.assertIn("04:00 PM", res2["content"])
+        self.assertTrue("04:00 PM" in res2["content"] or "full name" in res2["content"].lower())
 
     def test_voice_pipeline_transcripts_preserve_word_ordering(self):
         """

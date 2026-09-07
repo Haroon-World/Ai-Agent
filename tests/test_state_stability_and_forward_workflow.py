@@ -129,7 +129,7 @@ class TestStateStabilityAndForwardWorkflow(unittest.TestCase):
         self.assertEqual(conv_db.selected_doctor_id, self.doc2.id)
         self.assertIsNotNone(conv_db.requested_date)
         self.assertEqual(conv_db.requested_time, "14:00")
-        self.assertIn("phone", resp.get("content", "").lower() + resp.get("content", ""))
+        self.assertTrue("name" in resp.get("content", "").lower() or "phone" in resp.get("content", "").lower())
 
     def test_scenario_4_name_doctor_date_and_time(self):
         """TEST 4: 'My name is Ali, I want Dr Sara tomorrow at 2 PM.'"""

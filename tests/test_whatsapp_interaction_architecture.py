@@ -36,7 +36,7 @@ class TestWhatsAppInteractionArchitecture(unittest.TestCase):
         return (today + timedelta(days=1)).strftime('%Y-%m-%d')
 
     def test_1_service_selection_schema(self):
-        conv = Conversation(business_id=1, status='AI', intent='BOOK_APPOINTMENT', workflow_state='START')
+        conv = Conversation(business_id=1, status='AI', intent='BOOK_APPOINTMENT', workflow_state='START', awaiting_input='service_choice')
         db.session.add(conv)
         db.session.commit()
 
@@ -53,7 +53,7 @@ class TestWhatsAppInteractionArchitecture(unittest.TestCase):
         self.assertIn('description', opt)
 
     def test_2_doctor_selection_schema(self):
-        conv = Conversation(business_id=1, status='AI', intent='BOOK_APPOINTMENT', workflow_state='COLLECTING_INFO', selected_service_id=1)
+        conv = Conversation(business_id=1, status='AI', intent='BOOK_APPOINTMENT', workflow_state='COLLECTING_INFO', selected_service_id=1, awaiting_input='doctor_choice')
         db.session.add(conv)
         db.session.commit()
 
@@ -69,7 +69,7 @@ class TestWhatsAppInteractionArchitecture(unittest.TestCase):
         self.assertIn('value', opt)
 
     def test_3_date_selection_schema(self):
-        conv = Conversation(business_id=1, status='AI', intent='BOOK_APPOINTMENT', workflow_state='COLLECTING_INFO', selected_service_id=1, selected_doctor_id=2)
+        conv = Conversation(business_id=1, status='AI', intent='BOOK_APPOINTMENT', workflow_state='COLLECTING_INFO', selected_service_id=1, selected_doctor_id=2, awaiting_input='date_choice')
         db.session.add(conv)
         db.session.commit()
 

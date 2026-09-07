@@ -100,7 +100,7 @@ class TestDoctorSchedulesAndTypoIntent(unittest.TestCase):
         db.session.commit()
 
         agent = Agent(business_id=1, llm_provider="mock")
-        res = agent.process_message(conv.id, "i want an appoinment for tomorrow, tell me schdeule")
+        res = agent.process_message(conv.id, "i want an appoinment with dr ahmed for tomorrow, tell me schdeule")
 
         self.assertEqual(res["status"], "AI")
         # Check that check_availability tool was executed

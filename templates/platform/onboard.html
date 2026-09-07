@@ -453,6 +453,46 @@
             color: #a5b4fc;
             border: 1px solid rgba(99, 102, 241, 0.35);
         }
+        .password-field-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+            width: 100%;
+        }
+        .password-field-wrapper input {
+            width: 100%;
+            padding-right: 44px !important;
+        }
+        .password-toggle-btn {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            padding: 6px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: color 0.15s ease;
+            z-index: 2;
+        }
+        .password-toggle-btn:hover {
+            color: var(--text-main);
+        }
+        .password-toggle-btn svg {
+            width: 20px;
+            height: 20px;
+            stroke: currentColor;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            display: block;
+        }
     </style>
 </head>
 <body>
@@ -563,7 +603,8 @@
                     <div class="cred-item" style="margin-top: 8px;">
                         <div class="cred-label">Password</div>
                         <div class="cred-box">
-                            <input type="text" id="dispPassword" class="cred-code" value="{{ success_info.admin_password }}" readonly>
+                            <input type="password" id="dispPassword" class="cred-code" value="{{ success_info.admin_password }}" readonly style="letter-spacing: 0.08em;">
+                            <button type="button" class="btn-copy" onclick="togglePlatformPassword('dispPassword', this)" title="Show / Hide Password" style="margin-right: 6px;">👁️ Show</button>
                             <button type="button" class="btn-copy" onclick="copyField('dispPassword', this)">📋 Copy</button>
                         </div>
                     </div>
@@ -695,7 +736,12 @@
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="admin_password">Initial Temporary Password *</label>
-                            <input type="text" id="admin_password" name="admin_password" class="form-input" placeholder="Min 6 characters" required minlength="6" autocomplete="off">
+                            <div class="password-field-wrapper">
+                                <input type="password" id="admin_password" name="admin_password" class="form-input" placeholder="Min 6 characters" required minlength="6" autocomplete="new-password">
+                                <button type="button" class="password-toggle-btn" onclick="togglePlatformPassword('admin_password', this)" aria-label="Show password" title="Show password">
+                                    <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                </button>
+                            </div>
                             <div class="helper-text">The clinic owner can change this password upon login.</div>
                         </div>
                     </div>
@@ -736,6 +782,30 @@
             }).catch(err => {
                 console.error('Failed to copy', err);
             });
+        }
+
+        function togglePlatformPassword(fieldId, btn) {
+            const input = document.getElementById(fieldId);
+            if (!input) return;
+            if (input.type === 'password') {
+                input.type = 'text';
+                btn.setAttribute('aria-label', 'Hide password');
+                btn.setAttribute('title', 'Hide password');
+                if (btn.querySelector('svg')) {
+                    btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>';
+                } else {
+                    btn.innerHTML = '🙈 Hide';
+                }
+            } else {
+                input.type = 'password';
+                btn.setAttribute('aria-label', 'Show password');
+                btn.setAttribute('title', 'Show password');
+                if (btn.querySelector('svg')) {
+                    btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+                } else {
+                    btn.innerHTML = '👁️ Show';
+                }
+            }
         }
     </script>
 </body>

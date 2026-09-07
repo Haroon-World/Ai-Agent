@@ -291,8 +291,8 @@ class TestAppointmentStatusAndUIGuard(unittest.TestCase):
 
             agent = Agent(business_id=1, llm_provider="mock")
 
-            # Turn 1: User asks for slots tomorrow
-            res1 = agent.process_message(conv.id, "appointments for tomorrow.")
+            # Turn 1: User asks for slots tomorrow with Dr. Ahmed
+            res1 = agent.process_message(conv.id, "appointments with dr ahmed for tomorrow.")
             self.assertIn("04:00 PM", res1.get("content", ""))
 
             # Turn 2: User selects 4pm

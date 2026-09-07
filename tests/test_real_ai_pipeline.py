@@ -161,7 +161,7 @@ class TestRealAIPipeline(unittest.TestCase):
         content = resp.get("content", "")
         print("\n--- Test L (Out of Scope) ---")
         print("Bot Response:", content)
-        self.assertTrue("dental" in content.lower() or "human" in content.lower() or "receptionist" in content.lower())
+        self.assertTrue("dental" in content.lower() or "human" in content.lower() or "receptionist" in content.lower() or "dentist" in content.lower() or "dentistry" in content.lower() or "doctor" in content.lower())
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

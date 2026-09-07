@@ -1495,3 +1495,50 @@ body {
 .flash-success { background: var(--success-light); color: var(--success); border: 1px solid #a7f3d0; }
 .flash-danger { background: var(--danger-light); color: var(--danger); border: 1px solid #fecaca; }
 .flash-info { background: var(--primary-light); color: var(--primary); border: 1px solid #bfdbfe; }
+
+/* Show / Hide Password Input Field Controls */
+.password-field-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+.password-field-wrapper input {
+    width: 100%;
+    padding-right: 44px !important;
+}
+
+.password-toggle-btn {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    color: #64748b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    transition: color 0.15s ease, background-color 0.15s ease;
+    z-index: 2;
+}
+
+.password-toggle-btn:hover {
+    color: #1e293b;
+    background-color: #f1f5f9;
+}
+
+.password-toggle-btn svg {
+    width: 20px;
+    height: 20px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    display: block;
+}

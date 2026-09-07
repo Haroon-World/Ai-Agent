@@ -819,8 +819,11 @@ class BookingService:
             cust = None
             if clean_phone:
                 cust = Customer.query.filter(
-                    (Customer.phone == customer_phone) |
-                    (Customer.phone.like(f"%{clean_phone[-10:]}%") if len(clean_phone) >= 7 else False)
+                    Customer.business_id == business_id,
+                    (
+                        (Customer.phone == customer_phone) |
+                        (Customer.phone.like(f"%{clean_phone[-10:]}%") if len(clean_phone) >= 7 else False)
+                    )
                 ).first()
             if cust:
                 appts = Appointment.query.filter_by(

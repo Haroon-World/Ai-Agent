@@ -18,16 +18,35 @@ platform_bp = Blueprint("platform_bp", __name__)
 def platform_admin_required(f):
     """
     Ensure the user is logged in as a Platform Owner (is_platform_admin=True).
-    Redirects unauthenticated users to the platform master login.
-    Returns 403 Forbidden for any clinic admin attempting to access.
+    Checks both session flags and DB records (via platform_admin_id or user_id)
+    to avoid 403 errors when concurrent clinic admin tabs are open.
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not session.get("user_id"):
+        # 1. Check if platform_admin_id exists in session and verify in DB
+        p_id = session.get("platform_admin_id")
+        if p_id:
+            p_user = db.session.get(User, p_id)
+            if p_user and p_user.is_platform_admin:
+                session["is_platform_admin"] = True
+                return f(*args, **kwargs)
+
+        # 2. Check if user_id in session is a verified platform admin in DB
+        u_id = session.get("user_id")
+        if u_id:
+            u_user = db.session.get(User, u_id)
+            if u_user and u_user.is_platform_admin:
+                session["is_platform_admin"] = True
+                session["platform_admin_id"] = u_user.id
+                session["platform_admin_user"] = u_user.username
+                return f(*args, **kwargs)
+
+        # 3. If direct flag is True but no user_id (unusual), check user_id
+        if not session.get("user_id") and not session.get("platform_admin_id"):
             return redirect(url_for("platform_bp.login"))
-        if not session.get("is_platform_admin"):
-            abort(403)
-        return f(*args, **kwargs)
+
+        # User is authenticated as clinic user (or other non-platform user)
+        abort(403)
     return decorated_function
 
 
@@ -50,13 +69,24 @@ def login():
                 break
 
         if matched_user:
-            session.clear()
+            # Preserve clinic session if open concurrently
+            clinic_user_id = session.get("user_id") if not session.get("is_platform_admin") else None
+            clinic_business_id = session.get("business_id")
+            clinic_admin_user = session.get("admin_user")
+            clinic_name = session.get("clinic_name")
+
             session.permanent = True
-            session["user_id"] = matched_user.id
-            session["business_id"] = None
-            session["admin_user"] = matched_user.username
+            session["platform_admin_id"] = matched_user.id
+            session["platform_admin_user"] = matched_user.username
             session["is_platform_admin"] = True
-            session["clinic_name"] = "ClinicConnectAI Platform"
+
+            # If no clinic session was open, set default identity
+            if not clinic_user_id:
+                session["user_id"] = matched_user.id
+                session["business_id"] = None
+                session["admin_user"] = matched_user.username
+                session["clinic_name"] = "ClinicConnectAI Platform"
+
             flash("Welcome to the SaaS Master Console.", "success")
             return redirect(url_for("platform_bp.dashboard"))
         else:
@@ -66,7 +96,7 @@ def login():
             else:
                 flash("Invalid platform credentials.", "danger")
 
-    already_logged_in = bool(session.get("user_id") and session.get("is_platform_admin"))
+    already_logged_in = bool(session.get("is_platform_admin") or session.get("platform_admin_id"))
     if already_logged_in:
         return redirect(url_for("platform_bp.dashboard"))
 
@@ -75,8 +105,12 @@ def login():
 
 @platform_bp.route("/logout")
 def logout():
-    """Sign out of the platform owner session."""
-    session.clear()
+    """Sign out of the platform owner session without breaking clinic portal if open."""
+    session.pop("platform_admin_id", None)
+    session.pop("platform_admin_user", None)
+    session.pop("is_platform_admin", None)
+    if not session.get("business_id"):
+        session.clear()
     flash("You have been logged out of the platform console.", "info")
     return redirect(url_for("platform_bp.login"))
 

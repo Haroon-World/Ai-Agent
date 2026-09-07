@@ -857,9 +857,15 @@ def _format_doctors(
 
     docs_body = "\n\n".join(lines)
     if lang == "urdu":
+        if has_schedule_intent:
+            return f"ہمارے کلینک میں دستیاب ڈاکٹرز اور ان کے اوقات یہ ہیں:\n\n{docs_body}\n\nآپ کس ڈاکٹر کا شیڈول یا دستیابی چیک کرنا چاہیں گے؟"
         return f"ہمارے کلینک میں پریکٹس کرنے والے دستیاب ڈاکٹرز اور اسپیشلسٹس یہ ہیں:\n\n{docs_body}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا پسند کریں گے؟"
     elif lang == "roman_urdu":
+        if has_schedule_intent:
+            return f"Hamare clinic ke practicing doctors aur specialists yeh hain:\n\n{docs_body}\n\nAap kis doctor ka schedule ya availability check karna chahein ge?"
         return f"ClinicConnect ke available doctors aur specialists yeh hain:\n\n{docs_body}\n\nBarah-e-karam batayein aap kis doctor ke sath appointment book karwana chahein ge?"
+    if has_schedule_intent:
+        return f"Here are our practicing doctors and specialists:\n\n{docs_body}\n\nWhich doctor would you like to check the schedule or availability for?"
     return f"Of course. Here are our practicing doctors and specialists:\n\n{docs_body}\n\nWhich doctor would you prefer?"
 
 

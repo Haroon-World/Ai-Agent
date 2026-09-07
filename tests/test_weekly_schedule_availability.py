@@ -188,13 +188,13 @@ class TestWeeklyScheduleAndAvailabilityEngine(unittest.TestCase):
         """8. Two customers cannot book the same slot (second booking rejected)."""
         monday_date = self._get_next_date_for_day("Monday")
         res1 = BookingService.book_appointment(
-            business_id=1, customer_name="User 1", customer_phone="03001111111",
+            business_id=1, customer_name="Usman Tariq", customer_phone="03001111111",
             doctor_id=1, service_id=1, appointment_date=monday_date, appointment_time="11:00"
         )
         self.assertTrue(res1["success"])
 
         res2 = BookingService.book_appointment(
-            business_id=1, customer_name="User 2", customer_phone="03002222222",
+            business_id=1, customer_name="Hamza Ali", customer_phone="03002222222",
             doctor_id=1, service_id=1, appointment_date=monday_date, appointment_time="11:00"
         )
         self.assertFalse(res2["success"])

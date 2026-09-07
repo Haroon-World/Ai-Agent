@@ -15,6 +15,7 @@ from models.doctor_schedule import DoctorSchedule
 from models.doctor_leave import DoctorLeave
 from models.user import User
 from models.subscription_request import SubscriptionRequest
+from models.whatsapp_account import ClinicWhatsAppAccount
 
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -54,7 +55,7 @@ def auto_migrate_db(app=None):
                 db.session.commit()
 
             # Populate default trial_ends_at for any businesses lacking subscription data
-            from datetime import timedelta
+            from datetime import datetime, timezone, timedelta
             businesses = Business.query.all()
             for biz in businesses:
                 if not getattr(biz, "trial_ends_at", None):
@@ -87,6 +88,8 @@ __all__ = [
     "DoctorLeave",
     "User",
     "SubscriptionRequest",
+    "ClinicWhatsAppAccount",
     "auto_migrate_db",
 ]
+
 
