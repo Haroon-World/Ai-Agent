@@ -11,7 +11,7 @@
     </p>
 
     <div class="hero-actions">
-        <a href="/chat" class="btn btn-primary btn-lg">
+        <a href="{% if business and business.id != 1 %}/chat/{{ business.id }}{% else %}/chat{% endif %}" class="btn btn-primary btn-lg">
             <span>💬 Launch Customer Chat</span>
         </a>
         <a href="/admin" class="btn btn-secondary btn-lg">

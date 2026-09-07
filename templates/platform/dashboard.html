@@ -307,9 +307,16 @@
     </nav>
 
     <div class="container">
-        <div class="header-section">
-            <h1 class="page-title">Platform Master Operations</h1>
-            <p class="page-subtitle">Centralized multi-tenant management, tenant onboarding, and ecosystem statistics.</p>
+        <div class="header-section" style="display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 16px;">
+            <div>
+                <h1 class="page-title">Platform Master Operations</h1>
+                <p class="page-subtitle">Centralized multi-tenant management, subscription monitoring, and ecosystem control.</p>
+            </div>
+            <div>
+                <a href="/platform/onboard-clinic" class="btn-action" style="text-decoration: none; display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; font-weight: 700; width: auto; margin: 0;">
+                    <span>➕ Onboard New Clinic Tenant</span>
+                </a>
+            </div>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -319,35 +326,6 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
-
-        {% if success_info %}
-        <div class="success-handoff-card">
-            <h2>✅ Clinic Onboarded Successfully!</h2>
-            <p>New clinic credentials created. Hand off the following access details to the clinic administrator:</p>
-            <table class="creds-table">
-                <tr>
-                    <td style="width: 180px; font-weight: 600;">Clinic Name</td>
-                    <td><strong>{{ success_info.clinic_name }}</strong> (Tenant ID: <code>#{{ success_info.business_id }}</code>)</td>
-                </tr>
-                <tr>
-                    <td style="font-weight: 600;">Clinic Admin Login URL</td>
-                    <td><a href="/admin/login" target="_blank" style="color: #6ee7b7;">/admin/login</a></td>
-                </tr>
-                <tr>
-                    <td style="font-weight: 600;">Admin Username</td>
-                    <td><code>{{ success_info.admin_username }}</code></td>
-                </tr>
-                <tr>
-                    <td style="font-weight: 600;">Admin Password</td>
-                    <td><code>{{ success_info.admin_password }}</code></td>
-                </tr>
-                <tr>
-                    <td style="font-weight: 600;">Customer AI Chat URL</td>
-                    <td><a href="/chat/{{ success_info.business_id }}" target="_blank" style="color: #818cf8; text-decoration: underline;">/chat/{{ success_info.business_id }}</a></td>
-                </tr>
-            </table>
-        </div>
-        {% endif %}
 
         <!-- KPI Metrics -->
         <div class="kpi-grid">
@@ -369,98 +347,225 @@
             </div>
         </div>
 
-        <div class="layout-grid">
-            <!-- Clinics Directory -->
-            <div class="panel">
-                <div class="panel-header">
-                    <div class="panel-title">🏥 Registered Clinic Tenants</div>
-                    <span class="pill">{{ clinics|length }} Total</span>
+        <!-- Pending B2B Subscription Approval Requests Queue -->
+        {% if pending_requests %}
+        <div class="panel" style="margin-bottom: 30px; border-left: 4px solid #f59e0b; background: rgba(245, 158, 11, 0.05);">
+            <div class="panel-header">
+                <div class="panel-title" style="color: #fbbf24; display: flex; align-items: center; gap: 8px;">
+                    <span>🔔</span>
+                    <span>Pending Subscription Requests ({{ pending_requests|length }})</span>
                 </div>
+                <span class="pill" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; font-weight: 700;">Action Required</span>
+            </div>
+            <div style="overflow-x: auto;">
+                <table class="clinic-table">
+                    <thead>
+                        <tr>
+                            <th>Req ID</th>
+                            <th>Clinic Client</th>
+                            <th>Requested Plan</th>
+                            <th>Duration</th>
+                            <th>Requested Date</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for req in pending_requests %}
+                        <tr>
+                            <td><code>#{{ req.id }}</code></td>
+                            <td>
+                                <strong>{{ req.business_name }}</strong> (Tenant #{{ req.business_id }})
+                                <div class="clinic-meta">Requested by: {{ req.requested_by_user or 'Clinic Owner' }}</div>
+                            </td>
+                            <td>
+                                <span style="font-weight: 700; color: #a5b4fc;">{{ req.plan_display_name }}</span>
+                            </td>
+                            <td>{{ req.duration_days }} Days</td>
+                            <td>{{ req.created_at }}</td>
+                            <td>
+                                <div style="display: flex; gap: 8px;">
+                                    <form method="POST" action="/platform/subscription-request/{{ req.id }}/approve" style="display: inline;">
+                                        <button type="submit" class="pill" style="background: #064e3b; color: #6ee7b7; border: 1px solid #059669; font-weight: 700; cursor: pointer;">
+                                            ✅ Approve &amp; Activate
+                                        </button>
+                                    </form>
+                                    <form method="POST" action="/platform/subscription-request/{{ req.id }}/reject" style="display: inline;">
+                                        <button type="submit" class="pill" style="background: #450a0a; color: #fca5a5; border: 1px solid #b91c1c; cursor: pointer;" onclick="return confirm('Reject this subscription request?');">
+                                            ❌ Reject
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
 
-                <div style="overflow-x: auto;">
-                    <table class="clinic-table">
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Clinic Details</th>
-                                <th>Doctors</th>
-                                <th>Services</th>
-                                <th>Admin User</th>
-                                <th>AI Chatbot</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for item in clinics %}
-                            <tr>
-                                <td><span class="pill">#{{ item.business.id }}</span></td>
-                                <td>
-                                    <div class="clinic-name">{{ item.business.name }}</div>
-                                    <div class="clinic-meta">{{ item.business.business_type | replace('_', ' ') | title }} • {{ item.business.phone }}</div>
-                                </td>
-                                <td>{{ item.doctors_count }}</td>
-                                <td>{{ item.services_count }}</td>
-                                <td><span class="pill">{{ item.admin_username }}</span></td>
-                                <td>
-                                    <a href="/chat/{{ item.business.id }}" target="_blank" class="pill" style="color: #818cf8; text-decoration: none; font-weight: 600; border-color: rgba(99, 102, 241, 0.4);">💬 Open Chat ↗</a>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
+        <!-- Registered Clinic Tenants Directory (Full Width) -->
+        <div class="panel" style="margin-bottom: 40px;">
+            <div class="panel-header">
+                <div class="panel-title">🏥 Registered Clinic Tenants &amp; Subscriptions</div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <span class="pill">{{ clinics|length }} Total Tenants</span>
+                    <a href="/platform/onboard-clinic" class="pill" style="color: #818cf8; text-decoration: none; font-weight: 700; border-color: rgba(99, 102, 241, 0.4);">+ Add Clinic</a>
                 </div>
             </div>
 
-            <!-- Onboard New Clinic Form -->
-            <div class="panel">
-                <div class="panel-header">
-                    <div class="panel-title">➕ Onboard New Clinic</div>
-                </div>
+            <div style="overflow-x: auto;">
+                <table class="clinic-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Clinic Profile</th>
+                            <th>Subscription Status &amp; Controls</th>
+                            <th>Capacity</th>
+                            <th>Admin Account</th>
+                            <th>Access &amp; Portal</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in clinics %}
+                        <tr>
+                            <td><span class="pill">#{{ item.business.id }}</span></td>
+                            <td>
+                                <div class="clinic-name">{{ item.business.name }}</div>
+                                <div class="clinic-meta">{{ item.business.business_type | replace('_', ' ') | title }} • {{ item.business.phone }}</div>
+                                <div class="clinic-meta" style="color: #6b7280;">📍 {{ item.business.address }}</div>
+                            </td>
+                            <td>
+                                <div>
+                                    {% if item.business.subscription_status == 'cancelled' %}
+                                        <span class="pill" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: 700;">⛔ CANCELLED</span>
+                                    {% elif item.subscription.color == 'danger' %}
+                                        <span class="pill" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-weight: 700;">⛔ EXPIRED</span>
+                                    {% elif item.subscription.color == 'success' %}
+                                        <span class="pill" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-weight: 700;">🟢 ACTIVE ({{ item.subscription.days }}d)</span>
+                                    {% else %}
+                                        <span class="pill" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); font-weight: 700;">🎁 1-MO TRIAL ({{ item.subscription.days }}d)</span>
+                                    {% endif %}
+                                </div>
+                                <div class="clinic-meta" style="margin-top: 4px;">
+                                    <strong>{{ item.business.active_plan_name or '1-Month Free Trial' }}</strong>
+                                </div>
+                                <div class="clinic-meta" style="font-size: 0.78rem;">
+                                    Expiry: <strong>{{ item.subscription.expires_at }}</strong>
+                                </div>
 
-                <form method="POST" action="/platform/onboard-clinic">
-                    <div class="form-group">
-                        <label class="form-label" for="clinic_name">Clinic Name *</label>
-                        <input type="text" id="clinic_name" name="clinic_name" class="form-input" placeholder="e.g. City Dental Care" required>
+                                <!-- Subscription Controls -->
+                                <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
+                                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                        <form method="POST" action="/platform/clinic/{{ item.business.id }}/subscription/extend" style="display: inline-block;">
+                                            <input type="hidden" name="days" value="30">
+                                            <button type="submit" class="pill" style="background: #1e293b; color: #a5b4fc; border: 1px solid #4338ca; cursor: pointer;" title="Add 30 days to subscription">➕ +30 Days</button>
+                                        </form>
+                                        
+                                        <button onclick="openDateRangeModal('{{ item.business.id }}', '{{ item.business.name }}')" class="pill" style="background: #1e293b; color: #cbd5e1; border: 1px solid #475569; cursor: pointer;">
+                                            📅 Date Range
+                                        </button>
+                                    </div>
+
+                                    {% if item.business.subscription_status != 'cancelled' %}
+                                    <form method="POST" action="/platform/clinic/{{ item.business.id }}/subscription/cancel" onsubmit="return confirm('Cancel subscription for {{ item.business.name }}? This will immediately lock portal access.');">
+                                        <button type="submit" class="pill" style="background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); cursor: pointer; width: 100%;">
+                                            ⛔ Cancel Subscription
+                                        </button>
+                                    </form>
+                                    {% else %}
+                                    <form method="POST" action="/platform/clinic/{{ item.business.id }}/subscription/reactivate">
+                                        <input type="hidden" name="days" value="30">
+                                        <button type="submit" class="pill" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: pointer; width: 100%;">
+                                            🟢 Reactivate (+30 Days)
+                                        </button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td>
+                                <div>👨‍⚕️ {{ item.doctors_count }} Doctors</div>
+                                <div class="clinic-meta">🩺 {{ item.services_count }} Services</div>
+                                <div class="clinic-meta">📅 {{ item.appointments_count }} Bookings</div>
+                            </td>
+                            <td>
+                                <div><span class="pill">👤 {{ item.admin_username }}</span></div>
+                                <div style="margin-top: 6px;">
+                                    <button onclick="promptResetPassword('{{ item.business.id }}', '{{ item.admin_username }}')" class="pill" style="background: #1e293b; color: #fbbf24; border: 1px solid #78350f; cursor: pointer;">🔑 Reset Password</button>
+                                </div>
+                            </td>
+                            <td>
+                                <div style="display: flex; flex-direction: column; gap: 6px;">
+                                    <a href="/admin/login" target="_blank" class="pill" style="color: #6ee7b7; text-decoration: none; font-weight: 600; border-color: rgba(16, 185, 129, 0.3); text-align: center;">
+                                        🔐 Client Login ↗
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Date Range Selection Modal -->
+        <div id="dateRangeModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+            <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 24px; width: 90%; max-width: 440px; color: #f1f5f9;">
+                <h3 id="modalClinicTitle" style="margin-top: 0; margin-bottom: 12px; font-size: 1.15rem; color: #ffffff;">Set Subscription Date Range</h3>
+                <p style="font-size: 0.85rem; color: #94a3b8; margin-bottom: 20px;">Choose explicit start and end dates for the clinic's software license.</p>
+                <form id="dateRangeForm" method="POST" action="">
+                    <div style="margin-bottom: 14px;">
+                        <label style="display: block; font-size: 0.82rem; color: #cbd5e1; margin-bottom: 6px;">Start Date *</label>
+                        <input type="date" id="rangeStartDate" name="start_date" required style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; font-size: 0.9rem;">
                     </div>
-
-                    <div class="form-group">
-                        <label class="form-label" for="address">Address *</label>
-                        <input type="text" id="address" name="address" class="form-input" placeholder="Full address" required>
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; font-size: 0.82rem; color: #cbd5e1; margin-bottom: 6px;">End Date (Expiry) *</label>
+                        <input type="date" id="rangeEndDate" name="end_date" required style="width: 100%; padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #f8fafc; font-size: 0.9rem;">
                     </div>
-
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label class="form-label" for="phone">Phone *</label>
-                            <input type="text" id="phone" name="phone" class="form-input" placeholder="+92 300 1234567" required>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="business_type">Type</label>
-                            <select id="business_type" name="business_type" class="form-input">
-                                <option value="dental_clinic">Dental Clinic</option>
-                                <option value="polyclinic">Polyclinic</option>
-                                <option value="eye_clinic">Eye Clinic</option>
-                                <option value="skin_clinic">Skin Clinic</option>
-                                <option value="physiotherapy">Physiotherapy</option>
-                                <option value="general_practice">General Practice</option>
-                            </select>
-                        </div>
+                    <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                        <button type="button" onclick="closeDateRangeModal()" style="padding: 8px 16px; background: transparent; border: 1px solid #475569; color: #cbd5e1; border-radius: 6px; cursor: pointer;">Cancel</button>
+                        <button type="submit" style="padding: 8px 18px; background: #4f46e5; border: none; color: white; border-radius: 6px; font-weight: 600; cursor: pointer;">Save Date Range</button>
                     </div>
-
-
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label class="form-label" for="admin_username">Admin Username *</label>
-                            <input type="text" id="admin_username" name="admin_username" class="form-input" placeholder="e.g. admin" required autocomplete="off">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="admin_password">Admin Password *</label>
-                            <input type="text" id="admin_password" name="admin_password" class="form-input" placeholder="Min 6 chars" required minlength="6" autocomplete="off">
-                        </div>
-                    </div>
-
-                    <button type="submit" class="btn-action">Create Tenant &amp; Issue Credentials</button>
                 </form>
             </div>
         </div>
+
+        <!-- Hidden Form for Admin Password Reset -->
+        <form id="resetPasswordForm" method="POST" action="" style="display: none;">
+            <input type="hidden" name="new_password" id="resetPasswordValue">
+        </form>
+
+        <script>
+            function openDateRangeModal(clinicId, clinicName) {
+                document.getElementById('modalClinicTitle').innerText = `Set Subscription Range: ${clinicName}`;
+                document.getElementById('dateRangeForm').action = `/platform/clinic/${clinicId}/subscription/set-dates`;
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('rangeStartDate').value = today;
+                
+                const nextMonth = new Date();
+                nextMonth.setDate(nextMonth.getDate() + 30);
+                document.getElementById('rangeEndDate').value = nextMonth.toISOString().split('T')[0];
+                
+                const modal = document.getElementById('dateRangeModal');
+                modal.style.display = 'flex';
+            }
+
+            function closeDateRangeModal() {
+                document.getElementById('dateRangeModal').style.display = 'none';
+            }
+
+            function promptResetPassword(clinicId, username) {
+                const newPass = prompt(`Enter new password for clinic administrator '${username}' (Clinic #${clinicId}):\n(Minimum 6 characters)`);
+                if (newPass && newPass.trim().length >= 6) {
+                    const form = document.getElementById('resetPasswordForm');
+                    form.action = `/platform/clinic/${clinicId}/reset-password`;
+                    document.getElementById('resetPasswordValue').value = newPass.trim();
+                    form.submit();
+                } else if (newPass) {
+                    alert('Password must be at least 6 characters long.');
+                }
+            }
+        </script>
     </div>
 </body>
 </html>

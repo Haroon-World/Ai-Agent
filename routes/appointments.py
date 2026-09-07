@@ -13,7 +13,11 @@ def check_availability():
     date_str = request.args.get("date")
     doctor_id = request.args.get("doctor_id")
     service_id = request.args.get("service_id")
-    business_id = Config.DEFAULT_BUSINESS_ID
+    business_param = request.args.get("clinic") or request.args.get("business_id")
+    if business_param and str(business_param).isdigit():
+        business_id = int(business_param)
+    else:
+        business_id = Config.DEFAULT_BUSINESS_ID
 
     if not date_str:
         return jsonify({"success": False, "error": "Query parameter 'date' (YYYY-MM-DD) is required."}), 400

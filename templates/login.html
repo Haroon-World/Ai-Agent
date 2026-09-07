@@ -6,16 +6,16 @@
 <div class="login-wrapper">
     <div class="login-card">
         <div class="login-header">
-            <div class="login-icon">🔒</div>
-            <h2>Admin Portal Login</h2>
-            <p>Access the polyclinic dashboard, doctors, services, live conversations, and appointments.</p>
+            <div class="login-icon">🏥</div>
+            <h2>Clinic Client Portal Login</h2>
+            <p>Sign in to access your clinic's dashboard, appointments, doctors, and subscription.</p>
         </div>
 
         {% if already_logged_in %}
         <div style="background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; font-size: 0.88rem; text-align: left;">
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
                 <div>
-                    <strong>ℹ️ Active Session:</strong> Currently signed in as <strong>{{ current_user }}</strong>.
+                    <strong>ℹ️ Active Session:</strong> Currently signed in as <strong>{{ current_user }}</strong>{% if session.get('clinic_name') %} (<em>{{ session.get('clinic_name') }}</em>){% endif %}.
                 </div>
                 <div style="display: flex; gap: 8px;">
                     <a href="/admin" class="btn btn-sm btn-primary" style="padding: 5px 12px; font-size: 0.82rem; text-decoration: none;">Dashboard →</a>
@@ -27,20 +27,23 @@
 
         <form method="POST" action="/admin/login" class="login-form">
             <div class="form-group">
-                <label for="username">Admin Username</label>
+                <label for="username">Clinic Admin Username</label>
                 <input type="text" id="username" name="username" class="form-input" placeholder="e.g. admin" required>
             </div>
 
             <div class="form-group">
-                <label for="password">Password</label>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <label for="password" style="margin-bottom: 0;">Password</label>
+                    <a href="/admin/forgot-password" style="font-size: 0.82rem; color: #4f46e5; text-decoration: none; font-weight: 600;">Forgot Password?</a>
+                </div>
                 <input type="password" id="password" name="password" class="form-input" placeholder="e.g. admin123" required>
             </div>
 
-            <button type="submit" class="btn btn-primary btn-block">Sign In to Dashboard</button>
+            <button type="submit" class="btn btn-primary btn-block">Sign In to Clinic Dashboard</button>
         </form>
 
-        <div class="login-footer-hint">
-            <small>Demo Credentials: <code>admin</code> / <code>admin123</code> (configured in <code>.env</code>)</small>
+        <div class="login-footer-hint" style="margin-top: 20px; text-align: center; color: #64748b; font-size: 0.82rem;">
+            <span>SaaS Platform Owners: Sign in at the <a href="/platform/login" style="color: #4f46e5; font-weight: 600; text-decoration: underline;">Master Platform Console</a></span>
         </div>
     </div>
 </div>

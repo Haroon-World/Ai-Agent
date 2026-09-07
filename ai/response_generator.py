@@ -180,6 +180,8 @@ def generate_tool_response(
         return _format_availability(tool_result, lang, user_text_lower, conv_state)
     elif tool_name == "book_appointment":
         return _format_booking(tool_result, lang, user_text_lower, conv_state)
+    elif tool_name == "get_appointment_details":
+        return _format_appointment_details(tool_result, lang)
     elif tool_name == "cancel_appointment":
         return _format_cancellation(tool_result, lang)
     elif tool_name == "reschedule_appointment":
@@ -208,6 +210,18 @@ def _format_availability(
     user_text_lower: str,
     conv_state: Dict[str, Any]
 ) -> str:
+    if tool_data.get("requires_doctor"):
+        docs = tool_data.get("doctors", [])
+        doc_bullets = "\n".join(f"• **{d.get('name')}** - {d.get('specialization', 'Specialist')}" for d in docs)
+        if lang == "urdu":
+            return f"ہمارے کلینک میں درج ذیل ڈاکٹرز اور اسپیشلسٹس دستیاب ہیں:\n\n{doc_bullets}\n\nآپ کس ڈاکٹر کی دستیابی چیک کرنا چاہیں گے؟"
+        elif lang == "roman_urdu":
+            return f"Hamare clinic ke practicing doctors aur specialists yeh hain:\n\n{doc_bullets}\n\nAap kis doctor ki availability check karna chahein ge?"
+        return f"Our practicing doctors and specialists are:\n\n{doc_bullets}\n\nWhich doctor would you like to check availability for?"
+
+    if not tool_data.get("success"):
+        return tool_data.get("error") or "Please specify your preferred doctor or appointment date."
+
     date_val = tool_data.get("date", "")
     day_val = tool_data.get("day", "")
     formatted_date = _fmt_date_title(date_val, day_val)
@@ -259,6 +273,11 @@ def _format_availability(
         next_day = tool_data.get("next_available_day")
         day_str = (day_val or "").lower()
         is_sunday = "sunday" in day_str or "sunday" in formatted_date.lower()
+        doc_label = tool_data.get("doctor") or "the doctor"
+
+        res_msgs = " ".join([r.get("message", "") for r in results]).lower()
+        is_today_slots_passed = "no more available slots" in res_msgs or "today" in res_msgs
+        is_day_closed = any("closed" in r.get("message", "").lower() or "not practicing" in r.get("message", "").lower() for r in results)
 
         spoken_d_urdu = _fmt_spoken_date_urdu(date_val) if date_val else formatted_date
         spoken_d_roman = _fmt_spoken_date_roman(date_val) if date_val else formatted_date
@@ -266,30 +285,57 @@ def _format_availability(
         spoken_next_roman = _fmt_spoken_date_roman(next_d) if next_d else next_d
 
         if lang == "urdu":
-            if is_sunday:
+            if is_today_slots_passed:
                 if next_d:
-                    return f"معذرت، اتوار کو کلینک بند ہوتا ہے۔ ہمارے اوقات پیر تا ہفتہ صبح 9 بجے سے شام 5 بجے تک ہیں۔ اگلا دستیاب دن: {next_day}، {spoken_next_urdu}۔ کیا آپ اس دن کے اوقات دیکھنا چاہیں گے؟"
-                return "معذرت، اتوار کو کلینک بند ہوتا ہے۔ ہمارے اوقات پیر تا ہفتہ صبح 9 بجے سے شام 5 بجے تک ہیں۔ آپ کس اور تاریخ کو تشریف لانا چاہیں گے؟"
+                    return f"معذرت، آج {day_val or ''} کے تمام اوقات مکمل ہو چکے ہیں۔ اگلا دستیاب دن: {next_day}، {spoken_next_urdu} ہے۔ کیا آپ اس تاریخ کے اوقات دیکھنا چاہیں گے؟"
+                return f"معذرت، آج کے تمام اوقات مکمل ہو چکے ہیں۔ آپ کس اور تاریخ کو تشریف لانا چاہیں گے؟"
+            elif is_day_closed:
+                if is_sunday:
+                    if next_d:
+                        return f"معذرت، اتوار کو کلینک بند ہوتا ہے۔ ہمارے اوقات پیر تا ہفتہ صبح 9 بجے سے شام 5 بجے تک ہیں۔ اگلا دستیاب دن: {next_day}، {spoken_next_urdu}۔ کیا آپ اس دن کے اوقات دیکھنا چاہیں گے؟"
+                    return "معذرت، اتوار کو کلینک بند ہوتا ہے۔ ہمارے اوقات پیر تا ہفتہ صبح 9 بجے سے شام 5 بجے تک ہیں۔ آپ کس اور تاریخ کو تشریف لانا چاہیں گے؟"
+                else:
+                    if next_d:
+                        return f"معذرت، {doc_label} {day_val or 'اس دن'} دستیاب نہیں ہیں۔ اگلا دستیاب دن: {next_day}، {spoken_next_urdu} ہے۔ کیا آپ اس تاریخ کے اوقات دیکھنا چاہیں گے؟"
+                    return f"معذرت، {doc_label} {day_val or 'اس دن'} دستیاب نہیں ہیں۔ آپ کس اور تاریخ کو تشریف لانا چاہیں گے؟"
             else:
                 if next_d:
                     return f"معذرت، {spoken_d_urdu} کو کوئی وقت دستیاب نہیں ہے۔ اگلا دستیاب دن: {next_day}، {spoken_next_urdu}۔ کیا آپ اس تاریخ کے اوقات دیکھنا چاہیں گے؟"
                 return f"معذرت، {spoken_d_urdu} کو کوئی وقت دستیاب نہیں ہے۔ آپ کس اور تاریخ کو تشریف لانا چاہیں گے؟"
 
         elif lang == "roman_urdu":
-            if is_sunday:
+            if is_today_slots_passed:
                 if next_d:
-                    return f"Maazrat, Sunday ko clinic off hota hai. Hamare working days Monday se Saturday (09:00 AM – 05:00 PM) hain. Agla available din: {next_day} ({spoken_next_roman}). Kya aap is din ke slots dekhna chahein ge ya koi aur date prefer karein ge?"
-                return "Maazrat, Sunday ko clinic off hota hai. Hamare working days Monday se Saturday hain. Aap kis date ko visit karna chahein ge?"
+                    return f"Maazrat, aaj {day_val or ''} ke tamaam appointment slots mukammal ho chuke hain ya waqt guzar chuka hai. Agla available din: {next_day} ({spoken_next_roman}). Kya aap is din ke slots dekhna chahein ge ya koi aur date prefer karein ge?"
+                return f"Maazrat, aaj ke tamaam appointment slots guzar chuke hain. Aap kis aur date ko visit karna chahein ge?"
+            elif is_day_closed:
+                if is_sunday:
+                    if next_d:
+                        return f"Maazrat, Sunday ko clinic off hota hai. Hamare working days Monday se Saturday (09:00 AM – 05:00 PM) hain. Agla available din: {next_day} ({spoken_next_roman}). Kya aap is din ke slots dekhna chahein ge ya koi aur date prefer karein ge?"
+                    return "Maazrat, Sunday ko clinic off hota hai. Hamare working days Monday se Saturday hain. Aap kis date ko visit karna chahein ge?"
+                else:
+                    if next_d:
+                        return f"Maazrat, {doc_label} {day_val or 'is din'} ko off hote hain. Agla available din: {next_day} ({spoken_next_roman}). Kya aap is din ke slots dekhna chahein ge ya koi aur date prefer karein ge?"
+                    return f"Maazrat, {doc_label} {day_val or 'is din'} ko off hote hain. Aap kis date ko visit karna chahein ge?"
             else:
                 if next_d:
                     return f"Maazrat, {spoken_d_roman} ko koi slot available nahi hai. Agla available din: {next_day} ({spoken_next_roman}). Kya aap is din ke slots dekhna chahein ge?"
                 return f"Maazrat, {spoken_d_roman} ko koi slot available nahi hai. Aap kis date ko visit karna chahein ge?"
 
         else:
-            if is_sunday:
+            if is_today_slots_passed:
                 if next_d:
-                    return f"Sorry, the clinic is closed on Sundays. Our working days are Monday to Saturday (09:00 AM – 05:00 PM). The next available day is {next_day}, {next_d}. Would you like to check slots for that day?"
-                return "Sorry, the clinic is closed on Sundays. Our working days are Monday to Saturday (09:00 AM – 05:00 PM). Which date would you prefer?"
+                    return f"I checked our schedule for today ({formatted_date}), but all remaining appointment slots have concluded. The next available opening is on **{next_day}, {next_d}**. Would you like to check slots for that day or choose another date?"
+                return f"All appointment slots for today ({formatted_date}) have concluded. Would you like to check another date?"
+            elif is_day_closed:
+                if is_sunday:
+                    if next_d:
+                        return f"Sorry, the clinic is closed on Sundays. Our working days are Monday to Saturday (09:00 AM – 05:00 PM). The next available day is {next_day}, {next_d}. Would you like to check slots for that day?"
+                    return "Sorry, the clinic is closed on Sundays. Our working days are Monday to Saturday (09:00 AM – 05:00 PM). Which date would you prefer?"
+                else:
+                    if next_d:
+                        return f"Sorry, {doc_label} is not practicing on {day_val or 'this day'}. The next available opening is on **{next_day}, {next_d}**. Would you like to check slots for that day or choose another date?"
+                    return f"Sorry, {doc_label} is closed on {day_val or 'this day'}. Which other date would you prefer?"
             else:
                 if next_d:
                     return f"I checked our schedule for **{formatted_date}**, but there are no open slots. The next available opening is on **{next_day}, {next_d}**. Would you like to check slots for that day or choose another date?"
@@ -544,6 +590,149 @@ def _format_update_customer_details(tool_data: Dict[str, Any], lang: str) -> str
     elif lang == "roman_urdu":
         return f"Aap ki contact details successfully update ho gayi hain:\n\n{name_str}{phone_str}\nAap ki appointment in updated details ke sath confirmed rahe gi. Agar koi mazeed sawal ho to zaroor batayein!"
     return f"Your contact details have been successfully updated:\n\n{name_str}{phone_str}\nYour existing appointment remains confirmed with these updated details. How else may I assist you today?"
+
+
+def _format_appointment_details(tool_data: Dict[str, Any], lang: str) -> str:
+    if not tool_data.get("success"):
+        err = tool_data.get("error", "Could not retrieve appointment details.")
+        if lang == "urdu":
+            return f"معذرت، اپائنٹمنٹ کی تفصیلات حاصل نہیں ہو سکیں: {err}"
+        elif lang == "roman_urdu":
+            return f"Maazrat, appointment details check nahi ho sakeen: {err}"
+        return f"Sorry, could not retrieve appointment details: {err}"
+
+    appts = tool_data.get("appointments", [])
+    if not appts:
+        if lang == "urdu":
+            return "ہمارے پاس آپ کی کوئی موجودہ اپائنٹمنٹ ریکارڈ میں نہیں ہے۔ کیا آپ نئی اپائنٹمنٹ بک کروانا چاہتے ہیں؟"
+        elif lang == "roman_urdu":
+            return "Hamare paas aap ki koi appointment record mein nahi hai. Kya aap nayi appointment book karwana chahte hain?"
+        return "We have no active or past appointments on file for you. Would you like to book a new appointment?"
+
+    active_appt = tool_data.get("active_appointment")
+    latest_appt = tool_data.get("latest_appointment") or appts[0]
+
+    # Case 1: Latest appointment is CANCELLED, but there is ALSO an active CONFIRMED appointment
+    if active_appt and any(a.get("status") == "CANCELLED" for a in appts):
+        cancelled_appt = next((a for a in appts if a.get("status") == "CANCELLED"), None)
+        can_id = cancelled_appt.get("id") if cancelled_appt else ""
+        c_notes = cancelled_appt.get("notes", "") if cancelled_appt else ""
+        can_reason_str = f" ({c_notes})" if c_notes else ""
+
+        conf_id = active_appt.get("id")
+        doc = active_appt.get("doctor_name", "Doctor")
+        svc = active_appt.get("service_name", "Consultation")
+        d_str = active_appt.get("appointment_date", "")
+        t_str = _fmt_time_ampm(active_appt.get("appointment_time", ""))
+        patient = active_appt.get("customer_name", "Valued Patient")
+
+        if lang == "urdu":
+            return (
+                f"جی بالکل، میں نے سسٹم ریکارڈ چیک کیا ہے:\n\n"
+                f"• آپ کی پچھلی اپائنٹمنٹ #{can_id} منسوخ (CANCELLED) ہو چکی ہے{can_reason_str}۔\n"
+                f"• آپ کی فعال اور تصدیق شدہ (CONFIRMED) اپائنٹمنٹ کی تفصیلات یہ ہیں:\n"
+                f"  - **اپائنٹمنٹ آئی ڈی:** #{conf_id}\n"
+                f"  - **مریض کا نام:** {patient}\n"
+                f"  - **ڈاکٹر:** {doc}\n"
+                f"  - **سروس:** {svc}\n"
+                f"  - **تاریخ اور وقت:** {d_str} بوقت {t_str}\n\n"
+                f"کیا میں آپ کی مزید کوئی مدد کر سکتا ہوں؟"
+            )
+        elif lang == "roman_urdu":
+            return (
+                f"Ji bilkul, maine system mein check kar liya hai:\n\n"
+                f"• Aap ki pehli appointment #{can_id} cancel (CANCELLED) ho chuki hai{can_reason_str}.\n"
+                f"• Aap ki active aur confirmed appointment yeh hai:\n"
+                f"  - **Appointment ID:** #{conf_id}\n"
+                f"  - **Patient Name:** {patient}\n"
+                f"  - **Doctor:** {doc}\n"
+                f"  - **Service:** {svc}\n"
+                f"  - **Date & Time:** {d_str} at {t_str}\n"
+                f"  - **Status:** Confirmed ✅\n\n"
+                f"Kya aap ko is ke baray mein koi aur madad chahiye?"
+            )
+        return (
+            f"I have checked our clinic records:\n\n"
+            f"• Your earlier appointment #{can_id} has been cancelled{can_reason_str}.\n"
+            f"• Your active confirmed appointment is:\n"
+            f"  - **Appointment ID:** #{conf_id}\n"
+            f"  - **Patient Name:** {patient}\n"
+            f"  - **Doctor:** {doc}\n"
+            f"  - **Service:** {svc}\n"
+            f"  - **Date & Time:** {d_str} at {t_str}\n"
+            f"  - **Status:** Confirmed ✅\n\n"
+            f"How else may I assist you?"
+        )
+
+    # Case 2: Only CANCELLED appointment(s) exist (no active confirmed appointment)
+    if not active_appt:
+        can_id = latest_appt.get("id")
+        doc = latest_appt.get("doctor_name", "Doctor")
+        d_str = latest_appt.get("appointment_date", "")
+        t_str = _fmt_time_ampm(latest_appt.get("appointment_time", ""))
+        notes = latest_appt.get("notes", "")
+        reason_str = f" ({notes})" if notes else ""
+
+        if lang == "urdu":
+            return (
+                f"جی ہاں، سسٹم ریکارڈ کے مطابق آپ کی اپائنٹمنٹ #{can_id} ({doc} کے ساتھ، {d_str} بوقت {t_str}) منسوخ (CANCELLED) ہو چکی ہے{reason_str}۔\n\n"
+                f"اس وقت آپ کی کوئی فعال بکنگ نہیں ہے۔ کیا آپ نئی اپائنٹمنٹ بک کروانا چاہتے ہیں؟"
+            )
+        elif lang == "roman_urdu":
+            return (
+                f"Ji haan, system record ke mutabiq aap ki appointment #{can_id} ({doc} ke sath, {d_str} at {t_str}) cancel (CANCELLED) ho chuki hai{reason_str}.\n\n"
+                f"Is waqt aap ki koi active booking confirmed nahi hai. Kya aap nayi appointment schedule karwana chahte hain?"
+            )
+        return (
+            f"Yes, according to our records, appointment #{can_id} with {doc} on {d_str} at {t_str} is cancelled{reason_str}.\n\n"
+            f"You currently have no active confirmed appointments. Would you like to schedule a new appointment?"
+        )
+
+    # Case 3: Active CONFIRMED appointment
+    conf_id = active_appt.get("id")
+    doc = active_appt.get("doctor_name", "Doctor")
+    svc = active_appt.get("service_name", "Consultation")
+    d_str = active_appt.get("appointment_date", "")
+    t_str = _fmt_time_ampm(active_appt.get("appointment_time", ""))
+    patient = active_appt.get("customer_name", "Valued Patient")
+    price = active_appt.get("price", 2000.0)
+
+    if lang == "urdu":
+        return (
+            f"آپ کی فعال اپائنٹمنٹ کی تفصیلات درج ذیل ہیں:\n\n"
+            f"• **اپائنٹمنٹ آئی ڈی:** #{conf_id}\n"
+            f"• **مریض کا نام:** {patient}\n"
+            f"• **ڈاکٹر:** {doc}\n"
+            f"• **سروس:** {svc}\n"
+            f"• **تاریخ اور وقت:** {d_str} بوقت {t_str}\n"
+            f"• **اسٹیٹس:** تصدیق شدہ (Confirmed) ✅\n"
+            f"• **فیس:** PKR {price:,.0f}\n\n"
+            f"کیا آپ اس میں کوئی تبدیلی (ری شیڈول یا کینسل) کروانا چاہتے ہیں؟"
+        )
+    elif lang == "roman_urdu":
+        return (
+            f"Aap ki active appointment ki tafseelaat yeh hain:\n\n"
+            f"• **Appointment ID:** #{conf_id}\n"
+            f"• **Patient Name:** {patient}\n"
+            f"• **Doctor:** {doc}\n"
+            f"• **Service:** {svc}\n"
+            f"• **Date & Time:** {d_str} at {t_str}\n"
+            f"• **Status:** Confirmed ✅\n"
+            f"• **Fee:** PKR {price:,.0f}\n\n"
+            f"Kya aap is mein koi tabdeeli (reschedule ya cancel) karwana chahte hain ya koi aur madad chahiye?"
+        )
+    return (
+        f"Here are the details for your confirmed appointment:\n\n"
+        f"• **Appointment ID:** #{conf_id}\n"
+        f"• **Patient Name:** {patient}\n"
+        f"• **Doctor:** {doc}\n"
+        f"• **Service:** {svc}\n"
+        f"• **Date & Time:** {d_str} at {t_str}\n"
+        f"• **Status:** Confirmed ✅\n\n"
+        f"• **Fee:** PKR {price:,.0f}\n\n"
+        f"Would you like to reschedule or make any changes to this appointment?"
+    )
+
 
 
 def _format_doctor_schedule_lines(doc: Dict[str, Any], target_day: Optional[str] = None) -> List[str]:

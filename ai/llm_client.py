@@ -120,7 +120,7 @@ def resolve_date_string(user_content: str, business_id: int = 1) -> Optional[str
     return None
 
 
-_NAME_PREFIX_RE = re.compile(r'\b(dr\.?|doctor|ڈاکٹر)\b\s*', re.IGNORECASE)
+_NAME_PREFIX_RE = re.compile(r'(?:^|\b)(?:dr\.?|doctor|ڈاکٹر)\s*', re.IGNORECASE)
 
 # Generic words that appear across many roster entries (e.g. "Dental Checkup",
 # "Dental Cleaning", "Dental Braces" all share "dental") and so must never be
@@ -398,16 +398,29 @@ def _is_question_query(text: str) -> bool:
         return False
     if "?" in text or "؟" in text:
         return True
-    question_prefixes = [
+    question_markers = [
         "is there", "are there", "any other", "what about", "do you have",
         "can i", "could i", "when", "which", "how about", "available after",
         "slots after", "available before", "slots before", "what time",
         "is anything", "are any", "what are", "who is", "show me", "tell me",
         "is this", "is that", "available", "after", "before", "free", "any slot",
-        "kis din", "kis kis din", "kab", "timing", "schedule", "working days",
-        "کس دن", "کس کس دن", "کب", "شیڈول", "ٹائمنگ", "اوقات", "بیٹھتی", "بیٹھتے"
+        "kis din", "kis kis din", "kab", "timing", "timings", "schedule", "working days",
+        "kia", "kya", "kitna", "kitni", "kitne", "kahan", "kidhar", "kyun", "kyu",
+        "kaisa", "kaisi", "kaise", "kese", "kon", "kaun", "konsa", "konsi",
+        "kis time", "kis waqt", "kis tarah", "kisliye",
+        "fee", "fees", "charge", "charges", "chages", "chargis", "rate", "rates",
+        "cost", "costs", "price", "prices", "discount", "discounts", "package", "packages",
+        "کس دن", "کس کس دن", "کب", "شیڈول", "ٹائمنگ", "اوقات", "بیٹھتی", "بیٹھتے",
+        "کتنی", "کتنا", "کتنے", "کیا", "کہاں", "کون", "کونسا", "کونسی", "فیس", "چارجز", "ڈسکاؤنٹ"
     ]
-    return any(qp in lower for qp in question_prefixes)
+    for qm in question_markers:
+        if qm.isascii():
+            if re.search(r'\b' + re.escape(qm) + r'\b', lower):
+                return True
+        else:
+            if qm in lower:
+                return True
+    return False
 
 
 _URDU_ROMAN_NUMBERS = {
@@ -652,9 +665,10 @@ def _extract_phone_number(text: str) -> Optional[str]:
 
 
 _NON_NAME_WORDS = {
+    # Actions, intents, modalities, time
     "want", "need", "like", "would", "schedule", "book", "available", "availability",
-    "slot", "slots", "time", "timing", "day", "tomorrow", "today", "appointment",
-    "checkup", "cleaning", "dentist", "doctor", "dr", "info", "information", "price",
+    "slot", "slots", "time", "timing", "timings", "day", "tomorrow", "today", "appointment",
+    "checkup", "cleaning", "dentist", "doctor", "dr", "info", "information",
     "yes", "no", "ok", "okay", "sure", "thanks", "thank you", "cancel", "help", "hello", "hi", "hey",
     "root", "canal", "treatment", "extraction", "whitening", "braces", "consultation", "scaling", "polishing",
     "confirm", "confirmed", "confirmation", "change", "modify", "reset", "details", "haan", "theek",
@@ -665,13 +679,39 @@ _NON_NAME_WORDS = {
     "kro", "krdo", "kardo", "kar", "kr", "karna", "krna", "btao", "batao", "batayein",
     "check", "up", "kalye", "kelye", "klie", "keliye",
     "pehly", "pehle", "ka", "ki", "ke", "ko", "se", "sy", "hain", "hai", "ha", "hun", "hoon",
-    "nhi", "nahi", "karwana", "krwana", "chahiye", "chahta", "chahti"
+    "nhi", "nahi", "karwana", "krwana", "chahiye", "chahta", "chahti",
+
+    # Pricing, billing, fees, packages, money
+    "fee", "fees", "charge", "charges", "chages", "chargis", "rate", "rates", "cost", "costs",
+    "price", "prices", "pricing", "discount", "discounts", "package", "packages", "bill", "bills",
+    "pay", "payment", "pkr", "rs", "rupees", "rupay", "rupey", "rupya", "paisa", "paise",
+    "kitna", "kitni", "kitne", "bachat", "sasta", "mehnga",
+
+    # Roman Urdu questions, interrogatives, particles
+    "kia", "kya", "kon", "kaun", "konsa", "konsi", "kahan", "kidhar", "kab", "kyun", "kyu",
+    "kaisa", "kaisi", "kaise", "kese", "kis", "kispe", "kisper", "kisliye",
+    "hin", "hy", "hyn", "gy", "ga", "ge", "gi", "mein", "main", "me", "men",
+    "ap", "aap", "tum", "mera", "meri", "meray", "mere", "apka", "aapka", "apki", "aapki",
+    "uska", "uski", "unka", "unki", "in", "un", "ye", "yeh", "wo", "woh", "wohi",
+    "hoga", "hogi", "honge", "hoge", "hon", "honga",
+
+    # Conversational filler, slang, banter & food/chatter
+    "yar", "yaar", "bhai", "bhaiya", "bhae", "bhaia", "bro", "dude", "sir", "madam", "mam", "maam",
+    "boss", "janab", "sahib", "shb", "ji", "jee", "acha", "achha", "accha", "thik", "sahi", "bilkul",
+    "shukriya", "shukria", "mehrbani", "plz", "pls", "sorry", "welcome",
+    "koi", "kuch", "kch", "chaye", "chai", "nashta", "nasta", "khana", "pani", "akhir",
+    "dyna", "dena", "dene", "lena", "lene", "lyna", "ata", "aata", "aana", "ana",
+    "jana", "jaana", "jata", "jaata", "mil", "mily", "milega", "milay", "miley", "milna", "milta",
+    "rakh", "rakho", "rakhein", "dikhaye", "dikhao", "bolo", "bhein", "bhejo", "bhejein",
+    "sun", "suno", "samajh", "samjho", "kehta", "kehti", "bol", "bolna",
+    "plan", "cancel", "cancil", "kardo", "kar dein", "kr do", "ni ana", "nahi ana", "nahi aana"
 }
 
 _INVALID_NAMES = {
     "patient", "a", "the", "an", "cleaning", "checkup", "appointment", "booking", "doctor", "dr",
     "tomorrow", "today", "me", "us", "him", "her", "regular checkup", "regular", "routine", "consultation",
-    "teeth", "braces", "extraction", "root canal", "whitening", "dental", "care", "clinic", "to", "as", "is"
+    "teeth", "braces", "extraction", "root canal", "whitening", "dental", "care", "clinic", "to", "as", "is",
+    "fee charges", "fee charges kia hain", "fee chages kia hin", "koi discount", "discount do"
 }
 
 
@@ -679,13 +719,16 @@ def _is_roster_conflict(cand: str, roster_names: Optional[List[str]]) -> bool:
     if not cand or not roster_names:
         return False
     cand_lower = cand.lower().strip()
+    cand_clean = _NAME_PREFIX_RE.sub('', cand_lower).strip()
+    cand_words = [w for w in cand_clean.split() if len(w) >= 3 and w not in _GENERIC_MATCH_STOPWORDS]
     for i, rn in enumerate(roster_names):
         clean_rn = _NAME_PREFIX_RE.sub('', rn.lower()).strip()
         rn_words = [w for w in clean_rn.split() if len(w) >= 3 and w not in _GENERIC_MATCH_STOPWORDS]
-        if cand_lower == clean_rn or cand_lower in rn_words:
+        if cand_lower == clean_rn or cand_lower == rn.lower() or cand_clean == clean_rn:
             return True
-        roster_entries = [{"id": i, "name": rn}]
-        if _fuzzy_match_roster(cand, roster_entries):
+        if len(cand_words) == 1 and cand_words[0] in rn_words:
+            return True
+        if _NAME_PREFIX_RE.search(cand) and any(w in rn_words for w in cand_words):
             return True
     return False
 
@@ -702,7 +745,10 @@ def _is_valid_name_token(cand: str, roster_names: Optional[List[str]] = None) ->
         if not clean_w.isalpha():
             return False
     lower = cand.lower()
-    if any(nw in lower.split() or lower == nw for nw in _NON_NAME_WORDS):
+    if _is_question_query(cand):
+        return False
+    cand_words = set(lower.split())
+    if cand_words.intersection(_NON_NAME_WORDS):
         return False
     if lower in _INVALID_NAMES:
         return False
@@ -711,11 +757,12 @@ def _is_valid_name_token(cand: str, roster_names: Optional[List[str]] = None) ->
     return True
 
 
-def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Optional[str]:
+def _extract_name(text: str, roster_names: Optional[List[str]] = None, is_awaiting_name: bool = False) -> Optional[str]:
     """
     Extract person name from customer booking text.
     Supports English ("My name is Ali"), Roman Urdu ("Mera naam Ali hai"), Urdu script ("میرا نام علی ہے"),
     and informal compound patterns ("Hassan 03001234567", "Hassan, 03001234567", "It's Hassan, my number is 03001234567").
+    Bare text (without phone or explicit name marker) is only accepted if is_awaiting_name is True.
     """
     if not text:
         return None
@@ -736,7 +783,7 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
     name_patterns = [
         (r'(?:change\s+(?:my\s+)?name\s+to|update\s+(?:my\s+)?name\s+to|correct\s+(?:my\s+)?name\s+to|write\s+(?:my\s+)?name\s+(?:as|is|to)?)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
         (r'(?:mera\s+naam\s+(?:badal\s+ke|change\s+karke|rakhein|likhein))\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
-        (r'(?:mera\s+naam|meray\s+naam|naam\s+hai|naam\s+hy)\s+([a-zA-Z]+)', True),
+        (r'(?:mera\s+naam|meray\s+naam|naam\s+hai|naam\s+hy)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
         (r'(?:my\s+(?:own\s+)?name\s+is\s+(?:actually\s+)?|name\s+is\s+(?:actually\s+)?|i\'?m\s+|i\s+am\s+|im\s+|this\s+is\s+|it\'?s\s+|name\s*:\s*|\bname\s+is\s+)([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', True),
         (r'(?:booking|appointment|cleaning|checkup|consultation|service)?\s*for\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)*)', False)
     ]
@@ -747,7 +794,8 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
             name = re.split(r'[,.]|\bphone\b|\bcontact\b|\bat\b|\bon\b|\bdate\b|\bfor\b|\bwith\b|\bi\s+need\b|\bi\s+want\b|\band\b|\bhai\b|\bhein\b|\bhy\b|\bha\b|\bplease\b|\bselect\b|\bprefer\b|\bdr\b|\bdoctor\b', raw, flags=re.IGNORECASE)[0].strip()
             name = re.sub(r'^(?:to|as|is|actually|the)\s+', '', name, flags=re.IGNORECASE).strip()
             name = re.sub(r'^(?:a\s+|an\s+|the\s+)?(?:cleaning|checkup|consultation|appointment|booking|regular|routine)\s+(?:for\s+)?', '', name, flags=re.IGNORECASE).strip()
-            if name and name.lower() not in _INVALID_NAMES:
+            check_roster = None if is_explicit_self else roster_names
+            if _is_valid_name_token(name, check_roster):
                 if not is_explicit_self and _is_roster_conflict(name, roster_names):
                     continue
                 return name.title()
@@ -765,8 +813,8 @@ def _extract_name(text: str, roster_names: Optional[List[str]] = None) -> Option
         if _is_valid_name_token(rem, roster_names):
             return rem.strip().title()
 
-    # Check if the entire text consists of a person's name (1-4 alphabetic words)
-    if _is_valid_name_token(text, roster_names):
+    # Standalone person name: ONLY accepted if conversation is actively awaiting patient name
+    if is_awaiting_name and _is_valid_name_token(text, roster_names):
         return text.strip().title()
     return None
 
@@ -843,6 +891,60 @@ _CALENDAR_DATE_WORDS = [
 ]
 
 
+
+def _is_appointment_status_inquiry(text: str) -> bool:
+    """
+    Detect if the user is asking about the status or details of their appointment / booking,
+    specifically whether it was cancelled, confirmed, or asking to check / verify details.
+    """
+    if not text:
+        return False
+    lower = text.lower().strip()
+
+    # If it is an explicit new booking action, it's NOT a status inquiry
+    booking_action_signals = [
+        "rakh dein", "rakh do", "fix kr", "fix kar", "book kr", "book kar",
+        "appointment chahiye", "appointment leni hai", "appointment lena chahta",
+        "appointment schedule", "reserve kr", "reserve kar", "appointment rakh"
+    ]
+    if any(sig in lower for sig in booking_action_signals):
+        # Unless it specifically has "check again" or "cancelled or not"
+        if not any(chk in lower for chk in ["check again", "cancelled or not", "cancel or not", "cancel hua ya nahi"]):
+            return False
+
+    # Direct status inquiry phrases
+    inquiry_phrases = [
+        "booking details", "appointment details", "booking status", "appointment status",
+        "was that cancelled", "was it cancelled", "is it cancelled", "is my appointment cancelled",
+        "cancelled or not", "cancel or not", "cancel hua ya nahi", "cancel hui ya nahi",
+        "cancel ho gayi kya", "cancel ho gaya kya", "cancel ho chuki", "cancel ho chuka",
+        "staff has cancelled", "admin has cancelled", "clinic has cancelled", "already cancelled",
+        "check again", "check my booking", "check my appointment", "meri appointment check",
+        "meri booking check", "booking check karo", "appointment check karo",
+        "status kya hai", "kya status hai", "show my booking", "show my appointment",
+        "mera appointment number", "meri booking details", "booking ki tafseel", "appointment ki detail"
+    ]
+    if any(p in lower for p in inquiry_phrases):
+        return True
+
+    # "check again" or "dobara check"
+    if any(p in lower for p in ["check again", "dobara check", "phir se check", "again check"]):
+        return True
+
+    # Questions asking about existing booking details or cancellation status
+    has_booking_term = any(w in lower for w in ["booking", "appointment", "appoinment", "اپائنٹمنٹ", "بکنگ"])
+    if has_booking_term:
+        if any(w in lower for w in ["cancelled", "canceled", "منسوخ", "کینسل"]) and any(w in lower for w in ["or not", "ya nahi", "kya", "was", "is", "hai", "thi"]):
+            return True
+        if any(w in lower for w in ["kya status", "status bata", "status check", "tafseel bata", "tafseelaat bata", "details bata"]):
+            return True
+        if any(w in lower for w in ["tell my", "batao meri", "batao mera", "show my"]):
+            if any(w in lower for w in ["detail", "details", "status", "tafseel"]):
+                return True
+
+    return False
+
+
 def _classify_intent(user_text: str, conv_state: Optional[Dict[str, Any]] = None) -> str:
     """
     Classify user message into one of:
@@ -850,6 +952,7 @@ def _classify_intent(user_text: str, conv_state: Optional[Dict[str, Any]] = None
       "DOCTOR_DAY_SCHEDULE"     — specific weekday recurring schedule (e.g. Monday)
       "CHECK_AVAILABILITY"      — date-specific available slots
       "BOOK_APPOINTMENT"        — explicit booking action
+      "APPOINTMENT_STATUS_INQUIRY" — inquiry regarding booking details or cancellation status
       None                      — unknown, continue normal flow
 
     CRITICAL: This classifier reads ONLY the current message.
@@ -857,6 +960,9 @@ def _classify_intent(user_text: str, conv_state: Optional[Dict[str, Any]] = None
     """
     if not user_text:
         return None
+
+    if _is_appointment_status_inquiry(user_text):
+        return "APPOINTMENT_STATUS_INQUIRY"
 
     lower = user_text.lower().strip()
     has_urdu_script = bool(re.search(r'[\u0600-\u06FF]', user_text))
@@ -1156,6 +1262,13 @@ class MockAdapter(BaseLLMAdapter):
                     "tool_calls": []
                 }
 
+            elif "appointments" in tool_data or "active_appointment" in tool_data or "latest_appointment" in tool_data:
+                from ai.response_generator import _format_appointment_details
+                return {
+                    "content": _format_appointment_details(tool_data, lang),
+                    "tool_calls": []
+                }
+
         # Analyze latest user message
         user_text = ""
         for m in reversed(messages):
@@ -1189,7 +1302,10 @@ class MockAdapter(BaseLLMAdapter):
             [d.get("name") for d in (conv_state.get("doctor_roster") or [])] +
             [s.get("name") for s in (conv_state.get("service_roster") or [])]
         )
-        cand_name = _extract_name(user_text, roster_names=_roster_names_for_exclusion)
+        is_awaiting_name_mock = (conv_state.get("awaiting_input") == "name")
+        cand_name = _extract_name(user_text, roster_names=_roster_names_for_exclusion, is_awaiting_name=is_awaiting_name_mock)
+        if pending_name and not _is_valid_name_token(pending_name, roster_names=None):
+            pending_name = None
         effective_name = cand_name or pending_name
         effective_phone = phone_val or pending_phone
 
@@ -1369,9 +1485,30 @@ class MockAdapter(BaseLLMAdapter):
             }
 
         # --- EXPLICIT AWAITING_INPUT RESOLUTION (Runs FIRST before Case A-E & keyword matching) ---
-        # Check BOOKED state FIRST
+        # Check Appointment Status / Booking Details Inquiry FIRST (before BOOKED state or cancellation)
+        if _is_appointment_status_inquiry(user_text) or (
+            conv_state.get("intent") == "APPOINTMENT_STATUS_INQUIRY"
+            and conv_state.get("awaiting_input") != "confirmation"
+            and any(w in user_text for w in ["yes", "haan", "theek", "sahi", "ok", "okay", "yup", "sure", "jee", "ji"])
+            and not any(w in user_text for w in ["confirm", "book", "rakh", "schedule"])
+        ):
+            m_id = re.search(r'#?(\d+)', user_text)
+            arg_id = int(m_id.group(1)) if m_id and int(m_id.group(1)) < 100000 else None
+            arg_phone = phone_val or effective_phone or conv_state.get("pending_customer_phone")
+            return {
+                "content": "Checking your appointment details...",
+                "tool_calls": [{
+                    "name": "get_appointment_details",
+                    "arguments": {
+                        "appointment_id": arg_id,
+                        "customer_phone": arg_phone
+                    }
+                }]
+            }
+
+        # Check BOOKED state
         if workflow_state == "BOOKED":
-            if any(w in user_text for w in ["yes", "yeah", "confirm", "sure", "go ahead", "ok", "okay", "haan", "theek", "book it", "please book", "book", "thanks", "thank you", "done", "alright"]):
+            if any(re.search(r'\b' + re.escape(w) + r'\b', user_text) for w in ["yes", "yeah", "confirm", "sure", "go ahead", "ok", "okay", "haan", "theek", "book it", "please book", "book", "thanks", "thank you", "done", "alright"]):
                 if lang == "urdu":
                     return {
                         "content": "🎉 **آپ کی اپائنٹمنٹ پہلے ہی تصدیق شدہ ہے!** ہم کلینک میں آپ کے منتظر ہیں۔ کیا میں آپ کی مزید کوئی مدد کر سکتا ہوں؟",
@@ -1416,15 +1553,17 @@ class MockAdapter(BaseLLMAdapter):
                     }]
                 }
 
-        # Check Cancellation Request FIRST
+        # Check Cancellation Request
         cancel_keywords = [
             "cancel booking", "cancel appointment", "cancel my appointment", "cancel my booking",
             "appointment cancel", "booking cancel", "cancel kr do", "cancel kar do", "cancel kar dein",
             "cancel kardein", "cancel krdein", "cancel kardo", "cancel please", "please cancel",
             "کینسل", "منسوخ"
         ]
-        if any(w in user_text for w in cancel_keywords) or (
-            "cancel" in user_text and any(w in user_text for w in ["appointment", "booking", "slot", "meri", "my"])
+        if not _is_appointment_status_inquiry(user_text) and (
+            any(w in user_text for w in cancel_keywords) or (
+                "cancel" in user_text and any(w in user_text for w in ["appointment", "booking", "slot", "meri", "my"]) and not any(w in user_text for w in ["or not", "ya nahi", "was", "is it", "staff", "check"])
+            )
         ):
             from models import Customer, Appointment
             # Check if an active appointment exists in DB to cancel
@@ -1991,8 +2130,33 @@ class MockAdapter(BaseLLMAdapter):
                             conv_state, user_text, effective_name, effective_phone,
                             doc_id, doc_name, effective_svc_id, target_date_str, req_time
                         )
+                    if lang == "urdu":
+                        return {
+                            "content": f"شکریہ، {effective_name}! براہ کرم اپنا رابطہ فون نمبر شیئر کر دیجیے۔",
+                            "tool_calls": []
+                        }
+                    elif lang == "roman_urdu":
+                        return {
+                            "content": f"Shukriya {effective_name}! Booking complete karne ke liye barah-e-karam apna phone number share kar dijiye.",
+                            "tool_calls": []
+                        }
                     return {
                         "content": f"Thank you, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
+                        "tool_calls": []
+                    }
+                else:
+                    if lang == "urdu":
+                        return {
+                            "content": "براہ کرم بکنگ مکمل کرنے کے لیے مریض کا پورا نام بتائیں۔",
+                            "tool_calls": []
+                        }
+                    elif lang == "roman_urdu":
+                        return {
+                            "content": "Booking mukammal karne ke liye barah-e-karam patient ka poora naam batayein.",
+                            "tool_calls": []
+                        }
+                    return {
+                        "content": "To complete and confirm your booking, please provide the patient's full name.",
                         "tool_calls": []
                     }
 
@@ -2008,6 +2172,16 @@ class MockAdapter(BaseLLMAdapter):
                             conv_state, user_text, effective_name, effective_phone,
                             doc_id, doc_name, effective_svc_id, target_date_str, req_time
                         )
+                    if lang == "urdu":
+                        return {
+                            "content": "شکریہ! بکنگ کی تصدیق کے لیے براہ کرم مریض کا پورا نام بتائیں۔",
+                            "tool_calls": []
+                        }
+                    elif lang == "roman_urdu":
+                        return {
+                            "content": "Shukriya! Booking confirm karne ke liye barah-e-karam patient ka poora naam batayein.",
+                            "tool_calls": []
+                        }
                     return {
                         "content": "Thank you. Please provide your full name to complete and confirm your booking.",
                         "tool_calls": []
@@ -2056,14 +2230,35 @@ class MockAdapter(BaseLLMAdapter):
                             doc_id, doc_name, effective_svc_id, target_date_str, time_token
                         )
                     elif effective_name and not effective_phone:
+                        if lang == "urdu":
+                            return {
+                                "content": f"بہترین! میں نے {time_token} ({_fmt_time_ampm(time_token)}) کا وقت محفوظ کر لیا ہے۔ {effective_name} صاحب، براہ کرم بکنگ مکمل کرنے کے لیے اپنا فون نمبر فراہم کریں۔",
+                                "tool_calls": []
+                            }
+                        elif lang == "roman_urdu":
+                            return {
+                                "content": f"Behtareen! Main ne {time_token} ({_fmt_time_ampm(time_token)}) ka slot {doc_name or 'doctor'} ke sath aap ke liye mehfooz kar liya hai. {effective_name}, booking ko final karne ke liye apna phone number share kar dijiye.",
+                                "tool_calls": []
+                            }
                         return {
-                            "content": f"Thanks, {effective_name}. Please provide your contact phone number to complete and confirm your booking.",
+                            "content": f"Thanks, {effective_name}. I have selected the {time_token} ({_fmt_time_ampm(time_token)}) slot. Please provide your contact phone number to complete and confirm your booking.",
                             "tool_calls": []
                         }
+                    else:
                         svc_str = f" for {svc_name}" if svc_name else ""
                         doc_disp = doc_name or "our doctor"
+                        if lang == "urdu":
+                            return {
+                                "content": f"بہترین! میں نے {time_token} ({_fmt_time_ampm(time_token)}) کا وقت {doc_disp} کے ساتھ آپ کے لیے محفوظ کر لیا ہے۔ بکنگ مکمل کرنے کے لیے، براہ کرم اپنا پورا نام اور فون نمبر فراہم کریں۔",
+                                "tool_calls": []
+                            }
+                        elif lang == "roman_urdu":
+                            return {
+                                "content": f"Behtareen! Main ne {time_token} ({_fmt_time_ampm(time_token)}) ka slot {doc_disp} ke sath aap ke liye mehfooz kar liya hai. Booking ko final karne ke liye apna poora naam aur phone number share kar dijiye.",
+                                "tool_calls": []
+                            }
                         return {
-                            "content": f"I have selected the {_fmt_time_ampm(time_token)} slot on {target_date_str or 'the requested date'} with {doc_disp}{svc_str}. To complete and confirm your booking, please provide your full name and contact phone number.",
+                            "content": f"I have selected the {time_token} ({_fmt_time_ampm(time_token)}) slot on {target_date_str or 'the requested date'} with {doc_disp}{svc_str}. To complete and confirm your booking, please provide your full name and contact phone number.",
                             "tool_calls": []
                         }
 
@@ -2647,6 +2842,35 @@ class MockAdapter(BaseLLMAdapter):
 
         # 6. Booking intent or explicit date provided in active booking context -> Check availability if date is known, or ask for service/doctor/date
         if _has_booking_intent(user_text) or (explicit_date_given and target_date_str and (workflow_state in ["CHECKING_AVAILABILITY", "COLLECTING_INFO", "START"] or conv_state.get("intent") in ["BOOK_APPOINTMENT", "UNKNOWN"])):
+            # Multi-Doctor Guard: When multiple doctors exist, doctor choice is required before availability inquiry
+            if len(doctor_roster) > 1 and not doc_id:
+                roster_bullets = "\n".join(f"• **{d['name']}** - {d.get('specialization', 'Specialist')}" for d in doctor_roster)
+                if lang == "urdu":
+                    greeting = f"ہیلو {effective_name} صاحب! " if effective_name else "ہیلو! "
+                    date_prefix = f"آپ نے {target_date_str} کے لیے دریافت کیا ہے۔ " if target_date_str else ""
+                    return {
+                        "content": f"{greeting}{date_prefix}ہمارے کلینک میں دستیاب ڈاکٹرز درج ذیل ہیں:\n\n{roster_bullets}\n\nآپ کس ڈاکٹر کی دستیابی چیک کرنا یا اپائنٹمنٹ لینا پسند کریں گے؟",
+                        "tool_calls": []
+                    }
+                elif lang == "roman_urdu":
+                    greeting = f"Hello {effective_name}! " if effective_name else "Hello! "
+                    date_prefix = f"Aap ne {target_date_str} ke liye pucha hai. " if target_date_str else ""
+                    return {
+                        "content": f"{greeting}{date_prefix}Hamare clinic mein practicing doctors yeh hain:\n\n{roster_bullets}\n\nAap kis doctor ki availability check karna chahein ge ya appointment book karwana chahein ge?",
+                        "tool_calls": []
+                    }
+                greeting = f"Hello {effective_name}! " if effective_name else "Hello! "
+                date_prefix = f"For {target_date_str}: " if target_date_str else ""
+                return {
+                    "content": f"{greeting}{date_prefix}Our practicing doctors and specialists are:\n\n{roster_bullets}\n\nWhich doctor would you prefer to check availability for?",
+                    "tool_calls": []
+                }
+
+            # Single-doctor clinic auto-binding
+            if len(doctor_roster) == 1 and not doc_id:
+                doc_id = doctor_roster[0]["id"]
+                doc_name = doctor_roster[0]["name"]
+
             if explicit_date_given and target_date_str:
                 disp_doc = doc_name or "our practicing doctors"
                 return {
@@ -2661,40 +2885,26 @@ class MockAdapter(BaseLLMAdapter):
                     }]
                 }
             else:
-                if not doc_id:
-                    roster_bullets = "\n".join(f"• **{d['name']}** - {d.get('specialization', 'Specialist')}" for d in doctor_roster)
-                    if lang == "urdu":
-                        greeting = f"ہیلو {effective_name} صاحب! " if effective_name else "ہیلو! "
-                        return {
-                            "content": f"{greeting}ہمارے کلینک میں دستیاب ڈاکٹرز درج ذیل ہیں:\n\n{roster_bullets}\n\nآپ کس ڈاکٹر سے اپائنٹمنٹ لینا چاہیں گے؟",
-                            "tool_calls": []
-                        }
-                    elif lang == "roman_urdu":
-                        greeting = f"Hello {effective_name}! " if effective_name else "Hello! "
-                        return {
-                            "content": f"{greeting}Hamare clinic mein practicing doctors yeh hain:\n\n{roster_bullets}\n\nAap kis doctor ke sath appointment prefer karein ge?",
-                            "tool_calls": []
-                        }
-                    greeting = f"Hello {effective_name}! " if effective_name else "Hello! "
+                # No date specified
+                sole_doc = doctor_roster[0] if doctor_roster else {}
+                wk_days = sole_doc.get("working_days", "Monday to Saturday")
+                wk_days_str = ", ".join(wk_days) if isinstance(wk_days, list) else str(wk_days)
+                effective_doc_name = doc_name or sole_doc.get("name", "our doctor")
+
+                if lang == "urdu":
                     return {
-                        "content": f"{greeting}Our practicing doctors and specialists are:\n\n{roster_bullets}\n\nWhich doctor would you prefer for your appointment?",
+                        "content": f"آپ {effective_doc_name} کے ساتھ کس تاریخ یا دن کے لیے دستیابی چیک کرنا چاہیں گے؟ وہ عام طور پر {wk_days_str} کو دستیاب ہوتے ہیں۔",
                         "tool_calls": []
                     }
-                else:
-                    if lang == "urdu":
-                        return {
-                            "content": f"آپ {doc_name} کے ساتھ کس تاریخ کو تشریف لانا چاہیں گے؟",
-                            "tool_calls": []
-                        }
-                    elif lang == "roman_urdu":
-                        return {
-                            "content": f"Aap {doc_name} ke sath kis date ko appointment book karwana chahein ge?",
-                            "tool_calls": []
-                        }
+                elif lang == "roman_urdu":
                     return {
-                        "content": f"Which date would you like to book your appointment with {doc_name}?",
+                        "content": f"Aap {effective_doc_name} ke sath kis date ya din ke slots dekhna chahein ge? Dr. {effective_doc_name} {wk_days_str} ko available hote hain.",
                         "tool_calls": []
                     }
+                return {
+                    "content": f"Which date or day would you like to check availability for? {effective_doc_name} is available {wk_days_str}.",
+                    "tool_calls": []
+                }
 
         # 7. Fallback & Chit-Chat handling setup
         user_message_count = len([m for m in messages if m.get("role") == "user"])

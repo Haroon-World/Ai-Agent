@@ -12,13 +12,13 @@
 <body>
     <nav class="navbar">
         <div class="nav-container">
-            <a href="/" class="nav-brand">
+            <a href="{% if business and business.id != 1 %}?clinic={{ business.id }}{% elif session.get('active_clinic_id') and session.get('active_clinic_id') != 1 %}?clinic={{ session.get('active_clinic_id') }}{% else %}/{% endif %}" class="nav-brand">
                 <span class="brand-logo">🏥</span>
-                <span class="brand-name">{{ session.get('clinic_name', 'ClinicConnect AI') | e }}</span>
+                <span class="brand-name">{{ (business.name if business else session.get('clinic_name', 'ClinicConnect AI')) | e }}</span>
             </a>
             <div class="nav-links">
-                <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">Overview</a>
-                <a href="{% if session.get('business_id') %}/chat/{{ session.get('business_id') }}{% else %}/chat{% endif %}" class="nav-item nav-badge-item {% if request.path.startswith('/chat') %}active{% endif %}">
+                <a href="{% if business and business.id != 1 %}?clinic={{ business.id }}{% elif session.get('active_clinic_id') and session.get('active_clinic_id') != 1 %}?clinic={{ session.get('active_clinic_id') }}{% else %}/{% endif %}" class="nav-item {% if request.path == '/' %}active{% endif %}">Overview</a>
+                <a href="{% if business and business.id != 1 and request.path.startswith('/chat/') %}/chat/{{ business.id }}{% else %}/chat{% endif %}" class="nav-item nav-badge-item {% if request.path.startswith('/chat') %}active{% endif %}">
                     <span>Customer Chat</span>
                     <span class="live-dot"></span>
                 </a>
@@ -30,12 +30,16 @@
                     <a href="/admin/services" class="nav-item {% if request.path.startswith('/admin/services') %}active{% endif %}">Services &amp; Pricing</a>
                     <a href="/admin/conversations" class="nav-item {% if request.path.startswith('/admin/conversations') %}active{% endif %}">Conversations</a>
                     <a href="/admin/reminders" class="nav-item {% if request.path.startswith('/admin/reminders') %}active{% endif %}">Reminders</a>
+                    <a href="/admin/subscription" class="nav-item {% if request.path.startswith('/admin/subscription') %}active{% endif %}">💳 Subscription</a>
+                {% endif %}
+                {% if session.get('is_platform_admin') %}
+                    <a href="/platform/dashboard" class="nav-item {% if request.path.startswith('/platform') %}active{% endif %}" style="color: #a5b4fc; font-weight: 700;">🛡️ SaaS Console</a>
                 {% endif %}
             </div>
             <div class="nav-auth-section">
                 {% if session.get('user_id') %}
                     <div class="admin-user-badge">
-                        <span class="admin-user-pill">👤 {{ session.get('admin_user', 'admin') }}</span>
+                        <span class="admin-user-pill" title="Logged in tenant: {{ session.get('clinic_name', '') }}">👤 {{ session.get('admin_user', 'admin') }}</span>
                         <a href="/admin/logout" class="nav-item nav-btn-logout" title="Sign out of admin session">
                             <span>🚪 Logout</span>
                         </a>
@@ -63,7 +67,7 @@
 
     <footer class="footer">
         <div class="footer-container">
-            <p>© 2026 {{ session.get('clinic_name', 'ClinicConnect AI') | e }} • Powered by <strong>ClinicConnect AI Platform</strong></p>
+            <p>© 2026 {{ (business.name if business else session.get('clinic_name', 'ClinicConnect AI')) | e }} • Powered by <strong>ClinicConnect AI Platform</strong></p>
             <p class="footer-sub">Multi-Specialty Polyclinic Architecture • Dynamic Specialization &amp; Services Discovery</p>
         </div>
     </footer>

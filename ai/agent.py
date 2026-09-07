@@ -11,7 +11,11 @@ from models import db, Business, Conversation, Message, Customer, Doctor, Servic
 from services.booking_service import BookingService, _get_business, _get_business_info, _get_business_tz, RequestCache
 from ai.tools import CANONICAL_TOOLS, ToolDispatcher
 from ai.prompts import build_system_prompt
-from ai.llm_client import LLMClient, _extract_name, _extract_phone_number, _fuzzy_match_roster, _extract_doctor_mention, resolve_date_string, _classify_intent
+from ai.llm_client import (
+    LLMClient, _extract_name, _extract_phone_number, _fuzzy_match_roster,
+    _extract_doctor_mention, resolve_date_string, _classify_intent,
+    _is_valid_name_token, _is_question_query, _is_appointment_status_inquiry
+)
 from ai.response_generator import generate_tool_response, detect_language
 
 _local_perf_state = threading.local()
@@ -20,28 +24,6 @@ _local_perf_state = threading.local()
 def _on_cursor_execute(conn, cursor, statement, parameters, context, executemany):
     if getattr(_local_perf_state, "active", False):
         _local_perf_state.query_count = getattr(_local_perf_state, "query_count", 0) + 1
-
-
-
-def _is_question_query(text: str) -> bool:
-    """Check if the text is phrased as a question/inquiry rather than a direct statement or slot selection."""
-    if not text:
-        return False
-    lower = text.lower().strip()
-    if any(w in lower for w in ["appointment fix", "book appointment", "appointment book", "booking fix", "اپائنٹمنٹ بک", "اپائنٹمنٹ فکس", "بکنگ"]):
-        return False
-    if "?" in text or "؟" in text:
-        return True
-    question_prefixes = [
-        "is there", "are there", "any other", "what about", "do you have",
-        "can i", "could i", "when", "which", "how about", "available after",
-        "slots after", "available before", "slots before", "what time",
-        "is anything", "are any", "what are", "who is", "show me", "tell me",
-        "is this", "is that", "available", "after", "before", "free", "any slot",
-        "kis din", "kis kis din", "kab", "timing", "schedule", "working days",
-        "کس دن", "کس کس دن", "کب", "شیڈول", "ٹائمنگ", "اوقات", "بیٹھتی", "بیٹھتے"
-    ]
-    return any(qp in lower for qp in question_prefixes)
 
 
 _URDU_ROMAN_NUMBERS = {
@@ -380,6 +362,29 @@ def _build_state_context(conv: Conversation) -> str:
     lines.append(f"Customer Name  : {conv.pending_customer_name or '(not yet provided)'}")
     lines.append(f"Customer Phone : {conv.pending_customer_phone or '(not yet provided)'}")
     lines.append(f"Channel        : {conv.channel or 'web_chat'}")
+
+    # Live DB Appointment Status Lookup (to prevent stale hallucinations about cancelled or newly booked appointments)
+    try:
+        cust_phone = conv.pending_customer_phone or (conv.customer.phone if conv.customer else None)
+        cust_id = conv.customer_id
+        live_details = BookingService.get_appointment_details(
+            conv.business_id,
+            customer_phone=cust_phone,
+            customer_id=cust_id
+        )
+        if live_details.get("appointments"):
+            appt_summaries = []
+            for a in live_details["appointments"][:3]:
+                appt_summaries.append(f"#{a['id']}: {a['status']} with {a['doctor_name']} on {a['appointment_date']} at {a['appointment_time']}")
+            lines.append(f"Live DB Appointments: {'; '.join(appt_summaries)}")
+            if live_details.get("active_appointment"):
+                act = live_details["active_appointment"]
+                lines.append(f"Active Confirmed Booking: #{act['id']} with {act['doctor_name']} on {act['appointment_date']} at {act['appointment_time']}")
+            else:
+                lines.append("Active Confirmed Booking: None (past appointments are cancelled or completed)")
+    except Exception:
+        pass
+
     lines.append("")
 
     if conv.awaiting_input == "doctor_choice":
@@ -395,7 +400,7 @@ def _build_state_context(conv: Conversation) -> str:
     elif conv.awaiting_input == "confirmation":
         lines.append("INSTRUCTION: The user was just asked to confirm their appointment booking details. Interpret their next reply as confirming or declining this booking first, before considering any other intent, unless they clearly change the subject.")
     elif conv.awaiting_input == "name":
-        lines.append("INSTRUCTION: The user was just asked to provide their full name for the booking. Interpret their next reply as providing their full name first, before considering any other intent, unless they clearly change the subject.")
+        lines.append("INSTRUCTION: The user was just asked to provide the patient's full name for the booking. If the user asks a question, mentions fees/charges, or makes a comment, answer their query and politely ask for the patient's full name. NEVER treat questions, fees, or casual chatter as a patient name!")
     elif conv.awaiting_input == "phone":
         lines.append("INSTRUCTION: The user was just asked to provide their contact phone number for the booking. Interpret their next reply as providing their phone number first, before considering any other intent, unless they clearly change the subject.")
     else:
@@ -447,6 +452,37 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         db.session.flush()
         return
 
+    # Check Appointment Status Inquiry FIRST
+    is_status_inquiry = _is_appointment_status_inquiry(user_content) or (
+        conv.intent == "APPOINTMENT_STATUS_INQUIRY"
+        and conv.awaiting_input != "confirmation"
+        and any(k in text_lower for k in ["yes", "yeah", "sure", "ok", "okay", "haan", "theek", "sahi", "yup", "jee", "ji"])
+        and not any(k in text_lower for k in ["confirm", "book", "rakh", "schedule"])
+    )
+    if is_status_inquiry:
+        conv.intent = "APPOINTMENT_STATUS_INQUIRY"
+        conv.awaiting_input = None
+        # Check if customer has an active confirmed appointment in DB to sync state
+        try:
+            cust_phone = conv.pending_customer_phone or (conv.customer.phone if conv.customer else None)
+            cust_id = conv.customer_id
+            live_details = BookingService.get_appointment_details(conv.business_id, customer_phone=cust_phone, customer_id=cust_id)
+            if live_details.get("active_appointment"):
+                act = live_details["active_appointment"]
+                conv.workflow_state = "BOOKED"
+                conv.requested_date = act.get("appointment_date")
+                conv.requested_time = act.get("appointment_time")
+                conv.selected_doctor_id = act.get("doctor_id")
+                conv.selected_service_id = act.get("service_id")
+            elif live_details.get("latest_appointment") and live_details["latest_appointment"].get("status") == "CANCELLED":
+                conv.workflow_state = "COMPLETED"
+                conv.requested_date = None
+                conv.requested_time = None
+        except Exception:
+            pass
+        db.session.flush()
+        return
+
     # If user previously cancelled an appointment and is now sending a new request, reset state cleanly
     cancel_keywords = [
         "cancel booking", "cancel appointment", "cancel my appointment", "cancel my booking",
@@ -454,8 +490,10 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
         "cancel kardein", "cancel krdein", "cancel kardo", "cancel please", "please cancel",
         "کینسل", "منسوخ"
     ]
-    is_cancel_msg = any(k in text_lower for k in cancel_keywords) or (
-        "cancel" in text_lower and any(w in text_lower for w in ["appointment", "booking", "slot", "meri", "my"])
+    is_cancel_msg = not _is_appointment_status_inquiry(user_content) and (
+        any(k in text_lower for k in cancel_keywords) or (
+            "cancel" in text_lower and any(w in text_lower for w in ["appointment", "booking", "slot", "meri", "my"]) and not any(w in text_lower for w in ["or not", "ya nahi", "was", "is it", "staff", "check"])
+        )
     )
     if conv.intent == "CANCEL_APPOINTMENT" and not is_cancel_msg:
         conv.intent = "BOOK_APPOINTMENT"
@@ -514,6 +552,25 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
     # 1. Resolve Doctor using cached roster
     doctor_roster = BookingService.get_doctors(conv.business_id)
     matched_doc = _fuzzy_match_roster(user_content, doctor_roster)
+    if not matched_doc and not conv.selected_doctor_id:
+        if len(doctor_roster) == 1:
+            matched_doc = doctor_roster[0]
+        else:
+            cand_time = _extract_time_token(user_content)
+            if cand_time:
+                last_tool = Message.query.filter_by(
+                    conversation_id=conv.id, role="tool", tool_name="check_availability"
+                ).order_by(Message.created_at.desc()).first()
+                if last_tool and last_tool.content:
+                    try:
+                        data = json.loads(last_tool.content)
+                        results = data.get("results", [])
+                        matching_res = next((r for r in results if cand_time in r.get("available_slots", [])), None)
+                        if matching_res and matching_res.get("doctor_id"):
+                            matched_doc = next((d for d in doctor_roster if d["id"] == matching_res["doctor_id"]), None)
+                    except Exception:
+                        pass
+
     if matched_doc:
         if not conv.selected_doctor_id or is_explicit_change or conv.awaiting_input == "doctor_choice" or not _msg_is_question:
             if conv.selected_doctor_id != matched_doc["id"] or conv.intent == "RESCHEDULE_APPOINTMENT":
@@ -630,12 +687,13 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                 valid_slots = avail.get("available_slots", []) if avail.get("success") else []
                 if time_token in valid_slots:
                     conv.requested_time = time_token
-                    if not conv.pending_customer_name:
-                        conv.awaiting_input = "name"
-                    elif not conv.pending_customer_phone:
-                        conv.awaiting_input = "phone"
-                    else:
-                        conv.awaiting_input = "confirmation"
+                    if conv.awaiting_input != "time_choice":
+                        if not conv.pending_customer_name:
+                            conv.awaiting_input = "name"
+                        elif not conv.pending_customer_phone:
+                            conv.awaiting_input = "phone"
+                        else:
+                            conv.awaiting_input = "confirmation"
                 else:
                     # Requested slot is NOT available — reject and keep waiting for valid slot
                     conv.requested_time = None
@@ -659,9 +717,14 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
 
     # 5. Extract customer name (excluding doctor & service names)
     _roster_names = [d["name"] for d in doctor_roster] + [s["name"] for s in service_roster]
-    cand_name = _extract_name(user_content, roster_names=_roster_names)
+    is_awaiting_name = (conv.awaiting_input == "name")
+    cand_name = _extract_name(user_content, roster_names=_roster_names, is_awaiting_name=is_awaiting_name)
     if cand_name and not conv.pending_customer_name:
         conv.pending_customer_name = cand_name
+
+    # Sanitization guard: If pending_customer_name is contaminated with question/inquiry words or invalid tokens, reset it!
+    if conv.pending_customer_name and not _is_valid_name_token(conv.pending_customer_name, roster_names=None):
+        conv.pending_customer_name = None
 
     # 6. Extract customer phone
     phone_found = _extract_phone_number(user_content)
@@ -758,7 +821,7 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                 conv.selected_service_id = doc_services[0]["id"]
 
     # Update intent/state when customer wants appointment or gives parameters
-    if conv.intent not in ["INQUIRY"] and not is_cancel_msg and (
+    if conv.intent not in ["INQUIRY", "APPOINTMENT_STATUS_INQUIRY"] and not is_cancel_msg and (
         conv.selected_service_id or
         conv.selected_doctor_id or
         conv.requested_date or
@@ -788,12 +851,12 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                         conv.awaiting_input = "service_choice"
                 elif not conv.requested_date:
                     conv.awaiting_input = "date_choice"
-                elif not conv.requested_time:
+                elif not conv.requested_time or (conv.awaiting_input == "time_choice" and _extract_time_token(user_content)):
                     conv.awaiting_input = "time_choice"
-                elif not conv.pending_customer_phone:
-                    conv.awaiting_input = "phone"
                 elif not conv.pending_customer_name:
                     conv.awaiting_input = "name"
+                elif not conv.pending_customer_phone:
+                    conv.awaiting_input = "phone"
                 else:
                     conv.awaiting_input = "confirmation"
             elif conv.selected_service_id:
@@ -801,12 +864,12 @@ def _resolve_workflow_input(conv: Conversation, user_content: str):
                     conv.awaiting_input = "doctor_choice"
                 elif not conv.requested_date:
                     conv.awaiting_input = "date_choice"
-                elif not conv.requested_time:
+                elif not conv.requested_time or (conv.awaiting_input == "time_choice" and _extract_time_token(user_content)):
                     conv.awaiting_input = "time_choice"
-                elif not conv.pending_customer_phone:
-                    conv.awaiting_input = "phone"
                 elif not conv.pending_customer_name:
                     conv.awaiting_input = "name"
+                elif not conv.pending_customer_phone:
+                    conv.awaiting_input = "phone"
                 else:
                     conv.awaiting_input = "confirmation"
             else:
@@ -843,7 +906,7 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
 
     # 1. Final Booking Confirmation Card
     if (
-        conv.intent not in ["INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"] and
+        conv.intent not in ["INQUIRY", "APPOINTMENT_STATUS_INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"] and
         conv.selected_doctor_id and
         conv.requested_date and
         conv.requested_time and
@@ -888,7 +951,7 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
         }
 
     # 2. Time Slot Selection
-    if conv.intent not in ["INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"] and not conv.requested_time and conv.selected_doctor_id and conv.requested_date:
+    if conv.intent not in ["INQUIRY", "APPOINTMENT_STATUS_INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"] and not conv.requested_time and conv.selected_doctor_id and conv.requested_date:
         slots = []
         last_tool = Message.query.filter_by(conversation_id=conv.id, role="tool", tool_name="check_availability").order_by(Message.created_at.desc()).first()
         effective_date_str = conv.requested_date
@@ -948,7 +1011,12 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
             }
 
     # 3. Doctor Selection (Must come before Date Selection if doctor is not yet chosen)
-    if not conv.selected_doctor_id and (conv.awaiting_input in ["doctor_choice", "doctor"] or conv.selected_service_id):
+    if (
+        conv.intent not in ["INQUIRY", "APPOINTMENT_STATUS_INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"]
+        and not conv.selected_doctor_id
+        and conv.awaiting_input in ["doctor_choice", "doctor"]
+        and len(doctor_roster) > 1
+    ):
         if doctor_roster:
             def _format_wk(d_entry):
                 wk = d_entry.get("working_days", "")
@@ -976,7 +1044,12 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
             }
 
     # 4. Date Selection (Strictly personalized to the chosen doctor's active weekly schedule)
-    if conv.intent not in ["INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"] and not conv.requested_date and conv.awaiting_input != "service_choice" and (conv.selected_doctor_id or conv.awaiting_input in ["date_choice", "date"]):
+    if (
+        conv.intent not in ["INQUIRY", "APPOINTMENT_STATUS_INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"]
+        and not conv.requested_date
+        and conv.awaiting_input in ["date_choice", "date"]
+        and conv.workflow_state in ["COLLECTING_INFO", "CHECKING_AVAILABILITY", "START"]
+    ):
         tz = _get_business_tz(conv.business_id)
         today = datetime.now(tz).date()
         doc = next((d for d in doctor_roster if d["id"] == conv.selected_doctor_id), None) if conv.selected_doctor_id else None
@@ -1065,8 +1138,13 @@ def _build_ui_action(conv: Conversation) -> Optional[Dict[str, Any]]:
             "allow_custom_date": True
         }
 
-    # 5. Service Selection (Only during booking flow or when awaiting service_choice; never on casual greetings)
-    if not conv.selected_service_id and (conv.awaiting_input == "service_choice" or (conv.intent in ["BOOK_APPOINTMENT", "RESCHEDULE_APPOINTMENT"] and not conv.selected_doctor_id)):
+    # 5. Service Selection (Only during booking flow when awaiting service_choice)
+    if (
+        conv.intent not in ["INQUIRY", "APPOINTMENT_STATUS_INQUIRY", "CANCEL_APPOINTMENT", "UPDATE_CUSTOMER_DETAILS"]
+        and not conv.selected_service_id
+        and conv.awaiting_input in ["service_choice", "service"]
+        and conv.workflow_state in ["COLLECTING_INFO", "START"]
+    ):
         if service_roster:
             business = _get_business_info(conv.business_id)
             consultation_fee = business.get("consultation_fee", 2000.0)
@@ -1238,6 +1316,18 @@ class Agent:
                     cust_id = result.get("customer_id") or (result.get("customer") or {}).get("id")
                     if cust_id:
                         conv.customer_id = int(cust_id)
+                elif tool_name == "get_appointment_details" and result.get("success"):
+                    if result.get("active_appointment"):
+                        act = result["active_appointment"]
+                        conv.workflow_state = "BOOKED"
+                        conv.requested_date = act.get("appointment_date")
+                        conv.requested_time = act.get("appointment_time")
+                        conv.selected_doctor_id = act.get("doctor_id")
+                        conv.selected_service_id = act.get("service_id")
+                    elif result.get("latest_appointment") and result["latest_appointment"].get("status") == "CANCELLED":
+                        conv.workflow_state = "COMPLETED"
+                        conv.requested_date = None
+                        conv.requested_time = None
 
                 # If check_availability ran, update state if date has 0 slots or requested time is unavailable
                 if tool_name == "check_availability":
@@ -1339,16 +1429,19 @@ class Agent:
                             history_messages=formatted_messages
                         )
 
-        # If assistant explicitly acknowledged/selected a slot (e.g. "I have selected the 10:00 AM slot")
-        # ensure conv.requested_time is synchronized so time_slot_selection is not re-emitted
-        if not conv.requested_time and conv.workflow_state != "BOOKED":
-            m_asst_time = re.search(r'\b(?:selected|booked|fix(?:ed)?|choose|chosen)\s+(?:the\s+)?(\d{1,2}[:.]\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))\b', final_content, re.IGNORECASE)
-            if m_asst_time:
-                cand_t = _extract_time_token(m_asst_time.group(1))
-                if cand_t:
-                    conv.requested_time = cand_t
-                    if conv.awaiting_input == "time_choice":
-                        conv.awaiting_input = "name" if not conv.pending_customer_name else ("phone" if not conv.pending_customer_phone else "confirmation")
+        if conv.workflow_state != "BOOKED":
+            if not conv.requested_time:
+                m_asst_time = re.search(r'\b(?:selected|booked|fix(?:ed)?|choose|chosen)\s+(?:the\s+)?(\d{1,2}[:.]\d{2}\s*(?:am|pm)?|\d{1,2}\s*(?:am|pm))\b', final_content, re.IGNORECASE)
+                if m_asst_time:
+                    cand_t = _extract_time_token(m_asst_time.group(1))
+                    if cand_t:
+                        conv.requested_time = cand_t
+            if not conv.selected_doctor_id:
+                doc_roster = BookingService.get_doctors(self.business_id)
+                if len(doc_roster) == 1:
+                    conv.selected_doctor_id = doc_roster[0]["id"]
+            if conv.awaiting_input == "time_choice" and conv.requested_time:
+                conv.awaiting_input = "name" if not conv.pending_customer_name else ("phone" if not conv.pending_customer_phone else "confirmation")
 
         ui_act = _build_ui_action(conv)
 
@@ -1435,6 +1528,10 @@ class Agent:
             conv.selected_service_id = None
             conv.requested_date = None
             conv.requested_time = None
+
+        elif tool_name == "get_appointment_details":
+            conv.intent = "APPOINTMENT_STATUS_INQUIRY"
+            conv.awaiting_input = None
 
         elif tool_name == "reschedule_appointment":
             conv.intent = "RESCHEDULE_APPOINTMENT"

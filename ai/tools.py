@@ -103,6 +103,24 @@ CANONICAL_TOOLS = [
         }
     },
     {
+        "name": "get_appointment_details",
+        "description": "Look up and check the real-time status and details of a customer's appointments (confirmed, cancelled, or rescheduled) from the clinic database. ALWAYS call this tool when the customer asks about their booking details, whether their appointment was cancelled or confirmed, or asks to check their existing appointment.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "appointment_id": {
+                    "type": "integer",
+                    "description": "Optional ID of the appointment to look up"
+                },
+                "customer_phone": {
+                    "type": "string",
+                    "description": "Optional contact phone number of the customer"
+                }
+            },
+            "required": []
+        }
+    },
+    {
         "name": "cancel_appointment",
         "description": "Cancel an existing booked appointment.",
         "parameters": {
@@ -252,6 +270,27 @@ class ToolDispatcher:
                     appointment_time=arguments.get("appointment_time", ""),
                     notes=arguments.get("notes"),
                     idempotency_key=arguments.get("idempotency_key")
+                )
+
+            elif tool_name == "get_appointment_details":
+                appt_id_raw = arguments.get("appointment_id")
+                try:
+                    parsed_appt_id = int(appt_id_raw) if appt_id_raw is not None else None
+                except (ValueError, TypeError):
+                    parsed_appt_id = None
+                phone = arguments.get("customer_phone")
+                cid = None
+                if not parsed_appt_id and not phone:
+                    from models import db, Conversation
+                    conv = db.session.get(Conversation, self.conversation_id) if self.conversation_id else None
+                    if conv:
+                        phone = conv.pending_customer_phone or (conv.customer.phone if conv.customer else None)
+                        cid = conv.customer_id
+                return BookingService.get_appointment_details(
+                    business_id=self.business_id,
+                    appointment_id=parsed_appt_id,
+                    customer_phone=phone,
+                    customer_id=cid
                 )
 
             elif tool_name == "cancel_appointment":

@@ -14,7 +14,7 @@ from sqlalchemy.orm import joinedload
 _DEFAULT_TZ = "Asia/Karachi"
 
 # Minimum lead time in minutes required for same-day bookings to prevent offering slots that are past or starting immediately
-SAME_DAY_LEAD_TIME_MINUTES = 15
+SAME_DAY_LEAD_TIME_MINUTES = 5
 
 _thread_local_cache = threading.local()
 
@@ -195,6 +195,31 @@ def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, 
     return slots, ""
 
 
+_NON_PERSON_NAME_PATTERNS = re.compile(
+    r'\b(?:fee|fees|charge|charges|chages|chargis|cost|costs|price|prices|pricing|rate|rates|discount|discounts|'
+    r'package|packages|bill|pay|pkr|rs|rupees|rupay|paisa|kitna|kitni|kitne|'
+    r'kia|kya|kon|kaun|konsa|konsi|kahan|kidhar|kab|kyun|kaisi|kaisa|kaise|'
+    r'yar|yaar|bhai|bhaiya|chaye|chai|nashta|nasta|cancel|reschedule)\b',
+    re.IGNORECASE
+)
+
+
+def _is_valid_human_name(name_str: str) -> bool:
+    if not name_str or len(name_str.strip()) < 2:
+        return False
+    clean = name_str.strip()
+    if clean.lower() in ["valued patient", "patient", "customer", "anonymous", "guest", "test", "none", "n/a"]:
+        return False
+    if re.search(r'[?؟0-9]', clean):
+        return False
+    if _NON_PERSON_NAME_PATTERNS.search(clean):
+        return False
+    clean_alpha = re.sub(r'[\s.\'-]', '', clean)
+    if not clean_alpha.isalpha():
+        return False
+    return True
+
+
 class BookingService:
     @staticmethod
     def get_clinic_info(business_id: int) -> Dict[str, Any]:
@@ -334,7 +359,24 @@ class BookingService:
 
         day_name = target_date.strftime("%A")
 
-        # Doctors query
+        # Doctors query & Multi-Doctor Guard
+        all_clinic_doctors = Doctor.query.filter_by(business_id=business_id).all()
+        if not all_clinic_doctors:
+            return {"success": False, "error": "No matching doctors found for this clinic."}
+
+        # If clinic has multiple doctors, doctor selection is required before checking availability
+        if not doctor_id and len(all_clinic_doctors) > 1:
+            return {
+                "success": False,
+                "error": "Doctor selection is required for availability inquiries in multi-doctor clinics.",
+                "requires_doctor": True,
+                "doctors": [d.to_dict() for d in all_clinic_doctors]
+            }
+
+        # Auto-bind sole doctor if not specified in single-doctor clinic
+        if not doctor_id and len(all_clinic_doctors) == 1:
+            doctor_id = all_clinic_doctors[0].id
+
         query = Doctor.query.filter_by(business_id=business_id)
         if doctor_id:
             query = query.filter_by(id=doctor_id)
@@ -458,7 +500,7 @@ class BookingService:
         """
         missing_fields = []
         name_str = str(customer_name).strip() if customer_name else ""
-        if not name_str or name_str.lower() in ["valued patient", "patient", "customer", "user", "anonymous", "guest", "test", "n/a", "none"]:
+        if not name_str or not _is_valid_human_name(name_str):
             missing_fields.append("customer_name")
 
         phone_str = str(customer_phone).strip() if customer_phone else ""
@@ -713,6 +755,7 @@ class BookingService:
             sched.start_time = item.get("start_time", "09:00")
             sched.end_time = item.get("end_time", "17:00")
         db.session.commit()
+        RequestCache.clear()
         return True
 
     @staticmethod
@@ -743,6 +786,64 @@ class BookingService:
                 f"Appointment #{appt.id} for {appt.customer.name} on "
                 f"{appt.appointment_date} at {appt.appointment_time} has been cancelled."
             )
+        }
+
+    @staticmethod
+    def get_appointment_details(
+        business_id: int,
+        appointment_id: Optional[int] = None,
+        customer_phone: Optional[str] = None,
+        customer_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Look up appointment details and live statuses (confirmed, cancelled, completed)
+        from the database for a customer or appointment ID.
+        """
+        appts = []
+        if appointment_id:
+            try:
+                appt_id_int = int(appointment_id)
+                a = Appointment.query.filter_by(id=appt_id_int, business_id=business_id).first()
+                if a:
+                    appts.append(a)
+            except (ValueError, TypeError):
+                pass
+
+        if not appts and customer_id:
+            appts = Appointment.query.filter_by(
+                business_id=business_id, customer_id=customer_id
+            ).order_by(Appointment.created_at.desc(), Appointment.id.desc()).all()
+
+        if not appts and customer_phone:
+            clean_phone = "".join(filter(str.isdigit, str(customer_phone)))
+            cust = None
+            if clean_phone:
+                cust = Customer.query.filter(
+                    (Customer.phone == customer_phone) |
+                    (Customer.phone.like(f"%{clean_phone[-10:]}%") if len(clean_phone) >= 7 else False)
+                ).first()
+            if cust:
+                appts = Appointment.query.filter_by(
+                    business_id=business_id, customer_id=cust.id
+                ).order_by(Appointment.created_at.desc(), Appointment.id.desc()).all()
+
+        if not appts and not appointment_id and not customer_id and not customer_phone:
+            return {
+                "success": False,
+                "error": "Either appointment_id, customer_phone, or customer_id is required."
+            }
+
+        appts_data = [a.to_dict() for a in appts]
+        active_confirmed = next((a for a in appts_data if a.get("status") == "CONFIRMED"), None)
+        latest_appt = appts_data[0] if appts_data else None
+
+        return {
+            "success": True,
+            "appointments": appts_data,
+            "active_appointment": active_confirmed,
+            "latest_appointment": latest_appt,
+            "total_found": len(appts_data),
+            "message": "Appointment details retrieved successfully." if appts_data else "No matching appointments found in clinic records."
         }
 
     @staticmethod

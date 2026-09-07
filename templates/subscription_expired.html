@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Subscription Expired - {{ business.name if business else "Clinic Portal" }}{% endblock %}
+
+{% block content %}
+<div class="login-wrapper" style="max-width: 620px; margin: 40px auto;">
+    <div class="login-card" style="padding: 36px 30px; text-align: center;">
+        <div style="font-size: 3rem; margin-bottom: 16px;">⛔</div>
+        <h1 style="font-size: 1.65rem; font-weight: 800; color: #991b1b; margin-bottom: 8px;">
+            Subscription or Trial Expired
+        </h1>
+        <p style="color: #64748b; font-size: 0.95rem; margin-bottom: 24px; line-height: 1.5;">
+            The software access license for <strong>{{ business.name if business else "your clinic" }}</strong> has expired. To resume managing doctors, appointments, and live chat, please renew your subscription below.
+        </p>
+
+        <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 18px; margin-bottom: 28px; text-align: left;">
+            <div style="font-size: 0.85rem; color: #991b1b; margin-bottom: 6px;">
+                <strong>License Status:</strong> Inactive / Expired
+            </div>
+            {% if business and business.effective_expiry_date %}
+            <div style="font-size: 0.85rem; color: #7f1d1d;">
+                <strong>Expiration Date:</strong> {{ business.effective_expiry_date.strftime('%B %d, %Y') }}
+            </div>
+            {% endif %}
+            <div style="font-size: 0.82rem; color: #b91c1c; margin-top: 8px;">
+                All clinic data, doctors, appointment history, and patient records remain securely preserved in your database.
+            </div>
+        </div>
+
+        <!-- Direct One-Click Renewal Form -->
+        <form method="POST" action="/admin/subscription/renew" style="text-align: left; margin-bottom: 24px;">
+            <div class="form-group" style="margin-bottom: 16px;">
+                <label style="font-size: 0.85rem; font-weight: 700; color: #1e293b; display: block; margin-bottom: 6px;">Select Subscription Term to Reactivate:</label>
+                <select name="duration_days" class="form-control" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 0.95rem;">
+                    <option value="30" selected>1 Month Access (30 Days)</option>
+                    <option value="90">3 Months Access (90 Days)</option>
+                    <option value="180">6 Months Access (180 Days)</option>
+                    <option value="365">1 Full Year Access (365 Days) — Best Value</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block" style="padding: 12px; font-size: 1rem; font-weight: 700;">
+                ⚡ Reactivate Clinic Portal Now
+            </button>
+        </form>
+
+        <div style="border-top: 1px solid #e2e8f0; padding-top: 18px; display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem;">
+            <span style="color: #64748b;">Need help? Contact your platform admin</span>
+            <a href="/admin/logout" style="color: #dc2626; text-decoration: none; font-weight: 600;">Sign Out →</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

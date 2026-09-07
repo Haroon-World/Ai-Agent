@@ -16,7 +16,7 @@ admin_bp = Blueprint("admin_bp", __name__)
 # ---------------------------------------------------------------------------
 
 def login_required(f):
-    """Redirect to login if not authenticated or missing clinic context."""
+    """Redirect to login if not authenticated, missing clinic context, or expired subscription."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not session.get("user_id"):
@@ -25,6 +25,19 @@ def login_required(f):
             if session.get("is_platform_admin"):
                 return redirect(url_for("platform_bp.dashboard"))
             return redirect(url_for("admin_bp.login"))
+
+        # Subscription enforcement for clinic staff accounts
+        exempt_endpoints = [
+            "admin_bp.subscription_expired",
+            "admin_bp.subscription_view",
+            "admin_bp.renew_subscription",
+            "admin_bp.logout"
+        ]
+        if not session.get("is_platform_admin") and request.endpoint not in exempt_endpoints:
+            from services.subscription_service import SubscriptionService
+            if not SubscriptionService.check_access(session.get("business_id")):
+                return redirect(url_for("admin_bp.subscription_expired"))
+
         return f(*args, **kwargs)
     return decorated_function
 
@@ -56,8 +69,7 @@ def login():
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
 
-        # Find all users with that username (across all businesses or platform)
-        # and pick the first one whose password hash matches.
+        # Find clinic user with that username (clinic tenant admins only)
         matched_user = None
         candidates = User.query.filter_by(username=username).all()
         for candidate in candidates:
@@ -66,26 +78,36 @@ def login():
                 break
 
         if matched_user:
+            # Block platform owners from using the clinic client login portal
+            if matched_user.is_platform_admin:
+                flash("Unauthorized: Platform Owner accounts cannot sign in through the Clinic Client Portal. Please use the dedicated Platform Master Login at /platform/login.", "warning")
+                return render_template(
+                    "login.html",
+                    already_logged_in=bool(session.get("user_id")),
+                    current_user=session.get("admin_user", "admin")
+                )
+
             session.clear()
             session.permanent = True
             session["user_id"] = matched_user.id
             session["business_id"] = matched_user.business_id
             session["admin_user"] = matched_user.username
-            session["is_platform_admin"] = matched_user.is_platform_admin
+            session["is_platform_admin"] = False
 
-            if matched_user.business_id:
-                business = db.session.get(Business, matched_user.business_id)
-                session["clinic_name"] = business.name if business else "Clinic"
-                flash(f"Logged in to {session['clinic_name']} Admin Portal.", "success")
-                return redirect(url_for("admin_bp.dashboard"))
-            else:
-                session["clinic_name"] = "ClinicConnectAI Platform"
-                flash("Logged in as SaaS Platform Owner.", "success")
-                return redirect(url_for("platform_bp.dashboard"))
+            business = db.session.get(Business, matched_user.business_id)
+            session["clinic_name"] = business.name if business else "Clinic"
+            
+            # Check subscription access upon sign in
+            if business and not business.is_subscription_valid:
+                flash(f"Subscription for {session['clinic_name']} has expired. Please renew to resume operations.", "warning")
+                return redirect(url_for("admin_bp.subscription_expired"))
+
+            flash(f"Logged in to {session['clinic_name']} Admin Portal.", "success")
+            return redirect(url_for("admin_bp.dashboard"))
         else:
             flash("Invalid username or password.", "danger")
 
-    already_logged_in = bool(session.get("user_id"))
+    already_logged_in = bool(session.get("user_id")) and not bool(session.get("is_platform_admin"))
     return render_template(
         "login.html",
         already_logged_in=already_logged_in,
@@ -98,6 +120,37 @@ def logout():
     session.clear()
     flash("You have been logged out.", "info")
     return redirect(url_for("admin_bp.login"))
+
+
+@admin_bp.route("/admin/switch-clinic/<int:clinic_id>")
+def switch_clinic(clinic_id):
+    """Switch active clinic context for authorized admin or platform owner."""
+    clinic = db.session.get(Business, clinic_id)
+    if not clinic:
+        flash("Clinic not found.", "danger")
+        return redirect(request.referrer or url_for("admin_bp.dashboard"))
+
+    # Platform owners can switch to any clinic freely
+    if session.get("is_platform_admin"):
+        session["business_id"] = clinic.id
+        session["clinic_name"] = clinic.name
+        session["active_clinic_id"] = clinic.id
+        flash(f"Switched to {clinic.name}.", "info")
+        return redirect(request.referrer or url_for("admin_bp.dashboard"))
+
+    # Check if currently logged in user belongs to this clinic
+    if session.get("user_id"):
+        user = db.session.get(User, session.get("user_id"))
+        if user and user.business_id == clinic.id:
+            session["business_id"] = clinic.id
+            session["clinic_name"] = clinic.name
+            session["active_clinic_id"] = clinic.id
+            flash(f"Switched to {clinic.name}.", "info")
+            return redirect(request.referrer or url_for("admin_bp.dashboard"))
+
+    # For visitors / customer sessions, update active clinic and view chat
+    session["active_clinic_id"] = clinic.id
+    return redirect(url_for("chat_bp.chat_view", clinic_id=clinic.id))
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +471,8 @@ def edit_doctor(doctor_id):
     doctor.working_days = ",".join(active_days)
 
     db.session.commit()
+    from services.booking_service import RequestCache
+    RequestCache.clear()
     flash(f"Weekly schedule & profile for '{doctor.name}' updated successfully.", "success")
     return redirect(url_for("admin_bp.doctors_view"))
 
@@ -821,5 +876,134 @@ def admin_manual_book():
 @platform_admin_required
 def onboard_clinic():
     """Forward legacy URL to the dedicated Platform Console."""
-    return redirect(url_for("platform_bp.dashboard"))
+    return redirect(url_for("platform_bp.onboard_clinic_view"))
+
+
+# ---------------------------------------------------------------------------
+# Password Reset Routes for Clinic Admins (Clients)
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/admin/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    """Allow clinic owners/staff to initiate a secure password reset."""
+    reset_url = None
+    target_username = None
+
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        target_username = username
+        if not username:
+            flash("Please enter your admin username.", "warning")
+            return render_template("forgot_password.html")
+
+        # Find user account (clinic staff only)
+        user = User.query.filter_by(username=username, is_platform_admin=False).first()
+        if user:
+            token = user.generate_reset_token(expires_in_hours=1)
+            db.session.commit()
+            reset_url = url_for("admin_bp.reset_password", token=token, _external=True)
+            flash("Password reset token generated successfully. In production, this link is delivered via email or SMS.", "success")
+        else:
+            flash(f"No clinic administrator account found with username '{username}'.", "danger")
+
+    return render_template("forgot_password.html", reset_url=reset_url, username=target_username)
+
+
+@admin_bp.route("/admin/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    """Validate token and allow setting a new password."""
+    user = User.query.filter_by(reset_token=token).first()
+    if not user or not user.verify_reset_token(token):
+        flash("The password reset link is invalid or has expired. Please request a new one.", "danger")
+        return redirect(url_for("admin_bp.forgot_password"))
+
+    if request.method == "POST":
+        password = (request.form.get("password") or "").strip()
+        confirm_password = (request.form.get("confirm_password") or "").strip()
+
+        if len(password) < 6:
+            flash("New password must be at least 6 characters long.", "danger")
+            return render_template("reset_password.html", token=token, user=user)
+
+        if password != confirm_password:
+            flash("Passwords do not match. Please re-enter.", "danger")
+            return render_template("reset_password.html", token=token, user=user)
+
+        user.set_password(password)
+        user.clear_reset_token()
+        db.session.commit()
+        flash("Your password has been successfully reset! You may now sign in.", "success")
+        return redirect(url_for("admin_bp.login"))
+
+    return render_template("reset_password.html", token=token, user=user)
+
+
+# ---------------------------------------------------------------------------
+# Subscription Management Views for Clinic Owners (Clients)
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/admin/subscription")
+@login_required
+def subscription_view():
+    """Display the clinic's active subscription status, trial details, and renewal options."""
+    business_id = _current_business_id()
+    business = db.session.get(Business, business_id)
+    if not business:
+        flash("Clinic record not found.", "danger")
+        return redirect(url_for("admin_bp.dashboard"))
+
+    from services.subscription_service import SubscriptionService
+    sub_info = SubscriptionService.get_subscription_info(business_id)
+
+    return render_template("subscription.html", business=business, sub_info=sub_info)
+
+
+@admin_bp.route("/admin/subscription/renew", methods=["POST"])
+@login_required
+def renew_subscription():
+    """Client initiates subscription renewal / plan upgrade request for platform approval."""
+    business_id = _current_business_id()
+    try:
+        duration_days = int(request.form.get("duration_days", "30"))
+    except (ValueError, TypeError):
+        duration_days = 30
+
+    from services.subscription_service import SubscriptionService
+    username = session.get("admin_user", "Clinic Admin")
+    res = SubscriptionService.create_subscription_request(
+        business_id=business_id,
+        duration_days=duration_days,
+        requested_by=username
+    )
+    if res.get("success"):
+        flash("Subscription request submitted successfully! The platform onboarding team will review and activate your plan.", "success")
+    else:
+        flash(res.get("error", "Failed to submit subscription request. Please contact support."), "danger")
+
+    return redirect(url_for("admin_bp.subscription_view"))
+
+
+@admin_bp.route("/admin/subscription/cancel", methods=["POST"])
+@login_required
+def cancel_own_subscription():
+    """Client requests immediate cancellation / unsubscribes from software license."""
+    business_id = _current_business_id()
+    from services.subscription_service import SubscriptionService
+    username = session.get("admin_user", "Clinic Admin")
+    res = SubscriptionService.cancel_subscription(business_id, reason=f"Cancelled by client administrator '{username}'")
+    if res.get("success"):
+        flash("Your subscription has been cancelled. Access to clinic features is now locked.", "warning")
+    else:
+        flash(res.get("error", "Failed to cancel subscription."), "danger")
+
+    return redirect(url_for("admin_bp.subscription_view"))
+
+
+@admin_bp.route("/admin/subscription-expired")
+def subscription_expired():
+    """Lockout notice page displayed when a clinic's subscription or trial has expired."""
+    business_id = session.get("business_id")
+    business = db.session.get(Business, business_id) if business_id else None
+    return render_template("subscription_expired.html", business=business)
+
 

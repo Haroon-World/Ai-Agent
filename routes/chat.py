@@ -116,6 +116,9 @@ def chat_view(clinic_id=None):
     business = db.session.get(Business, business_id)
     if not business:
         business = db.session.get(Business, Config.DEFAULT_BUSINESS_ID)
+    session["active_clinic_id"] = business.id
+    if not session.get("user_id"):
+        session["clinic_name"] = business.name
     return render_template("chat.html", business=business)
 
 

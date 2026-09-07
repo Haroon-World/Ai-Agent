@@ -1,6 +1,6 @@
 import os
 import sys
-from flask import Flask, render_template, redirect, url_for
+from flask import Flask, render_template, redirect, url_for, request, session
 from config.config import Config
 from models import db, Business, auto_migrate_db
 from routes.chat import chat_bp
@@ -51,8 +51,19 @@ def create_app(config_class=Config):
             init_db(app)
 
     @app.route("/")
-    def index():
-        business = db.session.get(Business, Config.DEFAULT_BUSINESS_ID)
+    @app.route("/clinic/<int:clinic_id>")
+    def index(clinic_id=None):
+        target_id = clinic_id or request.args.get("clinic") or request.args.get("business_id")
+        business = None
+        if target_id and str(target_id).isdigit():
+            business = db.session.get(Business, int(target_id))
+        elif session.get("business_id"):
+            business = db.session.get(Business, session.get("business_id"))
+        elif session.get("active_clinic_id"):
+            business = db.session.get(Business, session.get("active_clinic_id"))
+
+        if not business:
+            business = db.session.get(Business, Config.DEFAULT_BUSINESS_ID)
         return render_template("index.html", business=business)
 
     init_db(app)

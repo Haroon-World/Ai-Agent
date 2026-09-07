@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Onboard New Clinic — ClinicConnectAI Platform</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #090d16;
+            --card-bg: #111827;
+            --border: #1f2937;
+            --accent: #6366f1;
+            --accent-hover: #4f46e5;
+            --text-main: #f9fafb;
+            --text-muted: #9ca3af;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            min-height: 100vh;
+        }
+        .navbar {
+            background: #0d1322;
+            border-bottom: 1px solid var(--border);
+            padding: 16px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: #ffffff;
+            font-weight: 800;
+            font-size: 1.15rem;
+        }
+        .brand-badge {
+            background: rgba(99, 102, 241, 0.2);
+            color: #818cf8;
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-weight: 700;
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .btn-back {
+            background: #1f2937;
+            border: 1px solid #374151;
+            color: #e5e7eb;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-back:hover {
+            background: #374151;
+            color: #ffffff;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 36px 20px;
+        }
+        .page-header {
+            margin-bottom: 28px;
+        }
+        .page-title {
+            font-size: 1.85rem;
+            font-weight: 800;
+            color: #ffffff;
+            margin-bottom: 6px;
+            letter-spacing: -0.02em;
+        }
+        .page-subtitle {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+        .flash-alert {
+            padding: 12px 18px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            margin-bottom: 24px;
+        }
+        .flash-success { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; }
+        .flash-danger { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; }
+        .flash-warning { background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; }
+
+        /* ==========================================================================
+           Enterprise Success Confirmation Panel
+           ========================================================================== */
+        .handoff-container {
+            background: #0f1c2e;
+            border: 1px solid rgba(99, 102, 241, 0.4);
+            border-radius: 14px;
+            padding: 28px;
+            margin-bottom: 36px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+        }
+        .handoff-header {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 14px;
+            padding-bottom: 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .handoff-icon {
+            width: 44px;
+            height: 44px;
+            background: rgba(16, 185, 129, 0.2);
+            border: 1px solid rgba(16, 185, 129, 0.5);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            color: #34d399;
+            flex-shrink: 0;
+        }
+        .handoff-title {
+            font-size: 1.35rem;
+            font-weight: 800;
+            color: #ffffff;
+        }
+        .handoff-desc {
+            font-size: 0.9rem;
+            color: #cbd5e1;
+            line-height: 1.5;
+            margin-bottom: 22px;
+        }
+
+        /* Detail Cards Grid */
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+            margin-bottom: 22px;
+        }
+        .detail-card {
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 10px;
+            padding: 16px 18px;
+        }
+        .detail-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        .detail-card-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: #818cf8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            font-size: 0.86rem;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+        }
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        .detail-key {
+            color: var(--text-muted);
+            font-size: 0.82rem;
+        }
+        .detail-val {
+            color: #f1f5f9;
+            font-weight: 600;
+            text-align: right;
+        }
+
+        /* Credential Item */
+        .cred-item {
+            margin-bottom: 10px;
+        }
+        .cred-item:last-child {
+            margin-bottom: 0;
+        }
+        .cred-label {
+            font-size: 0.76rem;
+            color: #94a3b8;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .cred-box {
+            display: flex;
+            align-items: center;
+            background: #090d16;
+            border: 1px solid #2d3748;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .cred-code {
+            flex: 1;
+            padding: 7px 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.88rem;
+            color: #a5b4fc;
+            background: transparent;
+            border: none;
+            outline: none;
+        }
+        .btn-copy {
+            background: #1e293b;
+            border: none;
+            border-left: 1px solid #2d3748;
+            color: #cbd5e1;
+            padding: 7px 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-copy:hover {
+            background: #334155;
+            color: #ffffff;
+        }
+
+        /* Security Gate Banner */
+        .security-gate-banner {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 8px;
+            padding: 14px 18px;
+            margin-bottom: 22px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        .security-gate-icon {
+            font-size: 1.25rem;
+            line-height: 1;
+        }
+        .security-gate-text {
+            font-size: 0.85rem;
+            color: #fde68a;
+            line-height: 1.45;
+        }
+        .security-gate-text strong {
+            color: #ffffff;
+        }
+
+        /* Handoff Actions */
+        .handoff-actions {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+        .btn-portal-login {
+            background: #059669;
+            color: #ffffff;
+            font-weight: 700;
+            font-size: 0.92rem;
+            padding: 10px 22px;
+            border-radius: 8px;
+            text-decoration: none;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-portal-login:hover {
+            background: #10b981;
+            color: #ffffff;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+        .btn-secondary-link {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #cbd5e1;
+            font-weight: 600;
+            font-size: 0.88rem;
+            padding: 10px 18px;
+            border-radius: 8px;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+        .btn-secondary-link:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+        }
+
+        /* ==========================================================================
+           Form Sections & Inputs
+           ========================================================================== */
+        .form-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 32px;
+        }
+        .form-section {
+            margin-bottom: 28px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid #1a2333;
+        }
+        .form-section:last-of-type {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 18px;
+        }
+        .section-number {
+            width: 28px;
+            height: 28px;
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.4);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: #a5b4fc;
+        }
+        .section-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .form-group {
+            margin-bottom: 18px;
+        }
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        @media (max-width: 680px) {
+            .form-row { grid-template-columns: 1fr; }
+        }
+        label.form-label {
+            display: block;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: #cbd5e1;
+            margin-bottom: 6px;
+        }
+        input.form-input, select.form-input {
+            width: 100%;
+            background: #0b0f19;
+            border: 1px solid #2d3748;
+            color: #ffffff;
+            padding: 11px 14px;
+            border-radius: 8px;
+            font-size: 0.92rem;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+        input.form-input:focus, select.form-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+        }
+        .helper-text {
+            font-size: 0.76rem;
+            color: var(--text-muted);
+            margin-top: 5px;
+        }
+        .trial-banner {
+            background: rgba(99, 102, 241, 0.1);
+            border: 1px solid rgba(99, 102, 241, 0.25);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.86rem;
+            color: #c7d2fe;
+        }
+        .btn-submit {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 14px 24px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 24px;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .btn-submit:hover {
+            background: var(--accent-hover);
+            box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);
+        }
+        .pill-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+        .pill-green {
+            background: rgba(16, 185, 129, 0.18);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.35);
+        }
+        .pill-blue {
+            background: rgba(99, 102, 241, 0.18);
+            color: #a5b4fc;
+            border: 1px solid rgba(99, 102, 241, 0.35);
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/platform" class="nav-brand">
+            <span>🛡️</span>
+            <span>ClinicConnectAI</span>
+            <span class="brand-badge">SaaS Master Console</span>
+        </a>
+        <div class="nav-actions">
+            <a href="/platform" class="btn-back">← Back to Master Console</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="page-header">
+            <h1 class="page-title">➕ Onboard New Clinic Tenant</h1>
+            <p class="page-subtitle">Register clinic organizations, allocate trial/paid software licenses, and issue secure administrator credentials for clinic owners.</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-alert flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- ==========================================================================
+             Standard Enterprise Client Provisioned Handoff Card
+             ========================================================================== -->
+        {% if success_info %}
+        <div class="handoff-container">
+            <div class="handoff-header">
+                <div class="handoff-icon">✓</div>
+                <div>
+                    <h2 class="handoff-title">Clinic Client Successfully Onboarded!</h2>
+                    <div style="font-size: 0.85rem; color: #a5b4fc; margin-top: 2px;">Tenant #{{ success_info.business_id }} • {{ success_info.clinic_name }}</div>
+                </div>
+            </div>
+            <p class="handoff-desc">
+                The clinic tenant organization and its primary administrator account have been created. Provide the issued credentials below to the clinic owner.
+            </p>
+
+            <!-- 3 Structured Detail Cards -->
+            <div class="details-grid">
+                <!-- Card 1: Clinic Profile -->
+                <div class="detail-card">
+                    <div class="detail-card-header">
+                        <span class="detail-card-title">🏥 Clinic Profile</span>
+                        <span class="pill-badge pill-blue">#{{ success_info.business_id }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-key">Name</span>
+                        <span class="detail-val">{{ success_info.clinic_name }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-key">Specialty</span>
+                        <span class="detail-val">{{ success_info.business_type or 'General' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-key">Phone</span>
+                        <span class="detail-val">{{ success_info.phone or 'N/A' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-key">Location</span>
+                        <span class="detail-val" style="font-size: 0.78rem; max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{{ success_info.address }}">{{ success_info.address }}</span>
+                    </div>
+                </div>
+
+                <!-- Card 2: Subscription License -->
+                <div class="detail-card">
+                    <div class="detail-card-header">
+                        <span class="detail-card-title">💳 Software License</span>
+                        <span class="pill-badge pill-green">🟢 Active</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-key">Plan</span>
+                        <span class="detail-val">{{ success_info.plan_name or '1-Month Free Trial' }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-key">Status</span>
+                        <span class="detail-val">{{ success_info.subscription_status | title }} Access</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-key">Valid Until</span>
+                        <span class="detail-val" style="color: #6ee7b7;">{{ success_info.effective_expiry }}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-key">Portal Gate</span>
+                        <span class="detail-val">Active</span>
+                    </div>
+                </div>
+
+                <!-- Card 3: Admin Credentials -->
+                <div class="detail-card">
+                    <div class="detail-card-header">
+                        <span class="detail-card-title">🔑 Client Credentials</span>
+                        <span class="pill-badge pill-blue">Owner Admin</span>
+                    </div>
+                    <div class="cred-item">
+                        <div class="cred-label">Username</div>
+                        <div class="cred-box">
+                            <input type="text" id="dispUsername" class="cred-code" value="{{ success_info.admin_username }}" readonly>
+                            <button type="button" class="btn-copy" onclick="copyField('dispUsername', this)">📋 Copy</button>
+                        </div>
+                    </div>
+                    <div class="cred-item" style="margin-top: 8px;">
+                        <div class="cred-label">Password</div>
+                        <div class="cred-box">
+                            <input type="text" id="dispPassword" class="cred-code" value="{{ success_info.admin_password }}" readonly>
+                            <button type="button" class="btn-copy" onclick="copyField('dispPassword', this)">📋 Copy</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Strict Security Notice (No Backdoor / Direct Usage Without Login) -->
+            <div class="security-gate-banner">
+                <span class="security-gate-icon">🛡️</span>
+                <div class="security-gate-text">
+                    <strong>Strict Authentication Enforced:</strong> Client accounts, appointment bookings, and administrative settings are protected behind credential authentication. For security, direct usage without login has been disabled. The clinic owner must sign in at the Client Login Portal using their issued username and password.
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="handoff-actions">
+                <a href="/admin/login?clinic={{ success_info.business_id }}" target="_blank" class="btn-portal-login">
+                    <span>🔐 Open Client Login Portal ↗</span>
+                </a>
+                <a href="/platform" class="btn-secondary-link">
+                    <span>← Return to Master Console</span>
+                </a>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- ==========================================================================
+             Standard Enterprise Onboarding Form
+             ========================================================================== -->
+        <div class="form-card">
+            <form method="POST" action="/platform/onboard-clinic">
+                <!-- Section 1: Clinic Profile & Location -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <div class="section-number">1</div>
+                        <h2 class="section-title">🏥 Clinic Identity &amp; Practice Details</h2>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="clinic_name">Clinic Legal / Brand Name *</label>
+                            <input type="text" id="clinic_name" name="clinic_name" class="form-input" placeholder="e.g. Crescent Dental & Medical Complex" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="business_type">Clinic Specialty Classification</label>
+                            <select id="business_type" name="business_type" class="form-input">
+                                <option value="polyclinic">Polyclinic (Multi-Specialty)</option>
+                                <option value="dental_clinic" selected>Dental Clinic</option>
+                                <option value="eye_clinic">Eye Clinic / Ophthalmology</option>
+                                <option value="skin_clinic">Dermatology & Skin Clinic</option>
+                                <option value="physiotherapy">Physiotherapy & Rehab</option>
+                                <option value="general_practice">General Practice / Family Medicine</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 16px;">
+                        <label class="form-label" for="address">Full Physical Practice Address *</label>
+                        <input type="text" id="address" name="address" class="form-input" placeholder="e.g. 14-C, Commercial Zone, Phase 5 DHA, Lahore" required>
+                    </div>
+
+                    <div class="form-row" style="margin-top: 16px;">
+                        <div class="form-group">
+                            <label class="form-label" for="phone">Official Contact Phone *</label>
+                            <input type="text" id="phone" name="phone" class="form-input" placeholder="e.g. +92 42 35891234" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="timezone">Local Timezone</label>
+                            <input type="text" id="timezone" name="timezone" class="form-input" value="Asia/Karachi" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 16px;">
+                        <label class="form-label" for="opening_hours">Practice Operating Hours</label>
+                        <input type="text" id="opening_hours" name="opening_hours" class="form-input" value="Monday to Saturday: 09:00 AM - 05:00 PM, Sunday: Closed">
+                        <div class="helper-text">Standard schedule shown to patients and used for slot calculations.</div>
+                    </div>
+                </div>
+
+                <!-- Section 2: Subscription & Free Trial Allocation -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <div class="section-number">2</div>
+                        <h2 class="section-title">💳 Subscription Plan &amp; 1-Month Free Trial</h2>
+                    </div>
+
+                    <div class="trial-banner">
+                        <span style="font-size: 1.3rem;">🎁</span>
+                        <div>
+                            <strong>Guaranteed 1-Month Free Trial:</strong> All newly registered clinic tenants receive 30 days of full trial access automatically. Access will be enforced at the portal login boundary once the trial expires.
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="plan_type">Initial Subscription License</label>
+                            <select id="plan_type" name="plan_type" class="form-input" onchange="toggleCustomDate(this.value)">
+                                <option value="trial_30" selected>1-Month Free Trial (30 Days Free)</option>
+                                <option value="sub_90">3 Months Paid Subscription (90 Days)</option>
+                                <option value="sub_180">6 Months Paid Subscription (180 Days)</option>
+                                <option value="sub_365">1 Year Paid Subscription (365 Days)</option>
+                                <option value="custom">Custom Expiration Date...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="customDateGroup" style="display: none;">
+                            <label class="form-label" for="custom_expiry_date">Custom Expiration Date</label>
+                            <input type="date" id="custom_expiry_date" name="custom_expiry_date" class="form-input">
+                            <div class="helper-text">Select exact date after which client access will expire.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 3: Client Administrator Credentials -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <div class="section-number">3</div>
+                        <h2 class="section-title">🔑 Clinic Client Administrator Credentials</h2>
+                    </div>
+
+                    <div class="helper-text" style="margin-bottom: 14px; font-size: 0.83rem;">
+                        These credentials will be issued to the clinic owner/administrator to log into their management portal.
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="admin_username">Admin Username *</label>
+                            <input type="text" id="admin_username" name="admin_username" class="form-input" placeholder="e.g. crescent_admin" required autocomplete="off">
+                            <div class="helper-text">Tenant-unique username for client login.</div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="admin_password">Initial Temporary Password *</label>
+                            <input type="text" id="admin_password" name="admin_password" class="form-input" placeholder="Min 6 characters" required minlength="6" autocomplete="off">
+                            <div class="helper-text">The clinic owner can change this password upon login.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-submit">
+                    <span>🚀 Provision Clinic Client Account</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function toggleCustomDate(val) {
+            const group = document.getElementById('customDateGroup');
+            if (val === 'custom') {
+                group.style.display = 'block';
+            } else {
+                group.style.display = 'none';
+            }
+        }
+
+        function copyField(fieldId, btn) {
+            const input = document.getElementById(fieldId);
+            if (!input) return;
+            input.select();
+            input.setSelectionRange(0, 99999);
+            navigator.clipboard.writeText(input.value).then(() => {
+                const originalText = btn.innerHTML;
+                btn.innerHTML = '✓ Copied!';
+                btn.style.background = '#059669';
+                btn.style.color = '#ffffff';
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.style.background = '';
+                    btn.style.color = '';
+                }, 2000);
+            }).catch(err => {
+                console.error('Failed to copy', err);
+            });
+        }
+    </script>
+</body>
+</html>

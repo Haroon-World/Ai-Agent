@@ -14,6 +14,7 @@ from models.reminder import Reminder
 from models.doctor_schedule import DoctorSchedule
 from models.doctor_leave import DoctorLeave
 from models.user import User
+from models.subscription_request import SubscriptionRequest
 
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -52,6 +53,16 @@ def auto_migrate_db(app=None):
                         db.session.add(sched)
                 db.session.commit()
 
+            # Populate default trial_ends_at for any businesses lacking subscription data
+            from datetime import timedelta
+            businesses = Business.query.all()
+            for biz in businesses:
+                if not getattr(biz, "trial_ends_at", None):
+                    biz.subscription_status = "trial"
+                    base_time = biz.created_at or datetime.now(timezone.utc)
+                    biz.trial_ends_at = base_time + timedelta(days=30)
+            db.session.commit()
+
         except Exception as e:
             db.session.rollback()
             print(f"[Auto-Migrate] Warning during migration: {e}")
@@ -75,6 +86,7 @@ __all__ = [
     "DoctorSchedule",
     "DoctorLeave",
     "User",
+    "SubscriptionRequest",
     "auto_migrate_db",
 ]
 

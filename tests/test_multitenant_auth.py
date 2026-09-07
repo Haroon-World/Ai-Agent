@@ -580,15 +580,84 @@ class TestMultiTenantAuth(unittest.TestCase):
         # It must NOT be conversation 1
         self.assertNotEqual(data2["conversation_id"], conv1_id)
 
-    def test_platform_dashboard_renders_chat_links_for_tenants(self):
-        """Platform master console renders direct 'Open Chat' links for each tenant."""
+    def test_platform_dashboard_renders_only_client_login_links_for_tenants(self):
+        """Platform master console renders only 'Client Login' links for tenants, not direct chat links."""
         _admin_session(self.client, self.platform_admin.id, None,
                        username=Config.PLATFORM_ADMIN_USERNAME,
                        is_platform_admin=True, clinic_name="Platform Owner")
         resp = self.client.get("/platform")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(b'href="/chat/1"', resp.data)
-        self.assertIn(b'Open Chat', resp.data)
+        self.assertNotIn(b'Open Chat', resp.data)
+        self.assertNotIn(b'href="/chat/1"', resp.data)
+        self.assertIn(b'Client Login', resp.data)
+        self.assertIn(b'href="/admin/login"', resp.data)
+
+    def test_chat_view_navbar_brand_uses_active_clinic_not_stale_session(self):
+        """When viewing /chat/2, navbar brand shows Clinic 2 name even if admin session has Clinic 1."""
+        clinic2 = Business(
+            id=2,
+            name="AbdulRaheem Clinic",
+            business_type="general_practice",
+            address="Model Town, Lahore",
+            phone="+92 42 35880000"
+        )
+        db.session.add(clinic2)
+        db.session.commit()
+
+        # Session is logged into Arfa Polyclinic (Clinic 1)
+        _admin_session(self.client, self.arfa_admin.id, 1,
+                       username=Config.ADMIN_USERNAME,
+                       is_platform_admin=False, clinic_name="Arfa Polyclinic")
+
+        resp = self.client.get("/chat/2")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.data.decode("utf-8")
+
+        # Upper navbar brand must display the active clinic, NOT Arfa Polyclinic
+        self.assertIn('AbdulRaheem Clinic', html)
+        self.assertIn('href="/chat/2" class="nav-item nav-badge-item active"', html)
+
+    def test_overview_dynamic_resolution_with_clinic_parameter(self):
+        """Visiting /?clinic=2 renders Clinic 2 info and links chat to /chat/2."""
+        clinic2 = Business(
+            id=2,
+            name="AbdulRaheem Clinic",
+            business_type="general_practice",
+            address="Model Town, Lahore",
+            phone="+92 42 35880000"
+        )
+        db.session.add(clinic2)
+        db.session.commit()
+
+        resp = self.client.get("/?clinic=2")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.data.decode("utf-8")
+        self.assertIn("AbdulRaheem Clinic", html)
+        self.assertIn('href="/chat/2"', html)
+
+    def test_platform_owner_can_manage_clinic_portal(self):
+        """Platform admin accessing /platform/manage-clinic/<id> is redirected to /admin/login without session bypass."""
+        clinic2 = Business(
+            id=2,
+            name="AbdulRaheem Clinic",
+            business_type="general_practice",
+            address="Model Town, Lahore",
+            phone="+92 42 35880000"
+        )
+        db.session.add(clinic2)
+        db.session.commit()
+
+        _admin_session(self.client, self.platform_admin.id, None,
+                       username=Config.PLATFORM_ADMIN_USERNAME,
+                       is_platform_admin=True, clinic_name="Platform Owner")
+
+        resp = self.client.get("/platform/manage-clinic/2", follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/admin/login", resp.headers["Location"])
+
+        # Session must NOT have business_id set (no session bypass)
+        with self.client.session_transaction() as sess:
+            self.assertIsNone(sess.get("business_id"))
 
 
 if __name__ == "__main__":
