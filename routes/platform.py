@@ -4,7 +4,7 @@ from flask import (
     Blueprint, render_template, request, redirect, url_for,
     session, flash, jsonify, abort
 )
-from models import db, Business, Doctor, Service, Appointment, User, SubscriptionRequest
+from models import db, Business, Doctor, Service, Appointment, User, SubscriptionRequest, ClinicInvitation
 from config.config import Config
 from services.subscription_service import SubscriptionService
 
@@ -185,46 +185,22 @@ def onboard_clinic_view():
     success_info = None
 
     if request.method == "POST":
+        onboard_mode = request.form.get("onboard_mode", "manual").strip()
         clinic_name = request.form.get("clinic_name", "").strip()
         address = request.form.get("address", "").strip()
         phone = request.form.get("phone", "").strip()
         business_type = request.form.get("business_type", "dental_clinic").strip() or "dental_clinic"
         timezone_str = request.form.get("timezone", "Asia/Karachi").strip() or "Asia/Karachi"
         opening_hours = request.form.get("opening_hours", "").strip() or "Monday to Saturday: 09:00 AM - 05:00 PM, Sunday: Closed"
-        admin_username = request.form.get("admin_username", "").strip()
         admin_email = request.form.get("admin_email", "").strip().lower()
-        admin_password = request.form.get("admin_password", "").strip()
         plan_type = request.form.get("plan_type", "trial_30").strip()
         custom_expiry_date = request.form.get("custom_expiry_date", "").strip()
 
         errors = []
         if not clinic_name:
             errors.append("Clinic name is required.")
-        if not address:
-            errors.append("Address is required.")
-        if not phone:
-            errors.append("Phone is required.")
-        if not admin_username:
-            errors.append("Admin username is required.")
-        elif User.query.filter_by(username=admin_username).first():
-            errors.append(f"Username '{admin_username}' is already taken across the platform. Please choose a unique username.")
 
-        if not admin_email:
-            admin_email = f"{admin_username}@clinic.local"
-
-        if "@" not in admin_email:
-            errors.append("Valid admin contact email is required.")
-        elif User.query.filter(db.func.lower(User.email) == admin_email).first():
-            errors.append(f"Email '{admin_email}' is already registered with another clinic account.")
-        if not admin_password or len(admin_password) < 6:
-            errors.append("Admin password must be at least 6 characters.")
-
-        if errors:
-            for e in errors:
-                flash(e, "danger")
-            return render_template("platform/onboard.html")
-
-        # Subscription dates setup
+        # Common subscription dates setup
         now_utc = datetime.now(timezone.utc)
         if plan_type == "trial_30":
             sub_status = "trial"
@@ -256,48 +232,141 @@ def onboard_clinic_view():
             trial_end = now_utc + timedelta(days=30)
             sub_exp = None
 
-        new_business = Business(
-            name=clinic_name,
-            business_type=business_type,
-            address=address,
-            phone=phone,
-            email=admin_email,
-            timezone=timezone_str,
-            opening_hours=opening_hours,
-            subscription_status=sub_status,
-            trial_ends_at=trial_end,
-            subscription_expires_at=sub_exp,
-        )
-        db.session.add(new_business)
-        db.session.flush()
+        if onboard_mode == "invite":
+            # -------------------------------------------------------------
+            # Mode 1: Email Invitation Link (Option 2)
+            # -------------------------------------------------------------
+            if not admin_email or "@" not in admin_email:
+                errors.append("A valid client email address is required to dispatch the onboarding invitation.")
+            elif User.query.filter(db.func.lower(User.email) == admin_email).first():
+                errors.append(f"Email '{admin_email}' is already registered with an active clinic administrator account.")
 
-        new_user = User(
-            business_id=new_business.id,
-            username=admin_username,
-            email=admin_email,
-            is_platform_admin=False,
-        )
-        new_user.set_password(admin_password)
-        db.session.add(new_user)
-        db.session.commit()
+            if errors:
+                for e in errors:
+                    flash(e, "danger")
+                return render_template("platform/onboard.html", active_tab="invite")
 
-        success_info = {
-            "clinic_name": clinic_name,
-            "business_id": new_business.id,
-            "business_type": business_type.replace('_', ' ').title(),
-            "phone": phone,
-            "address": address,
-            "timezone": timezone_str,
-            "admin_username": admin_username,
-            "admin_email": admin_email,
-            "admin_password": admin_password,
-            "subscription_status": sub_status,
-            "plan_name": "1-Month Free Trial" if sub_status == "trial" else (new_business.active_plan_name or "Active Subscription"),
-            "effective_expiry": new_business.effective_expiry_date.strftime("%B %d, %Y") if new_business.effective_expiry_date else "30 Days",
-        }
-        flash(f"Clinic '{clinic_name}' onboarded successfully with 1-Month Free Trial!", "success")
+            new_business = Business(
+                name=clinic_name,
+                business_type=business_type,
+                address=address or "Clinic Address",
+                phone=phone or "N/A",
+                email=admin_email,
+                timezone=timezone_str,
+                opening_hours=opening_hours,
+                subscription_status=sub_status,
+                trial_ends_at=trial_end,
+                subscription_expires_at=sub_exp,
+            )
+            db.session.add(new_business)
+            db.session.flush()
 
-    return render_template("platform/onboard.html", success_info=success_info)
+            invitation = ClinicInvitation.create_invitation(
+                business_id=new_business.id,
+                email=admin_email,
+                expires_in_days=7
+            )
+            db.session.commit()
+
+            setup_url = url_for("admin_bp.setup_clinic_account", token=invitation.token, _external=True)
+            from services.email_service import EmailService
+            email_sent = EmailService.send_clinic_invitation_email(
+                to_email=admin_email,
+                clinic_name=clinic_name,
+                setup_url=setup_url,
+                expires_days=7
+            )
+
+            success_info = {
+                "mode": "invite",
+                "clinic_name": clinic_name,
+                "business_id": new_business.id,
+                "business_type": business_type.replace('_', ' ').title(),
+                "admin_email": admin_email,
+                "setup_url": setup_url,
+                "email_sent": email_sent,
+                "subscription_status": sub_status,
+                "plan_name": "1-Month Free Trial" if sub_status == "trial" else (new_business.active_plan_name or "Active Subscription"),
+                "effective_expiry": new_business.effective_expiry_date.strftime("%B %d, %Y") if new_business.effective_expiry_date else "30 Days",
+            }
+            flash(f"Invitation successfully dispatched to '{admin_email}' for clinic '{clinic_name}'!", "success")
+            return render_template("platform/onboard.html", success_info=success_info, active_tab="invite")
+
+        else:
+            # -------------------------------------------------------------
+            # Mode 2: Manual Direct Setup (Existing Flow)
+            # -------------------------------------------------------------
+            admin_username = request.form.get("admin_username", "").strip()
+            admin_password = request.form.get("admin_password", "").strip()
+
+            if not address:
+                errors.append("Address is required.")
+            if not phone:
+                errors.append("Phone is required.")
+            if not admin_username:
+                errors.append("Admin username is required.")
+            elif User.query.filter_by(username=admin_username).first():
+                errors.append(f"Username '{admin_username}' is already taken across the platform. Please choose a unique username.")
+
+            if not admin_email:
+                admin_email = f"{admin_username}@clinic.local"
+
+            if "@" not in admin_email:
+                errors.append("Valid admin contact email is required.")
+            elif User.query.filter(db.func.lower(User.email) == admin_email).first():
+                errors.append(f"Email '{admin_email}' is already registered with another clinic account.")
+            if not admin_password or len(admin_password) < 6:
+                errors.append("Admin password must be at least 6 characters.")
+
+            if errors:
+                for e in errors:
+                    flash(e, "danger")
+                return render_template("platform/onboard.html", active_tab="manual")
+
+            new_business = Business(
+                name=clinic_name,
+                business_type=business_type,
+                address=address,
+                phone=phone,
+                email=admin_email,
+                timezone=timezone_str,
+                opening_hours=opening_hours,
+                subscription_status=sub_status,
+                trial_ends_at=trial_end,
+                subscription_expires_at=sub_exp,
+            )
+            db.session.add(new_business)
+            db.session.flush()
+
+            new_user = User(
+                business_id=new_business.id,
+                username=admin_username,
+                email=admin_email,
+                is_platform_admin=False,
+            )
+            new_user.set_password(admin_password)
+            db.session.add(new_user)
+            db.session.commit()
+
+            success_info = {
+                "mode": "manual",
+                "clinic_name": clinic_name,
+                "business_id": new_business.id,
+                "business_type": business_type.replace('_', ' ').title(),
+                "phone": phone,
+                "address": address,
+                "timezone": timezone_str,
+                "admin_username": admin_username,
+                "admin_email": admin_email,
+                "admin_password": admin_password,
+                "subscription_status": sub_status,
+                "plan_name": "1-Month Free Trial" if sub_status == "trial" else (new_business.active_plan_name or "Active Subscription"),
+                "effective_expiry": new_business.effective_expiry_date.strftime("%B %d, %Y") if new_business.effective_expiry_date else "30 Days",
+            }
+            flash(f"Clinic '{clinic_name}' onboarded successfully with 1-Month Free Trial!", "success")
+            return render_template("platform/onboard.html", success_info=success_info, active_tab="manual")
+
+    return render_template("platform/onboard.html", success_info=success_info, active_tab="invite")
 
 
 # ---------------------------------------------------------------------------

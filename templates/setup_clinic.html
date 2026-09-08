@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+
+{% block title %}Activate Your Clinic Portal - ClinicConnect AI{% endblock %}
+
+{% block content %}
+<div class="login-wrapper">
+    <div class="login-card" style="max-width: 520px;">
+        <div class="login-header">
+            <div class="login-icon">🏥</div>
+            <h2>Activate Clinic Portal</h2>
+            <p style="margin-top: 6px;">
+                Complete administrator onboarding for <strong style="color: #4f46e5;">{{ business.name }}</strong>.
+            </p>
+        </div>
+
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; margin-bottom: 22px; font-size: 0.88rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span style="color: #64748b;">Clinic:</span>
+                <span style="font-weight: 700; color: #0f172a;">{{ business.name }}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="color: #64748b;">Registered Email:</span>
+                <span style="font-weight: 600; color: #4f46e5;">{{ invitation.email }}</span>
+            </div>
+        </div>
+
+        <form method="POST" action="" class="login-form" id="setupForm">
+            <input type="hidden" name="token" value="{{ token }}">
+
+            <div class="form-group">
+                <label for="username">Choose Your Admin Username</label>
+                <div style="position: relative;">
+                    <input 
+                        type="text" 
+                        id="username" 
+                        name="username" 
+                        class="form-input" 
+                        placeholder="e.g. apex_admin or dr_sarah" 
+                        value="{{ suggested_username }}" 
+                        required 
+                        minlength="3" 
+                        autocomplete="username"
+                        style="padding-right: 40px;"
+                    >
+                    <span id="username-spinner" style="display: none; position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 0.9rem;">⏳</span>
+                </div>
+                <div id="username-status" style="margin-top: 6px; font-size: 0.82rem; font-weight: 600; min-height: 18px;"></div>
+                <div id="username-suggestions" style="margin-top: 6px; display: none; font-size: 0.82rem;">
+                    <span style="color: #64748b;">Available options:</span>
+                    <div id="suggestions-list" style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;"></div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="password">Create Secure Password</label>
+                <div class="password-field-wrapper">
+                    <input type="password" id="password" name="password" class="form-input" placeholder="Min 6 characters" required minlength="6" autocomplete="new-password">
+                    <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('password', this)" aria-label="Show password" title="Show password">
+                        <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="confirm_password">Confirm Password</label>
+                <div class="password-field-wrapper">
+                    <input type="password" id="confirm_password" name="confirm_password" class="form-input" placeholder="Re-enter password" required minlength="6" autocomplete="new-password">
+                    <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('confirm_password', this)" aria-label="Show password" title="Show password">
+                        <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
+                </div>
+            </div>
+
+            <button type="submit" id="submitBtn" class="btn btn-primary btn-block" style="padding: 12px; font-size: 1rem; font-weight: 700;">
+                Activate My Clinic &amp; Sign In &rarr;
+            </button>
+        </form>
+
+        <div style="margin-top: 22px; text-align: center;">
+            <a href="/admin/login" style="color: #64748b; text-decoration: none; font-size: 0.85rem;">
+                Already set up? <strong style="color: #4f46e5;">Sign in here</strong>
+            </a>
+        </div>
+    </div>
+</div>
+
+<script>
+let debounceTimer = null;
+
+function checkUsername(val) {
+    const statusEl = document.getElementById('username-status');
+    const spinner = document.getElementById('username-spinner');
+    const suggestionsBox = document.getElementById('username-suggestions');
+    const suggestionsList = document.getElementById('suggestions-list');
+    const submitBtn = document.getElementById('submitBtn');
+
+    if (!val || val.length < 3) {
+        statusEl.innerHTML = '<span style="color: #eab308;">⚠️ Username must be at least 3 characters</span>';
+        suggestionsBox.style.display = 'none';
+        return;
+    }
+
+    spinner.style.display = 'inline';
+
+    fetch('/api/check-username?username=' + encodeURIComponent(val))
+        .then(r => r.json())
+        .then(data => {
+            spinner.style.display = 'none';
+            if (data.available) {
+                statusEl.innerHTML = '<span style="color: #15803d;">✅ ' + data.message + '</span>';
+                suggestionsBox.style.display = 'none';
+                submitBtn.disabled = false;
+            } else {
+                statusEl.innerHTML = '<span style="color: #dc2626;">❌ ' + data.message + '</span>';
+                if (data.suggestions && data.suggestions.length > 0) {
+                    suggestionsList.innerHTML = '';
+                    data.suggestions.forEach(s => {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.textContent = s;
+                        btn.style.cssText = 'background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 6px; padding: 3px 10px; font-size: 0.8rem; cursor: pointer; font-weight: 600;';
+                        btn.onclick = function() {
+                            document.getElementById('username').value = s;
+                            checkUsername(s);
+                        };
+                        suggestionsList.appendChild(btn);
+                    });
+                    suggestionsBox.style.display = 'block';
+                } else {
+                    suggestionsBox.style.display = 'none';
+                }
+            }
+        })
+        .catch(() => {
+            spinner.style.display = 'none';
+        });
+}
+
+document.getElementById('username').addEventListener('input', function(e) {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+        checkUsername(e.target.value.trim());
+    }, 350);
+});
+
+// Run initial check on page load for suggested username
+document.addEventListener('DOMContentLoaded', function() {
+    const val = document.getElementById('username').value.trim();
+    if (val) {
+        checkUsername(val);
+    }
+});
+</script>
+{% endblock %}

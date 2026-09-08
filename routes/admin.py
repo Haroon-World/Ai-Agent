@@ -5,7 +5,7 @@ from flask import (
     session, flash, jsonify, abort
 )
 from config.config import Config
-from models import db, Business, Appointment, Conversation, Message, Reminder, Customer, Doctor, Service
+from models import db, Business, Appointment, Conversation, Message, Reminder, Customer, Doctor, Service, ClinicInvitation
 from models.user import User
 from services.handoff_service import HandoffService
 from services.subscription_service import SubscriptionService
@@ -1038,6 +1038,168 @@ def reset_password(token=None):
         return redirect(url_for("admin_bp.login"))
 
     return render_template("reset_password.html", token=active_token, user=user)
+
+
+# ---------------------------------------------------------------------------
+# Public Username Availability Check API
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/api/check-username", methods=["GET"])
+def check_username_availability():
+    """
+    Public live check for username availability.
+    Used by client setup page and platform onboarding form for instant feedback.
+    """
+    raw_username = (request.args.get("username") or "").strip()
+    if not raw_username:
+        return jsonify({"valid": False, "available": False, "message": "Username cannot be blank.", "suggestions": []})
+
+    import re
+    if not re.match(r"^[a-zA-Z0-9_\.\-]+$", raw_username):
+        return jsonify({
+            "valid": False,
+            "available": False,
+            "message": "Only letters, numbers, underscores, dashes, and periods allowed.",
+            "suggestions": []
+        })
+
+    if len(raw_username) < 3:
+        return jsonify({
+            "valid": False,
+            "available": False,
+            "message": "Username must be at least 3 characters long.",
+            "suggestions": []
+        })
+
+    existing = User.query.filter(db.func.lower(User.username) == raw_username.lower()).first()
+    if existing:
+        clean_base = raw_username.lower().replace("-", "_").replace(".", "_")
+        candidates = [
+            f"{clean_base}_admin",
+            f"{clean_base}_clinic",
+            f"dr_{clean_base}",
+            f"{clean_base}1",
+            f"{clean_base}24"
+        ]
+        available_suggestions = []
+        for cand in candidates:
+            if not User.query.filter(db.func.lower(User.username) == cand.lower()).first():
+                available_suggestions.append(cand)
+            if len(available_suggestions) >= 3:
+                break
+
+        return jsonify({
+            "valid": True,
+            "available": False,
+            "username": raw_username,
+            "message": f"Username '{raw_username}' is already taken.",
+            "suggestions": available_suggestions
+        })
+
+    return jsonify({
+        "valid": True,
+        "available": True,
+        "username": raw_username,
+        "message": f"'{raw_username}' is available!",
+        "suggestions": []
+    })
+
+
+# ---------------------------------------------------------------------------
+# Client Onboarding Invitation Setup View & Action
+# ---------------------------------------------------------------------------
+
+@admin_bp.route("/setup-clinic", methods=["GET", "POST"])
+@admin_bp.route("/setup-clinic/<token>", methods=["GET", "POST"])
+def setup_clinic_account(token=None):
+    """
+    Allow client administrators to complete their clinic setup via invite link,
+    choosing their own unique username and password.
+    """
+    active_token = token or request.args.get("token") or request.form.get("token")
+    if not active_token:
+        flash("Clinic invitation token is required. Please check the link in your invitation email.", "danger")
+        return redirect(url_for("admin_bp.login"))
+
+    invitation = ClinicInvitation.query.filter_by(token=active_token).first()
+    if not invitation or not invitation.is_valid():
+        flash("This clinic invitation link is invalid, expired, or has already been used. Please contact support or request a new invite.", "danger")
+        return redirect(url_for("admin_bp.login"))
+
+    business = db.session.get(Business, invitation.business_id)
+    if not business:
+        flash("Associated clinic record not found.", "danger")
+        return redirect(url_for("admin_bp.login"))
+
+    import re
+    clean_biz_name = re.sub(r'[^a-zA-Z0-9_]', '', business.name.lower().replace(' ', '_'))
+    suggested_username = f"{clean_biz_name}_admin" if clean_biz_name else "clinic_admin"
+    if User.query.filter(db.func.lower(User.username) == suggested_username.lower()).first():
+        suggested_username = f"{suggested_username}1"
+
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = (request.form.get("password") or "").strip()
+        confirm_password = (request.form.get("confirm_password") or "").strip()
+
+        errors = []
+        if not username:
+            errors.append("Please choose an administrator username.")
+        elif len(username) < 3:
+            errors.append("Username must be at least 3 characters long.")
+        elif not re.match(r"^[a-zA-Z0-9_\.\-]+$", username):
+            errors.append("Username may only contain letters, numbers, underscores, dashes, and periods.")
+        elif User.query.filter(db.func.lower(User.username) == username.lower()).first():
+            errors.append(f"Username '{username}' is already taken across the platform. Please choose a different username.")
+
+        if not password or len(password) < 6:
+            errors.append("Password must be at least 6 characters long.")
+        elif password != confirm_password:
+            errors.append("Passwords do not match. Please re-enter.")
+
+        if errors:
+            for err in errors:
+                flash(err, "danger")
+            return render_template(
+                "setup_clinic.html",
+                token=active_token,
+                invitation=invitation,
+                business=business,
+                suggested_username=username or suggested_username
+            )
+
+        new_user = User(
+            business_id=business.id,
+            username=username,
+            email=invitation.email,
+            is_platform_admin=False,
+        )
+        new_user.set_password(password)
+        db.session.add(new_user)
+
+        if not business.email:
+            business.email = invitation.email
+
+        invitation.mark_used()
+        db.session.commit()
+
+        # Automatic login session
+        session.clear()
+        session["user_id"] = new_user.id
+        session["business_id"] = business.id
+        session["is_platform_admin"] = False
+        session["username"] = new_user.username
+
+        flash(f"Welcome to ClinicConnectAI, {username}! Your administrator account for '{business.name}' is now active.", "success")
+        return redirect(url_for("admin_bp.dashboard"))
+
+    return render_template(
+        "setup_clinic.html",
+        token=active_token,
+        invitation=invitation,
+        business=business,
+        suggested_username=suggested_username
+    )
 
 
 # ---------------------------------------------------------------------------

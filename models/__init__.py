@@ -16,6 +16,7 @@ from models.doctor_leave import DoctorLeave
 from models.user import User
 from models.subscription_request import SubscriptionRequest
 from models.whatsapp_account import ClinicWhatsAppAccount
+from models.clinic_invitation import ClinicInvitation
 
 DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -89,6 +90,7 @@ __all__ = [
     "User",
     "SubscriptionRequest",
     "ClinicWhatsAppAccount",
+    "ClinicInvitation",
     "auto_migrate_db",
 ]
 

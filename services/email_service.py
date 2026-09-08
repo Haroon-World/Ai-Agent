@@ -179,3 +179,55 @@ ClinicConnectAI SaaS Platform Team
 </html>
 """
         return cls.send_email(to_email, subject, text_content, html_content)
+
+    @classmethod
+    def send_clinic_invitation_email(
+        cls,
+        to_email: str,
+        clinic_name: str,
+        setup_url: str,
+        expires_days: int = 7
+    ) -> bool:
+        """Send onboarding invitation email with secure link to allow client to choose their own credentials."""
+        subject = f"ClinicConnectAI - Activate Your Clinic Portal ({clinic_name})"
+        text_content = f"""Hello,
+
+Welcome to ClinicConnectAI! Your clinic portal for '{clinic_name}' has been provisioned.
+
+Please complete your account setup and choose your administrator username and password by visiting:
+{setup_url}
+
+This invitation link will remain active for {expires_days} days.
+
+Best regards,
+ClinicConnectAI SaaS Platform Team
+"""
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #090d16; color: #f8fafc; margin: 0; padding: 24px; }}
+  .card {{ max-width: 540px; margin: 0 auto; background: #111827; border-radius: 12px; border: 1px solid #1f2937; padding: 32px; }}
+  .btn {{ display: inline-block; background-color: #6366f1; color: #ffffff !important; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 700; margin: 20px 0; font-size: 0.95rem; }}
+  .highlight {{ color: #818cf8; font-weight: 700; }}
+  .footer {{ font-size: 0.8rem; color: #9ca3af; margin-top: 24px; border-top: 1px solid #1f2937; padding-top: 16px; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>🏥 Welcome to ClinicConnectAI!</h2>
+  <p>Hello,</p>
+  <p>Your dedicated clinic management portal for <span class="highlight">{clinic_name}</span> is ready to activate.</p>
+  <p>You can choose your own administrator username and secure password by clicking the button below:</p>
+  <p><a href="{setup_url}" class="btn">Complete My Account Setup &rarr;</a></p>
+  <p style="font-size: 0.88rem; color: #94a3b8;">Or copy and paste this link into your browser:<br>
+  <a href="{setup_url}" style="color: #818cf8; word-break: break-all;">{setup_url}</a></p>
+  <p style="font-size: 0.85rem; color: #eab308;">⏱️ This invitation link is valid for {expires_days} days.</p>
+  <div class="footer">
+    ClinicConnectAI Multi-Tenant SaaS Platform
+  </div>
+</div>
+</body>
+</html>
+"""
+        return cls.send_email(to_email, subject, text_content, html_content)

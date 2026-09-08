@@ -250,6 +250,33 @@
             color: #ffffff;
         }
 
+        /* Dual-Mode Onboarding Tabs */
+        .tab-btn {
+            background: #111827;
+            border: 1px solid #1f2937;
+            color: #9ca3af;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 0.92rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .tab-btn:hover {
+            color: #ffffff;
+            border-color: #374151;
+            background: #1f2937;
+        }
+        .tab-btn.tab-active {
+            background: #1e1b4b;
+            border-color: #6366f1;
+            color: #ffffff;
+            box-shadow: 0 0 16px rgba(99, 102, 241, 0.2);
+        }
+
         /* Security Gate Banner */
         .security-gate-banner {
             background: rgba(245, 158, 11, 0.1);
@@ -587,7 +614,37 @@
                     </div>
                 </div>
 
-                <!-- Card 3: Admin Credentials -->
+                {% if success_info.mode == 'invite' %}
+                <!-- Card 3: Invitation Dispatched (Option 2) -->
+                <div class="detail-card">
+                    <div class="detail-card-header">
+                        <span class="detail-card-title">✉️ Invitation Details</span>
+                        <span class="pill-badge pill-green">Link Active</span>
+                    </div>
+                    <div class="cred-item">
+                        <div class="cred-label">Recipient Email</div>
+                        <div class="cred-box">
+                            <input type="text" id="dispInviteEmail" class="cred-code" value="{{ success_info.admin_email }}" readonly>
+                            <button type="button" class="btn-copy" onclick="copyField('dispInviteEmail', this)">📋 Copy</button>
+                        </div>
+                    </div>
+                    <div class="cred-item" style="margin-top: 8px;">
+                        <div class="cred-label">Setup URL (7-Day Token)</div>
+                        <div class="cred-box">
+                            <input type="text" id="dispSetupUrl" class="cred-code" value="{{ success_info.setup_url }}" readonly>
+                            <button type="button" class="btn-copy" onclick="copyField('dispSetupUrl', this)">📋 Copy</button>
+                        </div>
+                    </div>
+                    <div style="margin-top: 10px; font-size: 0.78rem; color: #9ca3af; line-height: 1.4;">
+                        {% if success_info.email_sent %}
+                        <span style="color: #4ade80;">🟢 Dispatched to client's Gmail inbox.</span> The client will choose their own username and password.
+                        {% else %}
+                        <span style="color: #facc15;">⚠️ Mock dispatch to server console.</span> You can copy the setup link above directly.
+                        {% endif %}
+                    </div>
+                </div>
+                {% else %}
+                <!-- Card 3: Admin Credentials (Manual Mode) -->
                 <div class="detail-card">
                     <div class="detail-card-header">
                         <span class="detail-card-title">🔑 Client Credentials</span>
@@ -616,21 +673,32 @@
                         </div>
                     </div>
                 </div>
+                {% endif %}
             </div>
 
-            <!-- Strict Security Notice (No Backdoor / Direct Usage Without Login) -->
+            <!-- Security Notice -->
             <div class="security-gate-banner">
                 <span class="security-gate-icon">🛡️</span>
                 <div class="security-gate-text">
-                    <strong>Strict Authentication Enforced:</strong> Client accounts, appointment bookings, and administrative settings are protected behind credential authentication. For security, direct usage without login has been disabled. The clinic owner must sign in at the Client Login Portal using their issued username and password.
+                    {% if success_info.mode == 'invite' %}
+                    <strong>Invitation Active:</strong> The client has been emailed a secure setup link. Once they complete account setup, their administrator profile and clinic portal will be activated immediately.
+                    {% else %}
+                    <strong>Strict Authentication Enforced:</strong> Client accounts and administrative settings are protected behind credential authentication. The clinic owner must sign in at the Client Login Portal using their issued username and password.
+                    {% endif %}
                 </div>
             </div>
 
             <!-- Actions -->
             <div class="handoff-actions">
+                {% if success_info.mode == 'invite' %}
+                <a href="{{ success_info.setup_url }}" target="_blank" class="btn-portal-login">
+                    <span>🚀 Open Client Setup Page ↗</span>
+                </a>
+                {% else %}
                 <a href="/admin/login?clinic={{ success_info.business_id }}" target="_blank" class="btn-portal-login">
                     <span>🔐 Open Client Login Portal ↗</span>
                 </a>
+                {% endif %}
                 <a href="/platform" class="btn-secondary-link">
                     <span>← Return to Master Console</span>
                 </a>
@@ -639,25 +707,41 @@
         {% endif %}
 
         <!-- ==========================================================================
-             Standard Enterprise Onboarding Form
+             Dual-Mode Onboarding Switcher Tabs
              ========================================================================== -->
+        <div style="display: flex; gap: 12px; margin-bottom: 20px;">
+            <button type="button" id="tabBtnInvite" class="tab-btn {% if active_tab != 'manual' %}tab-active{% endif %}" onclick="switchOnboardTab('invite')">
+                <span>✉️ Send Email Invite</span>
+                <span style="font-size: 0.72rem; padding: 2px 8px; border-radius: 9999px; background: rgba(99, 102, 241, 0.25); color: #a5b4fc;">Client Picks Credentials</span>
+            </button>
+            <button type="button" id="tabBtnManual" class="tab-btn {% if active_tab == 'manual' %}tab-active{% endif %}" onclick="switchOnboardTab('manual')">
+                <span>⚙️ Manual Direct Setup</span>
+                <span style="font-size: 0.72rem; padding: 2px 8px; border-radius: 9999px; background: rgba(156, 163, 175, 0.2); color: #d1d5db;">Instant Setup</span>
+            </button>
+        </div>
+
         <div class="form-card">
-            <form method="POST" action="/platform/onboard-clinic">
-                <!-- Section 1: Clinic Profile & Location -->
+            <!-- ==========================================================================
+                 TAB 1: EMAIL INVITATION FORM (OPTION 2)
+                 ========================================================================== -->
+            <form method="POST" action="/platform/onboard-clinic" id="formInvite" style="{% if active_tab == 'manual' %}display: none;{% endif %}">
+                <input type="hidden" name="onboard_mode" value="invite">
+
+                <!-- Section 1: Clinic Identity -->
                 <div class="form-section">
                     <div class="section-header">
                         <div class="section-number">1</div>
-                        <h2 class="section-title">🏥 Clinic Identity &amp; Practice Details</h2>
+                        <h2 class="section-title">🏥 Clinic Practice Details</h2>
                     </div>
 
                     <div class="form-row">
                         <div class="form-group">
-                            <label class="form-label" for="clinic_name">Clinic Legal / Brand Name *</label>
-                            <input type="text" id="clinic_name" name="clinic_name" class="form-input" placeholder="e.g. Crescent Dental & Medical Complex" required>
+                            <label class="form-label" for="invite_clinic_name">Clinic Legal / Brand Name *</label>
+                            <input type="text" id="invite_clinic_name" name="clinic_name" class="form-input" placeholder="e.g. Crescent Dental & Medical Complex" required>
                         </div>
                         <div class="form-group">
-                            <label class="form-label" for="business_type">Clinic Specialty Classification</label>
-                            <select id="business_type" name="business_type" class="form-input">
+                            <label class="form-label" for="invite_business_type">Clinic Specialty Classification</label>
+                            <select id="invite_business_type" name="business_type" class="form-input">
                                 <option value="polyclinic">Polyclinic (Multi-Specialty)</option>
                                 <option value="dental_clinic" selected>Dental Clinic</option>
                                 <option value="eye_clinic">Eye Clinic / Ophthalmology</option>
@@ -669,24 +753,127 @@
                     </div>
 
                     <div class="form-group" style="margin-top: 16px;">
-                        <label class="form-label" for="address">Full Physical Practice Address *</label>
-                        <input type="text" id="address" name="address" class="form-input" placeholder="e.g. 14-C, Commercial Zone, Phase 5 DHA, Lahore" required>
+                        <label class="form-label" for="invite_address">Physical Practice Address</label>
+                        <input type="text" id="invite_address" name="address" class="form-input" placeholder="e.g. 14-C, Commercial Zone, Phase 5 DHA, Lahore">
                     </div>
 
                     <div class="form-row" style="margin-top: 16px;">
                         <div class="form-group">
-                            <label class="form-label" for="phone">Official Contact Phone *</label>
-                            <input type="text" id="phone" name="phone" class="form-input" placeholder="e.g. +92 42 35891234" required>
+                            <label class="form-label" for="invite_phone">Contact Phone</label>
+                            <input type="text" id="invite_phone" name="phone" class="form-input" placeholder="e.g. +92 42 35891234">
                         </div>
                         <div class="form-group">
-                            <label class="form-label" for="timezone">Local Timezone</label>
-                            <input type="text" id="timezone" name="timezone" class="form-input" value="Asia/Karachi" required>
+                            <label class="form-label" for="invite_timezone">Local Timezone</label>
+                            <input type="text" id="invite_timezone" name="timezone" class="form-input" value="Asia/Karachi" required>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 2: Subscription Plan -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <div class="section-number">2</div>
+                        <h2 class="section-title">💳 Subscription Plan &amp; 1-Month Free Trial</h2>
+                    </div>
+
+                    <div class="trial-banner">
+                        <span style="font-size: 1.3rem;">🎁</span>
+                        <div>
+                            <strong>Automatic Free Trial:</strong> Newly registered clinic tenants receive 30 days of full trial access automatically.
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="invite_plan_type">Initial Subscription License</label>
+                            <select id="invite_plan_type" name="plan_type" class="form-input" onchange="toggleCustomDate(this.value, 'inviteCustomDateGroup')">
+                                <option value="trial_30" selected>1-Month Free Trial (30 Days Free)</option>
+                                <option value="sub_90">3 Months Paid Subscription (90 Days)</option>
+                                <option value="sub_180">6 Months Paid Subscription (180 Days)</option>
+                                <option value="sub_365">1 Year Paid Subscription (365 Days)</option>
+                                <option value="custom">Custom Expiration Date...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="inviteCustomDateGroup" style="display: none;">
+                            <label class="form-label" for="invite_custom_expiry_date">Custom Expiration Date</label>
+                            <input type="date" id="invite_custom_expiry_date" name="custom_expiry_date" class="form-input">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 3: Client Email & Invitation Dispatch -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <div class="section-number">3</div>
+                        <h2 class="section-title">✉️ Client Email &amp; Invitation Dispatch</h2>
+                    </div>
+
+                    <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 8px; padding: 14px 18px; margin-bottom: 16px; font-size: 0.85rem; color: #c7d2fe;">
+                        ✨ <strong>Hands-off White-Glove Setup:</strong> The client will receive an invitation email containing a secure 7-day link. Upon clicking, they will choose their own unique administrator username and secure password with real-time availability checks.
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="invite_admin_email">Client Owner / Administrator Email *</label>
+                        <input type="email" id="invite_admin_email" name="admin_email" class="form-input" placeholder="e.g. doctor@crescentclinic.com" required autocomplete="email">
+                        <div class="helper-text">The invitation link and future password reset instructions will be delivered here.</div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-submit" style="background: #4f46e5;">
+                    <span>🚀 Send Onboarding Invitation Link</span>
+                </button>
+            </form>
+
+            <!-- ==========================================================================
+                 TAB 2: MANUAL DIRECT PROVISIONING FORM (PRESERVED)
+                 ========================================================================== -->
+            <form method="POST" action="/platform/onboard-clinic" id="formManual" style="{% if active_tab != 'manual' %}display: none;{% endif %}">
+                <input type="hidden" name="onboard_mode" value="manual">
+
+                <!-- Section 1: Clinic Profile & Location -->
+                <div class="form-section">
+                    <div class="section-header">
+                        <div class="section-number">1</div>
+                        <h2 class="section-title">🏥 Clinic Identity &amp; Practice Details</h2>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="form-label" for="manual_clinic_name">Clinic Legal / Brand Name *</label>
+                            <input type="text" id="manual_clinic_name" name="clinic_name" class="form-input" placeholder="e.g. Crescent Dental & Medical Complex" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="manual_business_type">Clinic Specialty Classification</label>
+                            <select id="manual_business_type" name="business_type" class="form-input">
+                                <option value="polyclinic">Polyclinic (Multi-Specialty)</option>
+                                <option value="dental_clinic" selected>Dental Clinic</option>
+                                <option value="eye_clinic">Eye Clinic / Ophthalmology</option>
+                                <option value="skin_clinic">Dermatology & Skin Clinic</option>
+                                <option value="physiotherapy">Physiotherapy & Rehab</option>
+                                <option value="general_practice">General Practice / Family Medicine</option>
+                            </select>
                         </div>
                     </div>
 
                     <div class="form-group" style="margin-top: 16px;">
-                        <label class="form-label" for="opening_hours">Practice Operating Hours</label>
-                        <input type="text" id="opening_hours" name="opening_hours" class="form-input" value="Monday to Saturday: 09:00 AM - 05:00 PM, Sunday: Closed">
+                        <label class="form-label" for="manual_address">Full Physical Practice Address *</label>
+                        <input type="text" id="manual_address" name="address" class="form-input" placeholder="e.g. 14-C, Commercial Zone, Phase 5 DHA, Lahore" required>
+                    </div>
+
+                    <div class="form-row" style="margin-top: 16px;">
+                        <div class="form-group">
+                            <label class="form-label" for="manual_phone">Official Contact Phone *</label>
+                            <input type="text" id="manual_phone" name="phone" class="form-input" placeholder="e.g. +92 42 35891234" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="manual_timezone">Local Timezone</label>
+                            <input type="text" id="manual_timezone" name="timezone" class="form-input" value="Asia/Karachi" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 16px;">
+                        <label class="form-label" for="manual_opening_hours">Practice Operating Hours</label>
+                        <input type="text" id="manual_opening_hours" name="opening_hours" class="form-input" value="Monday to Saturday: 09:00 AM - 05:00 PM, Sunday: Closed">
                         <div class="helper-text">Standard schedule shown to patients and used for slot calculations.</div>
                     </div>
                 </div>
@@ -707,8 +894,8 @@
 
                     <div class="form-row">
                         <div class="form-group">
-                            <label class="form-label" for="plan_type">Initial Subscription License</label>
-                            <select id="plan_type" name="plan_type" class="form-input" onchange="toggleCustomDate(this.value)">
+                            <label class="form-label" for="manual_plan_type">Initial Subscription License</label>
+                            <select id="manual_plan_type" name="plan_type" class="form-input" onchange="toggleCustomDate(this.value, 'manualCustomDateGroup')">
                                 <option value="trial_30" selected>1-Month Free Trial (30 Days Free)</option>
                                 <option value="sub_90">3 Months Paid Subscription (90 Days)</option>
                                 <option value="sub_180">6 Months Paid Subscription (180 Days)</option>
@@ -716,9 +903,9 @@
                                 <option value="custom">Custom Expiration Date...</option>
                             </select>
                         </div>
-                        <div class="form-group" id="customDateGroup" style="display: none;">
-                            <label class="form-label" for="custom_expiry_date">Custom Expiration Date</label>
-                            <input type="date" id="custom_expiry_date" name="custom_expiry_date" class="form-input">
+                        <div class="form-group" id="manualCustomDateGroup" style="display: none;">
+                            <label class="form-label" for="manual_custom_expiry_date">Custom Expiration Date</label>
+                            <input type="date" id="manual_custom_expiry_date" name="custom_expiry_date" class="form-input">
                             <div class="helper-text">Select exact date after which client access will expire.</div>
                         </div>
                     </div>
@@ -737,21 +924,22 @@
 
                     <div class="form-row">
                         <div class="form-group">
-                            <label class="form-label" for="admin_username">Admin Username *</label>
-                            <input type="text" id="admin_username" name="admin_username" class="form-input" placeholder="e.g. crescent_admin" required autocomplete="off">
+                            <label class="form-label" for="manual_admin_username">Admin Username *</label>
+                            <input type="text" id="manual_admin_username" name="admin_username" class="form-input" placeholder="e.g. crescent_admin" required autocomplete="off" oninput="checkManualUsername(this.value)">
+                            <div id="manualUsernameStatus" style="font-size: 0.8rem; margin-top: 4px; font-weight: 600;"></div>
                             <div class="helper-text">Globally unique username for client login across the platform.</div>
                         </div>
                         <div class="form-group">
-                            <label class="form-label" for="admin_email">Admin / Contact Email *</label>
-                            <input type="email" id="admin_email" name="admin_email" class="form-input" placeholder="e.g. owner@crescentclinic.com" required autocomplete="email">
+                            <label class="form-label" for="manual_admin_email">Admin / Contact Email *</label>
+                            <input type="email" id="manual_admin_email" name="admin_email" class="form-input" placeholder="e.g. owner@crescentclinic.com" required autocomplete="email">
                             <div class="helper-text">Used for password resets, subscription notifications, and billing alerts.</div>
                         </div>
                     </div>
                     <div class="form-group" style="margin-top: 16px;">
-                        <label class="form-label" for="admin_password">Initial Temporary Password *</label>
+                        <label class="form-label" for="manual_admin_password">Initial Temporary Password *</label>
                         <div class="password-field-wrapper">
-                            <input type="password" id="admin_password" name="admin_password" class="form-input" placeholder="Min 6 characters" required minlength="6" autocomplete="new-password">
-                            <button type="button" class="password-toggle-btn" onclick="togglePlatformPassword('admin_password', this)" aria-label="Show password" title="Show password">
+                            <input type="password" id="manual_admin_password" name="admin_password" class="form-input" placeholder="Min 6 characters" required minlength="6" autocomplete="new-password">
+                            <button type="button" class="password-toggle-btn" onclick="togglePlatformPassword('manual_admin_password', this)" aria-label="Show password" title="Show password">
                                 <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                             </button>
                         </div>
@@ -760,15 +948,58 @@
                 </div>
 
                 <button type="submit" class="btn-submit">
-                    <span>🚀 Provision Clinic Client Account</span>
+                    <span>⚡ Provision Clinic Client Account Immediately</span>
                 </button>
             </form>
         </div>
     </div>
 
     <script>
-        function toggleCustomDate(val) {
-            const group = document.getElementById('customDateGroup');
+        function switchOnboardTab(tab) {
+            const btnInvite = document.getElementById('tabBtnInvite');
+            const btnManual = document.getElementById('tabBtnManual');
+            const formInvite = document.getElementById('formInvite');
+            const formManual = document.getElementById('formManual');
+
+            if (tab === 'invite') {
+                btnInvite.classList.add('tab-active');
+                btnManual.classList.remove('tab-active');
+                formInvite.style.display = 'block';
+                formManual.style.display = 'none';
+            } else {
+                btnManual.classList.add('tab-active');
+                btnInvite.classList.remove('tab-active');
+                formManual.style.display = 'block';
+                formInvite.style.display = 'none';
+            }
+        }
+
+        let manualDebounceTimer = null;
+        function checkManualUsername(val) {
+            const statusEl = document.getElementById('manualUsernameStatus');
+            if (!statusEl) return;
+            if (!val || val.length < 3) {
+                statusEl.innerHTML = '';
+                return;
+            }
+            clearTimeout(manualDebounceTimer);
+            manualDebounceTimer = setTimeout(() => {
+                fetch('/api/check-username?username=' + encodeURIComponent(val))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.available) {
+                            statusEl.innerHTML = '<span style="color: #4ade80;">✅ ' + data.message + '</span>';
+                        } else {
+                            statusEl.innerHTML = '<span style="color: #f87171;">❌ ' + data.message + '</span>';
+                        }
+                    })
+                    .catch(() => {});
+            }, 300);
+        }
+
+        function toggleCustomDate(val, targetGroupId = 'customDateGroup') {
+            const group = document.getElementById(targetGroupId) || document.getElementById('customDateGroup');
+            if (!group) return;
             if (val === 'custom') {
                 group.style.display = 'block';
             } else {
