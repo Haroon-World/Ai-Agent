@@ -4,7 +4,7 @@ from flask import (
     Blueprint, render_template, request, redirect, url_for,
     session, flash, jsonify, abort
 )
-from models import db, Business, Doctor, Service, Appointment, User
+from models import db, Business, Doctor, Service, Appointment, User, SubscriptionRequest
 from config.config import Config
 from services.subscription_service import SubscriptionService
 
@@ -28,84 +28,79 @@ def platform_admin_required(f):
         if p_id:
             p_user = db.session.get(User, p_id)
             if p_user and p_user.is_platform_admin:
-                session["is_platform_admin"] = True
                 return f(*args, **kwargs)
 
-        # 2. Check if user_id in session is a verified platform admin in DB
+        # 2. Check primary session user_id
         u_id = session.get("user_id")
         if u_id:
             u_user = db.session.get(User, u_id)
             if u_user and u_user.is_platform_admin:
-                session["is_platform_admin"] = True
                 session["platform_admin_id"] = u_user.id
                 session["platform_admin_user"] = u_user.username
+                session["is_platform_admin"] = True
                 return f(*args, **kwargs)
 
-        # 3. If direct flag is True but no user_id (unusual), check user_id
+        # 3. Fallback: check session flags
+        if session.get("is_platform_admin"):
+            return f(*args, **kwargs)
+
+        # 4. If not logged in at all, redirect to platform login
         if not session.get("user_id") and not session.get("platform_admin_id"):
+            flash("Unauthorized access. Platform administrator credentials required.", "danger")
             return redirect(url_for("platform_bp.login"))
 
-        # User is authenticated as clinic user (or other non-platform user)
+        # User is authenticated but is a clinic user without platform admin privileges
         abort(403)
     return decorated_function
 
 
 # ---------------------------------------------------------------------------
-# Stealth Platform Login & Logout
+# Platform Owner Authentication
 # ---------------------------------------------------------------------------
 
 @platform_bp.route("/login", methods=["GET", "POST"])
 def login():
-    """Dedicated master login for SaaS Platform Owners."""
+    """Dedicated login portal exclusively for SaaS Platform Owners."""
     if request.method == "POST":
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
 
-        matched_user = None
         candidates = User.query.filter_by(username=username, is_platform_admin=True).all()
-        for candidate in candidates:
-            if candidate.check_password(password):
-                matched_user = candidate
+        matched_user = None
+        for u in candidates:
+            if u.check_password(password):
+                matched_user = u
                 break
 
         if matched_user:
-            # Preserve clinic session if open concurrently
-            clinic_user_id = session.get("user_id") if not session.get("is_platform_admin") else None
-            clinic_business_id = session.get("business_id")
-            clinic_admin_user = session.get("admin_user")
-            clinic_name = session.get("clinic_name")
-
             session.permanent = True
             session["platform_admin_id"] = matched_user.id
             session["platform_admin_user"] = matched_user.username
             session["is_platform_admin"] = True
 
-            # If no clinic session was open, set default identity
-            if not clinic_user_id:
+            if not session.get("user_id"):
                 session["user_id"] = matched_user.id
-                session["business_id"] = None
                 session["admin_user"] = matched_user.username
-                session["clinic_name"] = "ClinicConnectAI Platform"
 
-            flash("Welcome to the SaaS Master Console.", "success")
+            flash("Signed into SaaS Master Console.", "success")
             return redirect(url_for("platform_bp.dashboard"))
         else:
             is_clinic_user = User.query.filter_by(username=username, is_platform_admin=False).first()
-            if is_clinic_user:
+            if is_clinic_user and is_clinic_user.check_password(password):
                 flash("Unauthorized: Clinic staff accounts must sign in via the Clinic Admin Portal.", "warning")
             else:
-                flash("Invalid platform credentials.", "danger")
+                flash("Invalid platform administrator credentials.", "danger")
 
-    already_logged_in = bool(session.get("is_platform_admin") or session.get("platform_admin_id"))
-    if already_logged_in:
-        return redirect(url_for("platform_bp.dashboard"))
+    return render_template(
+        "platform/login.html",
+        already_logged_in=bool(session.get("platform_admin_id") or session.get("is_platform_admin")),
+        current_user=session.get("platform_admin_user", "Platform Owner")
+    )
 
-    return render_template("platform/login.html")
 
-
-@platform_bp.route("/logout")
+@platform_bp.route("/logout", methods=["GET"])
 def logout():
-    """Sign out of the platform owner session without breaking clinic portal if open."""
+    """Sign out of SaaS Master Console without destroying active clinic session."""
     session.pop("platform_admin_id", None)
     session.pop("platform_admin_user", None)
     session.pop("is_platform_admin", None)
@@ -142,6 +137,7 @@ def dashboard():
 
         admin_user = User.query.filter_by(business_id=clinic.id, is_platform_admin=False).first()
         admin_username = admin_user.username if admin_user else "None"
+        admin_email = admin_user.email if admin_user else (clinic.email or "")
 
         clinic_records.append({
             "business": clinic,
@@ -149,6 +145,7 @@ def dashboard():
             "services_count": svc_count,
             "appointments_count": appt_count,
             "admin_username": admin_username,
+            "admin_email": admin_email,
             "subscription": clinic.subscription_badge,
         })
 
@@ -195,6 +192,7 @@ def onboard_clinic_view():
         timezone_str = request.form.get("timezone", "Asia/Karachi").strip() or "Asia/Karachi"
         opening_hours = request.form.get("opening_hours", "").strip() or "Monday to Saturday: 09:00 AM - 05:00 PM, Sunday: Closed"
         admin_username = request.form.get("admin_username", "").strip()
+        admin_email = request.form.get("admin_email", "").strip().lower()
         admin_password = request.form.get("admin_password", "").strip()
         plan_type = request.form.get("plan_type", "trial_30").strip()
         custom_expiry_date = request.form.get("custom_expiry_date", "").strip()
@@ -208,6 +206,16 @@ def onboard_clinic_view():
             errors.append("Phone is required.")
         if not admin_username:
             errors.append("Admin username is required.")
+        elif User.query.filter_by(username=admin_username).first():
+            errors.append(f"Username '{admin_username}' is already taken across the platform. Please choose a unique username.")
+
+        if not admin_email:
+            admin_email = f"{admin_username}@clinic.local"
+
+        if "@" not in admin_email:
+            errors.append("Valid admin contact email is required.")
+        elif User.query.filter(db.func.lower(User.email) == admin_email).first():
+            errors.append(f"Email '{admin_email}' is already registered with another clinic account.")
         if not admin_password or len(admin_password) < 6:
             errors.append("Admin password must be at least 6 characters.")
 
@@ -253,6 +261,7 @@ def onboard_clinic_view():
             business_type=business_type,
             address=address,
             phone=phone,
+            email=admin_email,
             timezone=timezone_str,
             opening_hours=opening_hours,
             subscription_status=sub_status,
@@ -262,17 +271,10 @@ def onboard_clinic_view():
         db.session.add(new_business)
         db.session.flush()
 
-        existing = User.query.filter_by(
-            business_id=new_business.id, username=admin_username
-        ).first()
-        if existing:
-            db.session.rollback()
-            flash(f"Username '{admin_username}' already exists for this clinic.", "danger")
-            return render_template("platform/onboard.html")
-
         new_user = User(
             business_id=new_business.id,
             username=admin_username,
+            email=admin_email,
             is_platform_admin=False,
         )
         new_user.set_password(admin_password)
@@ -287,6 +289,7 @@ def onboard_clinic_view():
             "address": address,
             "timezone": timezone_str,
             "admin_username": admin_username,
+            "admin_email": admin_email,
             "admin_password": admin_password,
             "subscription_status": sub_status,
             "plan_name": "1-Month Free Trial" if sub_status == "trial" else (new_business.active_plan_name or "Active Subscription"),
@@ -326,6 +329,16 @@ def approve_subscription_request_action(request_id):
     reviewer = session.get("admin_user", "Platform Admin")
     res = SubscriptionService.approve_subscription_request(request_id, reviewer_username=reviewer)
     if res.get("success"):
+        req = db.session.get(SubscriptionRequest, request_id)
+        if req and req.business and req.business.email:
+            from services.email_service import EmailService
+            exp_str = req.business.subscription_expires_at.strftime("%B %d, %Y") if req.business.subscription_expires_at else None
+            EmailService.send_subscription_approved_email(
+                to_email=req.business.email,
+                clinic_name=req.business.name,
+                plan_name=req.plan_name,
+                expires_at=exp_str
+            )
         flash(res.get("message", "Subscription request approved successfully."), "success")
     else:
         flash(res.get("error", "Failed to approve subscription request."), "danger")
@@ -421,4 +434,33 @@ def reset_clinic_password(clinic_id):
     db.session.commit()
 
     flash(f"Password for clinic admin '{admin_user.username}' (Clinic #{clinic_id}) updated successfully.", "success")
+    return redirect(url_for("platform_bp.dashboard"))
+
+
+@platform_bp.route("/clinic/<int:clinic_id>/update-email", methods=["POST"])
+@platform_admin_required
+def update_clinic_email(clinic_id):
+    """Platform owner/onboarding team updates the registered email address for a clinic."""
+    new_email = (request.form.get("new_email") or "").strip().lower()
+    if not new_email or "@" not in new_email:
+        flash("Please provide a valid email address.", "danger")
+        return redirect(url_for("platform_bp.dashboard"))
+
+    clinic = db.session.get(Business, clinic_id)
+    if not clinic:
+        flash(f"Clinic #{clinic_id} not found.", "danger")
+        return redirect(url_for("platform_bp.dashboard"))
+
+    admin_user = User.query.filter_by(business_id=clinic_id, is_platform_admin=False).first()
+    existing_user = User.query.filter(db.func.lower(User.email) == new_email).first()
+    if existing_user and admin_user and existing_user.id != admin_user.id:
+        flash(f"Email '{new_email}' is already in use by another clinic account.", "danger")
+        return redirect(url_for("platform_bp.dashboard"))
+
+    clinic.email = new_email
+    if admin_user:
+        admin_user.email = new_email
+    db.session.commit()
+
+    flash(f"Email for '{clinic.name}' (Clinic #{clinic_id}) successfully updated to '{new_email}'.", "success")
     return redirect(url_for("platform_bp.dashboard"))

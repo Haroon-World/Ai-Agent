@@ -25,10 +25,10 @@
         </div>
         {% endif %}
 
-        <form method="POST" action="/admin/login{% if clinic_param %}?clinic={{ clinic_param }}{% endif %}" class="login-form">
+        <form method="POST" action="/admin/login" class="login-form">
             <div class="form-group">
-                <label for="username">Clinic Admin Username</label>
-                <input type="text" id="username" name="username" class="form-input" placeholder="e.g. admin" value="{{ username or '' }}" required>
+                <label for="username">Clinic Admin Username or Email</label>
+                <input type="text" id="username" name="username" class="form-input" placeholder="e.g. admin or admin@clinic.com" value="{{ username or '' }}" required autocomplete="username">
             </div>
 
             <div class="form-group">
@@ -37,32 +37,15 @@
                     <a href="/admin/forgot-password" style="font-size: 0.82rem; color: #4f46e5; text-decoration: none; font-weight: 600;">Forgot Password?</a>
                 </div>
                 <div class="password-field-wrapper">
-                    <input type="password" id="password" name="password" class="form-input" placeholder="e.g. admin123" required autocomplete="current-password">
+                    <input type="password" id="password" name="password" class="form-input" placeholder="Enter password" required autocomplete="current-password">
                     <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('password', this)" aria-label="Show password" title="Show password">
                         <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
                     </button>
                 </div>
             </div>
 
-            <div class="form-group" id="clinicFieldGroup" {% if not require_clinic_id and not clinic_param %}style="display: none;"{% endif %}>
-                <label for="clinic">Clinic ID / Name <small style="color: #64748b; font-weight: normal;">(Required if username is shared across clinics)</small></label>
-                <input type="text" id="clinic" name="clinic" class="form-input" placeholder="e.g. 1 or 2" value="{{ clinic_param or '' }}">
-            </div>
-
-            {% if not require_clinic_id and not clinic_param %}
-            <div style="margin-top: -10px; margin-bottom: 14px; text-align: right;">
-                <a href="javascript:void(0)" onclick="document.getElementById('clinicFieldGroup').style.display='block'; this.style.display='none';" style="font-size: 0.78rem; color: #4f46e5; text-decoration: none;">
-                    + Specify Clinic ID
-                </a>
-            </div>
-            {% endif %}
-
             <button type="submit" class="btn btn-primary btn-block">Sign In to Clinic Dashboard</button>
         </form>
-
-        <div class="login-footer-hint" style="margin-top: 20px; text-align: center; color: #64748b; font-size: 0.82rem;">
-            <span>SaaS Platform Owners: Sign in at the <a href="/platform/login" style="color: #4f46e5; font-weight: 600; text-decoration: underline;">Master Platform Console</a></span>
-        </div>
     </div>
 </div>
 {% endblock %}

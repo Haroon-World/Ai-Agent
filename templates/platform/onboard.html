@@ -601,6 +601,13 @@
                         </div>
                     </div>
                     <div class="cred-item" style="margin-top: 8px;">
+                        <div class="cred-label">Admin Email</div>
+                        <div class="cred-box">
+                            <input type="text" id="dispEmail" class="cred-code" value="{{ success_info.admin_email }}" readonly>
+                            <button type="button" class="btn-copy" onclick="copyField('dispEmail', this)">📋 Copy</button>
+                        </div>
+                    </div>
+                    <div class="cred-item" style="margin-top: 8px;">
                         <div class="cred-label">Password</div>
                         <div class="cred-box">
                             <input type="password" id="dispPassword" class="cred-code" value="{{ success_info.admin_password }}" readonly style="letter-spacing: 0.08em;">
@@ -732,18 +739,23 @@
                         <div class="form-group">
                             <label class="form-label" for="admin_username">Admin Username *</label>
                             <input type="text" id="admin_username" name="admin_username" class="form-input" placeholder="e.g. crescent_admin" required autocomplete="off">
-                            <div class="helper-text">Tenant-unique username for client login.</div>
+                            <div class="helper-text">Globally unique username for client login across the platform.</div>
                         </div>
                         <div class="form-group">
-                            <label class="form-label" for="admin_password">Initial Temporary Password *</label>
-                            <div class="password-field-wrapper">
-                                <input type="password" id="admin_password" name="admin_password" class="form-input" placeholder="Min 6 characters" required minlength="6" autocomplete="new-password">
-                                <button type="button" class="password-toggle-btn" onclick="togglePlatformPassword('admin_password', this)" aria-label="Show password" title="Show password">
-                                    <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-                                </button>
-                            </div>
-                            <div class="helper-text">The clinic owner can change this password upon login.</div>
+                            <label class="form-label" for="admin_email">Admin / Contact Email *</label>
+                            <input type="email" id="admin_email" name="admin_email" class="form-input" placeholder="e.g. owner@crescentclinic.com" required autocomplete="email">
+                            <div class="helper-text">Used for password resets, subscription notifications, and billing alerts.</div>
                         </div>
+                    </div>
+                    <div class="form-group" style="margin-top: 16px;">
+                        <label class="form-label" for="admin_password">Initial Temporary Password *</label>
+                        <div class="password-field-wrapper">
+                            <input type="password" id="admin_password" name="admin_password" class="form-input" placeholder="Min 6 characters" required minlength="6" autocomplete="new-password">
+                            <button type="button" class="password-toggle-btn" onclick="togglePlatformPassword('admin_password', this)" aria-label="Show password" title="Show password">
+                                <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                            </button>
+                        </div>
+                        <div class="helper-text">The clinic owner can change this password upon login.</div>
                     </div>
                 </div>
 

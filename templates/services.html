@@ -28,6 +28,11 @@
             <input type="text" name="phone" class="form-control" value="{{ business.phone }}" required>
         </div>
         <div class="form-group">
+            <label>Official Contact &amp; Account Email</label>
+            <input type="email" name="email" class="form-control" value="{{ business.email or '' }}" placeholder="e.g. admin@clinic.com">
+            <small class="text-muted" style="font-size: 0.76rem;">Used for password resets, subscription notices, and billing alerts.</small>
+        </div>
+        <div class="form-group">
             <label>Default Consultation / General Fee (PKR)</label>
             <input type="number" step="100" name="consultation_fee" class="form-control" value="{{ business.consultation_fee or 2000 }}" required>
         </div>

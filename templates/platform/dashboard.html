@@ -490,8 +490,12 @@
                             </td>
                             <td>
                                 <div><span class="pill">👤 {{ item.admin_username }}</span></div>
-                                <div style="margin-top: 6px;">
-                                    <button onclick="promptResetPassword('{{ item.business.id }}', '{{ item.admin_username }}')" class="pill" style="background: #1e293b; color: #fbbf24; border: 1px solid #78350f; cursor: pointer;">🔑 Reset Password</button>
+                                <div class="clinic-meta" style="margin-top: 4px; color: #94a3b8; font-size: 0.78rem;">
+                                    ✉️ {{ item.admin_email or 'No email' }}
+                                </div>
+                                <div style="margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap;">
+                                    <button onclick="promptResetPassword('{{ item.business.id }}', '{{ item.admin_username }}')" class="pill" style="background: #1e293b; color: #fbbf24; border: 1px solid #78350f; cursor: pointer;">🔑 Reset Pass</button>
+                                    <button onclick="promptUpdateEmail('{{ item.business.id }}', '{{ item.business.name }}', '{{ item.admin_email or '' }}')" class="pill" style="background: #1e293b; color: #93c5fd; border: 1px solid #1e3a8a; cursor: pointer;">✉️ Edit Email</button>
                                 </div>
                             </td>
                             <td>
@@ -535,6 +539,11 @@
             <input type="hidden" name="new_password" id="resetPasswordValue">
         </form>
 
+        <!-- Hidden Form for Clinic Email Update -->
+        <form id="updateEmailForm" method="POST" action="" style="display: none;">
+            <input type="hidden" name="new_email" id="updateEmailValue">
+        </form>
+
         <script>
             function openDateRangeModal(clinicId, clinicName) {
                 document.getElementById('modalClinicTitle').innerText = `Set Subscription Range: ${clinicName}`;
@@ -563,6 +572,20 @@
                     form.submit();
                 } else if (newPass) {
                     alert('Password must be at least 6 characters long.');
+                }
+            }
+
+            function promptUpdateEmail(clinicId, clinicName, currentEmail) {
+                const newEmail = prompt(`Update contact/admin email for '${clinicName}' (Clinic #${clinicId}):`, currentEmail || '');
+                if (newEmail !== null && newEmail.trim().length > 0) {
+                    if (!newEmail.includes('@')) {
+                        alert('Please enter a valid email address.');
+                        return;
+                    }
+                    const form = document.getElementById('updateEmailForm');
+                    form.action = `/platform/clinic/${clinicId}/update-email`;
+                    document.getElementById('updateEmailValue').value = newEmail.trim().toLowerCase();
+                    form.submit();
                 }
             }
         </script>

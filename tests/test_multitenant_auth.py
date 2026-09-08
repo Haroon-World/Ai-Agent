@@ -357,14 +357,12 @@ class TestMultiTenantAuth(unittest.TestCase):
         conv = Conversation.query.filter_by(business_id=1).first()
         self.assertIsNotNone(conv)
 
-    # ── Username scoping — two clinics can share a username ───────────────
+    # ── Username global uniqueness & Email Management ─────────────────────
 
-    def test_same_username_allowed_across_different_businesses(self):
-        """Username unique-per-business: two different clinics can both have 'admin'."""
-        # setUp already created self.arfa_admin with username=Config.ADMIN_USERNAME for biz 1.
-        # Create a second business and give IT also an admin called "admin".
-        # This must NOT raise a unique constraint error because the constraint
-        # is composite (business_id, username).
+    def test_username_is_globally_unique_across_different_businesses(self):
+        """Usernames are globally unique across all clinics: duplicate username must be rejected."""
+        from sqlalchemy.exc import IntegrityError
+
         clinic2 = Business(
             id=2, name="Test Clinic 2", business_type="dental_clinic",
             address="123 Test St", phone="+92 300 0000000",
@@ -373,25 +371,133 @@ class TestMultiTenantAuth(unittest.TestCase):
         db.session.add(clinic2)
         db.session.flush()
 
-        # clinic2 gets username "admin" — same username as Arfa's admin, different business
+        # clinic2 tries to use "admin" — same username as Arfa's admin
         clinic2_admin = User(
             business_id=2, username=Config.ADMIN_USERNAME,
             password_hash=generate_password_hash("clinic2Pass"),
             is_platform_admin=False,
         )
         db.session.add(clinic2_admin)
-        # This commit must NOT raise an IntegrityError
+        with self.assertRaises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+    def test_onboard_rejects_duplicate_username_across_clinics(self):
+        """Onboard form explicitly rejects usernames that already exist in the system."""
+        _admin_session(self.client, self.platform_admin.id, None,
+                       username=Config.PLATFORM_ADMIN_USERNAME,
+                       is_platform_admin=True)
+        resp = self.client.post(
+            "/platform/onboard-clinic",
+            data={
+                "clinic_name": "Duplicate Clinic",
+                "address": "123 Main St",
+                "phone": "+92 300 1112233",
+                "business_type": "dental_clinic",
+                "admin_username": Config.ADMIN_USERNAME,  # already belongs to Arfa
+                "admin_email": "dup@clinic.com",
+                "admin_password": "password123",
+            },
+            follow_redirects=True
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"already taken across the platform", resp.data)
+
+    def test_onboard_provisions_and_stores_email(self):
+        """Onboard form collects and stores admin email on both Business and User."""
+        _admin_session(self.client, self.platform_admin.id, None,
+                       username=Config.PLATFORM_ADMIN_USERNAME,
+                       is_platform_admin=True)
+        resp = self.client.post(
+            "/platform/onboard-clinic",
+            data={
+                "clinic_name": "Crescent Care",
+                "address": "DHA Phase 6, Lahore",
+                "phone": "+92 42 35998877",
+                "business_type": "dental_clinic",
+                "admin_username": "crescent_admin",
+                "admin_email": "admin@crescentcare.com",
+                "admin_password": "password123",
+            },
+            follow_redirects=True
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"Clinic Client Successfully Onboarded!", resp.data)
+        self.assertIn(b"admin@crescentcare.com", resp.data)
+
+        user = User.query.filter_by(username="crescent_admin").first()
+        self.assertIsNotNone(user)
+        self.assertEqual(user.email, "admin@crescentcare.com")
+
+        biz = Business.query.filter_by(name="Crescent Care").first()
+        self.assertIsNotNone(biz)
+        self.assertEqual(biz.email, "admin@crescentcare.com")
+
+    def test_login_supports_username_or_email_without_clinic_id(self):
+        """Login functions seamlessly via username or email without asking for Clinic ID."""
+        # Set email for arfa admin
+        self.arfa_admin.email = "arfa_contact@clinic.com"
         db.session.commit()
 
-        # Both "admin" users exist, scoped to their respective businesses
-        arfa_count = User.query.filter_by(
-            business_id=1, username=Config.ADMIN_USERNAME
-        ).count()
-        clinic2_count = User.query.filter_by(
-            business_id=2, username=Config.ADMIN_USERNAME
-        ).count()
-        self.assertEqual(arfa_count, 1)
-        self.assertEqual(clinic2_count, 1)
+        # 1. Login with username
+        resp1 = self.client.post(
+            "/admin/login",
+            data={"username": Config.ADMIN_USERNAME, "password": Config.ADMIN_PASSWORD},
+            follow_redirects=True
+        )
+        self.assertIn(b"Logged in to Arfa Polyclinic Admin Portal", resp1.data)
+        self.client.get("/admin/logout")
+
+        # 2. Login with email
+        resp2 = self.client.post(
+            "/admin/login",
+            data={"username": "arfa_contact@clinic.com", "password": Config.ADMIN_PASSWORD},
+            follow_redirects=True
+        )
+        self.assertIn(b"Logged in to Arfa Polyclinic Admin Portal", resp2.data)
+
+        # 3. Verify login GET page has NO clinic ID input and NO SaaS Master console links
+        resp_get = self.client.get("/admin/login")
+        self.assertNotIn(b"Clinic ID / Name", resp_get.data)
+        self.assertNotIn(b"clinicFieldGroup", resp_get.data)
+        self.assertNotIn(b"Specify Clinic ID", resp_get.data)
+        self.assertNotIn(b"Master Platform Console", resp_get.data)
+        self.assertNotIn(b"http://127.0.0.1:5000/platform/login", resp_get.data)
+
+    def test_client_and_platform_can_update_email(self):
+        """Client can update email in settings, and platform admin can update clinic email."""
+        # 1. Client updates email via /admin/settings/edit
+        _admin_session(self.client, self.arfa_admin.id, 1,
+                       username=Config.ADMIN_USERNAME, clinic_name="Arfa Polyclinic")
+        edit_resp = self.client.post(
+            "/admin/settings/edit",
+            data={
+                "name": "Arfa Polyclinic",
+                "phone": "+92 42 35789000",
+                "email": "new_arfa_email@clinic.com",
+                "address": "Plot 42-B, Gulberg III, Lahore",
+                "opening_hours": "Mon-Sat 09:00-17:00",
+                "consultation_fee": "2500"
+            },
+            follow_redirects=True
+        )
+        self.assertEqual(edit_resp.status_code, 200)
+        self.assertEqual(self.arfa.email, "new_arfa_email@clinic.com")
+        self.assertEqual(self.arfa_admin.email, "new_arfa_email@clinic.com")
+
+        # 2. Platform admin updates clinic email via /platform/clinic/<id>/update-email
+        _admin_session(self.client, self.platform_admin.id, None,
+                       username=Config.PLATFORM_ADMIN_USERNAME,
+                       is_platform_admin=True)
+        plat_resp = self.client.post(
+            f"/platform/clinic/{self.arfa.id}/update-email",
+            data={"new_email": "platform_updated@clinic.com"},
+            follow_redirects=True
+        )
+        self.assertEqual(plat_resp.status_code, 200)
+        self.assertIn(b"successfully updated", plat_resp.data.lower())
+        self.assertEqual(self.arfa.email, "platform_updated@clinic.com")
+        self.assertEqual(self.arfa_admin.email, "platform_updated@clinic.com")
 
     # ── login_required redirect ───────────────────────────────────────────
 

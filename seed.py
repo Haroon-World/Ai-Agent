@@ -19,12 +19,16 @@ def seed_database(app=None):
                 business_type="polyclinic",
                 address="Plot 42-B, Main Boulevard, Gulberg III, Lahore",
                 phone="+92 42 35789000",
+                email="admin@arfaclinic.com",
                 timezone="Asia/Karachi",
                 opening_hours="Monday to Saturday: 09:00 AM - 05:00 PM, Sunday: Closed",
                 policies="Please arrive 10 minutes prior to your appointment. Cancellations should be requested at least 2 hours in advance. Emergency walk-ins welcome during working hours."
             )
             db.session.add(clinic)
             db.session.flush()
+        elif not clinic.email:
+            clinic.email = "admin@arfaclinic.com"
+            db.session.commit()
 
         # 2. Seed Doctors if not existing
         doc_count = Doctor.query.filter_by(business_id=clinic.id).count()
@@ -139,13 +143,13 @@ def seed_database(app=None):
 
         # 4. Seed Clinic Admin for Arfa Polyclinic (is_platform_admin=False: pure clinic tenant)
         existing_clinic_admin = User.query.filter_by(
-            business_id=clinic.id,
             username=Config.ADMIN_USERNAME
         ).first()
         if not existing_clinic_admin:
             clinic_admin = User(
                 business_id=clinic.id,
                 username=Config.ADMIN_USERNAME,
+                email="admin@arfaclinic.com",
                 password_hash=generate_password_hash(Config.ADMIN_PASSWORD),
                 is_platform_admin=False,
             )
@@ -153,9 +157,18 @@ def seed_database(app=None):
             db.session.commit()
             print(f"[Seed] Clinic admin user '{Config.ADMIN_USERNAME}' created for '{clinic.name}'.")
         else:
-            # Ensure Arfa clinic admin is NOT marked as platform admin
+            # Ensure Arfa clinic admin is NOT marked as platform admin and has email
+            updated = False
             if existing_clinic_admin.is_platform_admin:
                 existing_clinic_admin.is_platform_admin = False
+                updated = True
+            if not existing_clinic_admin.email:
+                existing_clinic_admin.email = "admin@arfaclinic.com"
+                updated = True
+            if existing_clinic_admin.business_id != clinic.id:
+                existing_clinic_admin.business_id = clinic.id
+                updated = True
+            if updated:
                 db.session.commit()
 
         # 5. Seed Dedicated Platform Owner (Separate from any clinic, business_id=None)
@@ -168,6 +181,7 @@ def seed_database(app=None):
                 platform_owner = User(
                     business_id=None,
                     username=Config.PLATFORM_ADMIN_USERNAME,
+                    email="platform@clinicconnectai.com",
                     password_hash=generate_password_hash(Config.PLATFORM_ADMIN_PASSWORD),
                     is_platform_admin=True,
                 )
@@ -176,8 +190,14 @@ def seed_database(app=None):
                 print(f"[Seed] Separate Platform Owner '{Config.PLATFORM_ADMIN_USERNAME}' created.")
         else:
             # Preserve existing platform admin password — NEVER overwrite on startup
+            updated = False
             if existing_platform_admin.business_id is not None:
                 existing_platform_admin.business_id = None
+                updated = True
+            if not existing_platform_admin.email:
+                existing_platform_admin.email = "platform@clinicconnectai.com"
+                updated = True
+            if updated:
                 db.session.commit()
 
     if app:

@@ -5,21 +5,19 @@ from models import db
 
 class User(db.Model):
     """
-    Per-clinic admin user account.
+    Clinic admin and platform admin user accounts.
 
-    Username is unique *per business* (not globally), so two different clinics
-    can both have a user named "admin" without collision — the composite unique
-    constraint (business_id, username) enforces this.
+    Username is globally unique across the entire platform, ensuring fast,
+    unambiguous single-lookup authentication without requiring Clinic IDs.
+    Email is also globally unique and used for password resets, subscription
+    alerts, and account recovery.
 
     is_platform_admin=True marks the SaaS platform owner's accounts; these
-    accounts can access the /admin/platform/onboard-clinic page. Regular clinic
-    admins (is_platform_admin=False) cannot.
+    accounts access the Master Platform Console at /platform/login. Regular clinic
+    admins (is_platform_admin=False) access their clinic management portal.
     """
 
     __tablename__ = "users"
-    __table_args__ = (
-        db.UniqueConstraint("business_id", "username", name="uq_user_business_username"),
-    )
 
     id = db.Column(db.Integer, primary_key=True)
     business_id = db.Column(
@@ -28,7 +26,8 @@ class User(db.Model):
         nullable=True,
         index=True,
     )
-    username = db.Column(db.String(80), nullable=False)
+    username = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    email = db.Column(db.String(120), unique=True, nullable=True, index=True)
     password_hash = db.Column(db.String(256), nullable=False)
     is_platform_admin = db.Column(db.Boolean, nullable=False, default=False)
     reset_token = db.Column(db.String(128), nullable=True, index=True)

@@ -9,6 +9,7 @@ class Business(db.Model):
     business_type = db.Column(db.String(100), nullable=False, default="dental_clinic")
     address = db.Column(db.String(255), nullable=False)
     phone = db.Column(db.String(50), nullable=False)
+    email = db.Column(db.String(120), nullable=True)
     timezone = db.Column(db.String(50), nullable=False, default="Asia/Karachi")
     opening_hours = db.Column(db.Text, nullable=False, default="Monday to Saturday: 09:00 AM - 05:00 PM, Sunday: Closed")
     policies = db.Column(db.Text, nullable=True)

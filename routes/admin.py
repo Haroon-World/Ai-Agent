@@ -91,131 +91,76 @@ def _current_business_id() -> int:
 
 @admin_bp.route("/admin/login", methods=["GET", "POST"])
 def login():
-    clinic_param = (
-        request.form.get("clinic") or
-        request.form.get("clinic_id") or
-        request.args.get("clinic") or
-        request.args.get("clinic_id") or
-        ""
-    ).strip()
-
     if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
+        identifier = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
 
-        matched_user = None
+        if not identifier or not password:
+            flash("Please provide both username/email and password.", "danger")
+            return render_template(
+                "login.html",
+                already_logged_in=bool(session.get("user_id")),
+                current_user=session.get("admin_user", "admin"),
+                username=identifier
+            )
 
-        if clinic_param:
-            target_business = None
-            if clinic_param.isdigit():
-                target_business = db.session.get(Business, int(clinic_param))
-            else:
-                target_business = Business.query.filter_by(name=clinic_param).first()
+        # Look up by username or email (case-insensitive for email)
+        matched_user = User.query.filter(
+            (User.username == identifier) | (db.func.lower(User.email) == identifier.lower())
+        ).first()
 
-            if not target_business:
-                flash(f"Clinic '{clinic_param}' not found.", "danger")
-                return render_template(
-                    "login.html",
-                    already_logged_in=bool(session.get("user_id")),
-                    current_user=session.get("admin_user", "admin"),
-                    require_clinic_id=True,
-                    clinic_param=clinic_param
-                )
+        if matched_user and matched_user.is_platform_admin and matched_user.check_password(password):
+            flash("Unauthorized: Platform Owner accounts cannot sign in through the Clinic Client Portal.", "warning")
+            return render_template(
+                "login.html",
+                already_logged_in=bool(session.get("user_id")),
+                current_user=session.get("admin_user", "admin"),
+                username=identifier
+            )
 
-            candidate = User.query.filter_by(
-                username=username,
-                business_id=target_business.id,
-                is_platform_admin=False
-            ).first()
-            if candidate and candidate.check_password(password):
-                matched_user = candidate
-            else:
-                flash("Invalid username or password for this clinic.", "danger")
-                return render_template(
-                    "login.html",
-                    already_logged_in=bool(session.get("user_id")),
-                    current_user=session.get("admin_user", "admin"),
-                    require_clinic_id=True,
-                    clinic_param=clinic_param
-                )
-        else:
-            candidates = User.query.filter_by(username=username).all()
-            clinic_candidates = [c for c in candidates if not c.is_platform_admin]
-            platform_candidates = [c for c in candidates if c.is_platform_admin]
+        if not matched_user or not matched_user.check_password(password):
+            flash("Invalid username or password.", "danger")
+            return render_template(
+                "login.html",
+                already_logged_in=bool(session.get("user_id")),
+                current_user=session.get("admin_user", "admin"),
+                username=identifier
+            )
 
-            # Check if this username belongs to platform admin
-            for pc in platform_candidates:
-                if pc.check_password(password):
-                    flash("Unauthorized: Platform Owner accounts cannot sign in through the Clinic Client Portal. Please use the dedicated Platform Master Login at /platform/login.", "warning")
-                    return render_template(
-                        "login.html",
-                        already_logged_in=bool(session.get("user_id")),
-                        current_user=session.get("admin_user", "admin")
-                    )
+        # Preserve active platform admin session if logged in concurrently
+        p_admin_id = session.get("platform_admin_id")
+        p_admin_user = session.get("platform_admin_user")
 
-            if len(clinic_candidates) == 0:
-                flash("Invalid username or password.", "danger")
-            elif len(clinic_candidates) == 1:
-                if clinic_candidates[0].check_password(password):
-                    matched_user = clinic_candidates[0]
-                else:
-                    flash("Invalid username or password.", "danger")
-            else:
-                # Multiple clinics share this username — refuse to guess
-                flash(f"Multiple clinics found with username '{username}'. Please specify your Clinic ID to sign in.", "warning")
-                return render_template(
-                    "login.html",
-                    already_logged_in=bool(session.get("user_id")),
-                    current_user=session.get("admin_user", "admin"),
-                    username=username,
-                    require_clinic_id=True
-                )
+        session.clear()
+        session.permanent = True
 
-        if matched_user:
-            # Block platform owners from using the clinic client login portal
-            if matched_user.is_platform_admin:
-                flash("Unauthorized: Platform Owner accounts cannot sign in through the Clinic Client Portal. Please use the dedicated Platform Master Login at /platform/login.", "warning")
-                return render_template(
-                    "login.html",
-                    already_logged_in=bool(session.get("user_id")),
-                    current_user=session.get("admin_user", "admin")
-                )
+        if p_admin_id:
+            session["platform_admin_id"] = p_admin_id
+            session["platform_admin_user"] = p_admin_user
+            session["is_platform_admin"] = True
 
-            # Preserve active platform admin session if logged in concurrently
-            p_admin_id = session.get("platform_admin_id")
-            p_admin_user = session.get("platform_admin_user")
+        session["user_id"] = matched_user.id
+        session["business_id"] = matched_user.business_id
+        session["admin_user"] = matched_user.username
+        if not p_admin_id:
+            session["is_platform_admin"] = False
 
-            session.clear()
-            session.permanent = True
+        business = db.session.get(Business, matched_user.business_id)
+        session["clinic_name"] = business.name if business else "Clinic"
+        
+        # Check subscription access upon sign in
+        if business and not business.is_subscription_valid:
+            flash(f"Subscription for {session['clinic_name']} has expired. Please renew to resume operations.", "warning")
+            return redirect(url_for("admin_bp.subscription_expired"))
 
-            if p_admin_id:
-                session["platform_admin_id"] = p_admin_id
-                session["platform_admin_user"] = p_admin_user
-                session["is_platform_admin"] = True
-
-            session["user_id"] = matched_user.id
-            session["business_id"] = matched_user.business_id
-            session["admin_user"] = matched_user.username
-            if not p_admin_id:
-                session["is_platform_admin"] = False
-
-            business = db.session.get(Business, matched_user.business_id)
-            session["clinic_name"] = business.name if business else "Clinic"
-            
-            # Check subscription access upon sign in
-            if business and not business.is_subscription_valid:
-                flash(f"Subscription for {session['clinic_name']} has expired. Please renew to resume operations.", "warning")
-                return redirect(url_for("admin_bp.subscription_expired"))
-
-            flash(f"Logged in to {session['clinic_name']} Admin Portal.", "success")
-            return redirect(url_for("admin_bp.dashboard"))
+        flash(f"Logged in to {session['clinic_name']} Admin Portal.", "success")
+        return redirect(url_for("admin_bp.dashboard"))
 
     already_logged_in = bool(session.get("user_id")) and not bool(session.get("is_platform_admin"))
     return render_template(
         "login.html",
         already_logged_in=already_logged_in,
-        current_user=session.get("admin_user", "admin"),
-        clinic_param=clinic_param
+        current_user=session.get("admin_user", "admin")
     )
 
 
@@ -862,11 +807,23 @@ def edit_settings():
         flash("Business record not found.", "danger")
         return redirect(url_for("admin_bp.services_view"))
 
-    business.name = request.form.get("name", business.name).strip()
-    business.phone = request.form.get("phone", business.phone).strip()
-    business.address = request.form.get("address", business.address).strip()
-    business.opening_hours = request.form.get("opening_hours", business.opening_hours).strip()
-    business.policies = request.form.get("policies", business.policies).strip()
+    business.name = (request.form.get("name") or business.name or "").strip()
+    business.phone = (request.form.get("phone") or business.phone or "").strip()
+    business.address = (request.form.get("address") or business.address or "").strip()
+    business.opening_hours = (request.form.get("opening_hours") or business.opening_hours or "").strip()
+    business.policies = (request.form.get("policies") or business.policies or "").strip()
+
+    new_email = request.form.get("email", "").strip().lower()
+    if new_email:
+        # Check if email is used by another user across the platform
+        current_admin = User.query.filter_by(business_id=business_id, is_platform_admin=False).first()
+        existing_user = User.query.filter(db.func.lower(User.email) == new_email).first()
+        if existing_user and current_admin and existing_user.id != current_admin.id:
+            flash(f"Email '{new_email}' is already in use by another clinic account.", "danger")
+            return redirect(url_for("admin_bp.services_view"))
+        business.email = new_email
+        if current_admin:
+            current_admin.email = new_email
 
     try:
         consultation_fee = float(request.form.get("consultation_fee", "2000"))
@@ -1015,18 +972,31 @@ def onboard_clinic():
 
 @admin_bp.route("/admin/forgot-password", methods=["GET", "POST"])
 def forgot_password():
-    """Allow clinic owners/staff to initiate a secure password reset."""
+    """Allow clinic owners/staff to initiate a secure password reset via username or email."""
     if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
-        if not username:
-            flash("Please enter your admin username.", "warning")
+        identifier = (request.form.get("identifier") or request.form.get("username") or "").strip()
+        if not identifier:
+            flash("Please enter your admin username or registered email.", "warning")
             return render_template("forgot_password.html")
 
-        # Find user account (clinic staff only)
-        user = User.query.filter_by(username=username, is_platform_admin=False).first()
+        # Find user account (clinic staff only; matches username or email case-insensitively)
+        user = User.query.filter(
+            ((User.username == identifier) | (db.func.lower(User.email) == identifier.lower())),
+            User.is_platform_admin == False
+        ).first()
+
         if user:
-            user.generate_reset_token(expires_in_hours=1)
+            token = user.generate_reset_token(expires_in_hours=1)
             db.session.commit()
+
+            if user.email:
+                reset_url = url_for("admin_bp.reset_password", token=token, _external=True)
+                from services.email_service import EmailService
+                EmailService.send_password_reset_email(
+                    to_email=user.email,
+                    reset_url=reset_url,
+                    username=user.username
+                )
 
         # Always return generic success notice to prevent username enumeration and never expose token
         flash("If an account exists for that username, password reset instructions have been dispatched.", "info")
