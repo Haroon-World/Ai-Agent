@@ -38,7 +38,7 @@ class EmailService:
         smtp_host = os.getenv("SMTP_HOST", "").strip()
         smtp_port = int(os.getenv("SMTP_PORT", "587"))
         smtp_user = os.getenv("SMTP_USER", "").strip()
-        smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
+        smtp_password = os.getenv("SMTP_PASSWORD", "").replace(" ", "").strip()
         sender_email = os.getenv("MAIL_DEFAULT_SENDER", smtp_user or "noreply@clinicconnectai.com").strip()
         use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
 

@@ -250,6 +250,26 @@ class TestSubscriptionAndSundaySlots(unittest.TestCase):
             self.assertTrue(user.check_password("brand_new_password_2026"))
             self.assertFalse(user.check_password("admin_pass_123"))
 
+        # Step 4: Verify query parameter format works as well (?token=...)
+        with self.app.app_context():
+            user = User.query.filter_by(username="apex_admin").first()
+            t2 = user.generate_reset_token()
+            db.session.commit()
+
+        # GET with ?token=
+        get_res = self.client.get(f"/admin/reset-password?token={t2}")
+        self.assertEqual(get_res.status_code, 200)
+        self.assertIn(b"Set New Password", get_res.data)
+
+        # POST with ?token=
+        post_res = self.client.post(
+            f"/admin/reset-password?token={t2}",
+            data={"password": "final_password_9999", "confirm_password": "final_password_9999"},
+            follow_redirects=True
+        )
+        self.assertEqual(post_res.status_code, 200)
+        self.assertIn(b"Your password has been successfully reset", post_res.data)
+
     # ------------------------------------------------------------------
     # 4. Sunday Availability & Time-Slot Fix
     # ------------------------------------------------------------------

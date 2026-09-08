@@ -1005,11 +1005,17 @@ def forgot_password():
     return render_template("forgot_password.html")
 
 
+@admin_bp.route("/admin/reset-password", methods=["GET", "POST"])
 @admin_bp.route("/admin/reset-password/<token>", methods=["GET", "POST"])
-def reset_password(token):
-    """Validate token and allow setting a new password."""
-    user = User.query.filter_by(reset_token=token).first()
-    if not user or not user.verify_reset_token(token):
+def reset_password(token=None):
+    """Validate token and allow setting a new password. Supports both /<token> and ?token=<token>."""
+    active_token = token or request.args.get("token") or request.form.get("token")
+    if not active_token:
+        flash("Password reset token is required. Please request a new link.", "danger")
+        return redirect(url_for("admin_bp.forgot_password"))
+
+    user = User.query.filter_by(reset_token=active_token).first()
+    if not user or not user.verify_reset_token(active_token):
         flash("The password reset link is invalid or has expired. Please request a new one.", "danger")
         return redirect(url_for("admin_bp.forgot_password"))
 
@@ -1019,11 +1025,11 @@ def reset_password(token):
 
         if len(password) < 6:
             flash("New password must be at least 6 characters long.", "danger")
-            return render_template("reset_password.html", token=token, user=user)
+            return render_template("reset_password.html", token=active_token, user=user)
 
         if password != confirm_password:
             flash("Passwords do not match. Please re-enter.", "danger")
-            return render_template("reset_password.html", token=token, user=user)
+            return render_template("reset_password.html", token=active_token, user=user)
 
         user.set_password(password)
         user.clear_reset_token()
@@ -1031,7 +1037,7 @@ def reset_password(token):
         flash("Your password has been successfully reset! You may now sign in.", "success")
         return redirect(url_for("admin_bp.login"))
 
-    return render_template("reset_password.html", token=token, user=user)
+    return render_template("reset_password.html", token=active_token, user=user)
 
 
 # ---------------------------------------------------------------------------
