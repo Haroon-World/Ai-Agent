@@ -1336,17 +1336,21 @@ class Agent:
 
                 # If check_availability ran, update state if date has 0 slots or requested time is unavailable
                 if tool_name == "check_availability":
-                    avail_slots = result.get("available_slots", [])
-                    if not avail_slots:
-                        # Day is closed or has NO available slots! Clear requested_date & time so subsequent turns prompt for valid date
-                        conv.requested_date = None
-                        conv.requested_time = None
-                        conv.awaiting_input = "date_choice"
-                        conv.workflow_state = "CHECKING_AVAILABILITY"
-                    elif conv.requested_time and conv.requested_time not in avail_slots:
-                        conv.requested_time = None
-                        conv.awaiting_input = "time_choice"
-                        conv.workflow_state = "CHECKING_AVAILABILITY"
+                    if result.get("requires_doctor"):
+                        conv.awaiting_input = "doctor_choice"
+                        conv.workflow_state = "COLLECTING_INFO"
+                    else:
+                        avail_slots = result.get("available_slots", [])
+                        if not avail_slots:
+                            # Day is closed or has NO available slots! Clear requested_date & time so subsequent turns prompt for valid date
+                            conv.requested_date = None
+                            conv.requested_time = None
+                            conv.awaiting_input = "date_choice"
+                            conv.workflow_state = "CHECKING_AVAILABILITY"
+                        elif conv.requested_time and conv.requested_time not in avail_slots:
+                            conv.requested_time = None
+                            conv.awaiting_input = "time_choice"
+                            conv.workflow_state = "CHECKING_AVAILABILITY"
 
                 tool_msg_content = json.dumps(result)
                 tool_msg = Message(
@@ -1426,6 +1430,9 @@ class Agent:
                             service_id=conv.selected_service_id,
                             date_str=conv.requested_date
                         )
+                        if avail.get("requires_doctor"):
+                            conv.awaiting_input = "doctor_choice"
+                            conv.workflow_state = "COLLECTING_INFO"
                         final_content = generate_tool_response(
                             tool_name="check_availability",
                             tool_result=avail,
@@ -1445,6 +1452,17 @@ class Agent:
                 doc_roster = BookingService.get_doctors(self.business_id)
                 if len(doc_roster) == 1:
                     conv.selected_doctor_id = doc_roster[0]["id"]
+                elif len(doc_roster) > 1:
+                    # If assistant response asks customer to choose/prefer a doctor, ensure doctor_choice is awaited
+                    doctor_prompt_phrases = [
+                        "which doctor", "kis doctor", "کس ڈاکٹر", "what doctor",
+                        "choose your doctor", "select a doctor", "prefer to see",
+                        "prefer which doctor", "doctor would you prefer"
+                    ]
+                    if any(p in final_content.lower() for p in doctor_prompt_phrases):
+                        conv.awaiting_input = "doctor_choice"
+                        if conv.workflow_state in [None, "START", "CHECKING_AVAILABILITY"]:
+                            conv.workflow_state = "COLLECTING_INFO"
             if conv.awaiting_input == "time_choice" and conv.requested_time:
                 conv.awaiting_input = "name" if not conv.pending_customer_name else ("phone" if not conv.pending_customer_phone else "confirmation")
 
@@ -1489,7 +1507,11 @@ class Agent:
         if tool_name == "check_availability":
             if conv.intent != "RESCHEDULE_APPOINTMENT":
                 conv.intent = "BOOK_APPOINTMENT"
-            if not conv.requested_time:
+            doc_roster = BookingService.get_doctors(self.business_id)
+            if len(doc_roster) > 1 and not conv.selected_doctor_id and not args.get("doctor_id"):
+                conv.workflow_state = "COLLECTING_INFO"
+                conv.awaiting_input = "doctor_choice"
+            elif not conv.requested_time:
                 conv.workflow_state = "CHECKING_AVAILABILITY"
                 conv.awaiting_input = "time_choice"
             if args.get("date"):

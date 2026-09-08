@@ -86,6 +86,8 @@ class TestSaaSHardeningAndMultiDoctorGuard(unittest.TestCase):
             db.session.commit()
 
             self.biz_id = self.biz.id
+            self.doc1_id = self.doc1.id
+            self.doc2_id = self.doc2.id
             self.clinic_user_id = self.clinic_user.id
             self.platform_user_id = self.platform_user.id
 
@@ -148,6 +150,143 @@ class TestSaaSHardeningAndMultiDoctorGuard(unittest.TestCase):
             self.assertIn("Dr. Haroon Rasheed", content)
             self.assertIn("Dr. Ayesha Zahid", content)
             self.assertNotIn("09:00 AM", content)
+
+    def test_multi_doctor_availability_without_naming_doctor_ui_action_is_doctor_selection(self):
+        """When AI asks customer to choose between multiple doctors for availability, ui_action must be doctor_selection, not date_selection."""
+        from unittest.mock import patch
+        with self.app.app_context():
+            agent = Agent(business_id=self.biz_id)
+            conv = Conversation(
+                business_id=self.biz_id,
+                channel="web_chat",
+                status="AI",
+                workflow_state="START"
+            )
+            db.session.add(conv)
+            db.session.commit()
+
+            # Simulate LLM tool call for checking availability with date but without doctor
+            mock_response = {
+                "content": None,
+                "tool_calls": [{
+                    "name": "check_availability",
+                    "arguments": {"date": "2026-09-09"},
+                    "id": "call_avail_1"
+                }]
+            }
+            with patch.object(agent.llm_client, "get_completion", return_value=mock_response):
+                res = agent.process_message(conv.id, "what slots are available tomorrow")
+
+            # Reply text must ask which doctor
+            content = res.get("content", "")
+            self.assertIn("Dr. Haroon Rasheed", content)
+            self.assertIn("Dr. Ayesha Zahid", content)
+            self.assertTrue("Which doctor" in content or "doctor" in content.lower())
+
+            # ui_action must be doctor_selection (NOT date_selection)
+            ui_act = res.get("ui_action")
+            self.assertIsNotNone(ui_act, "ui_action must not be None")
+            self.assertEqual(ui_act.get("type"), "doctor_selection", f"Expected doctor_selection but got {ui_act.get('type')}")
+            self.assertEqual(ui_act.get("interactive_type"), "list")
+
+            doc_names = [opt.get("name") for opt in ui_act.get("options", [])]
+            self.assertIn("Dr. Haroon Rasheed", doc_names)
+            self.assertIn("Dr. Ayesha Zahid", doc_names)
+
+    def test_multi_doctor_availability_two_turn_progression(self):
+        """Turn 1 prompts doctor_selection; Turn 2 after naming doctor seamlessly returns time_slot_selection for tomorrow."""
+        from unittest.mock import patch
+        with self.app.app_context():
+            agent = Agent(business_id=self.biz_id)
+            conv = Conversation(
+                business_id=self.biz_id,
+                channel="web_chat",
+                status="AI",
+                workflow_state="START"
+            )
+            db.session.add(conv)
+            db.session.commit()
+
+            # Turn 1: customer asks for slots tomorrow without specifying doctor
+            mock_t1 = {
+                "content": None,
+                "tool_calls": [{
+                    "name": "check_availability",
+                    "arguments": {"date": "2026-09-09"},
+                    "id": "call_t1"
+                }]
+            }
+            with patch.object(agent.llm_client, "get_completion", return_value=mock_t1):
+                res1 = agent.process_message(conv.id, "what slots are available tomorrow")
+            self.assertEqual(res1.get("ui_action", {}).get("type"), "doctor_selection")
+
+            # Turn 2: customer chooses Dr. Haroon Rasheed
+            mock_t2 = {
+                "content": None,
+                "tool_calls": [{
+                    "name": "check_availability",
+                    "arguments": {"date": "2026-09-09", "doctor_id": self.doc1_id},
+                    "id": "call_t2"
+                }]
+            }
+            with patch.object(agent.llm_client, "get_completion", return_value=mock_t2):
+                res2 = agent.process_message(conv.id, "Dr. Haroon Rasheed")
+
+            # Turn 2 must now return time slots for Dr. Haroon on tomorrow's date
+            self.assertEqual(res2.get("ui_action", {}).get("type"), "time_slot_selection")
+            self.assertIn("09:00 AM", res2.get("content", ""))
+
+    def test_single_doctor_clinic_availability_does_not_prompt_doctor_selection(self):
+        """In a clinic with a single doctor, asking for slots tomorrow must auto-bind and NOT show doctor_selection."""
+        from unittest.mock import patch
+        with self.app.app_context():
+            single_biz = Business(
+                name="Solo Smile Studio",
+                business_type="dental_clinic",
+                address="100 Lahore",
+                phone="+923000000000"
+            )
+            db.session.add(single_biz)
+            db.session.flush()
+
+            solo_doc = Doctor(
+                business_id=single_biz.id,
+                name="Dr. Solo Dentist",
+                specialization="General Dentist",
+                slot_interval=30,
+                start_time="09:00",
+                end_time="17:00",
+                working_days="Monday,Tuesday,Wednesday,Thursday,Friday"
+            )
+            db.session.add(solo_doc)
+            db.session.flush()
+
+            for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+                db.session.add(DoctorSchedule(
+                    doctor_id=solo_doc.id, day_of_week=day, is_available=True,
+                    start_time="09:00", end_time="17:00"
+                ))
+            db.session.commit()
+
+            agent = Agent(business_id=single_biz.id)
+            conv = Conversation(business_id=single_biz.id, channel="web_chat", status="AI", workflow_state="START")
+            db.session.add(conv)
+            db.session.commit()
+
+            mock_t = {
+                "content": None,
+                "tool_calls": [{
+                    "name": "check_availability",
+                    "arguments": {"date": "2026-09-09", "doctor_id": solo_doc.id},
+                    "id": "call_solo"
+                }]
+            }
+            with patch.object(agent.llm_client, "get_completion", return_value=mock_t):
+                res = agent.process_message(conv.id, "what slots are available tomorrow")
+
+            # Must NOT prompt for doctor selection
+            self.assertNotEqual(res.get("ui_action", {}).get("type"), "doctor_selection")
+            self.assertEqual(res.get("ui_action", {}).get("type"), "time_slot_selection")
 
     # -------------------------------------------------------------------------
     # Problem 2: Subscription Rejection & Cancellation In-App Notification
