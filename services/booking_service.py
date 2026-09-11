@@ -1156,14 +1156,18 @@ class BookingService:
                     # Check if clean_phone already belongs to another Customer row in the same business
                     existing_other = Customer.query.filter_by(business_id=business_id, phone=clean_phone).first()
                     if existing_other and existing_other.id != customer.id:
-                        # Re-link existing appointments to existing_other and update its name
+                        # Re-link existing appointments to existing_other and preserve active patient name
                         for a in Appointment.query.filter_by(customer_id=customer.id).all():
                             a.customer_id = existing_other.id
-                        if clean_name:
-                            existing_other.name = clean_name
+                        # Active typed patient name takes strict priority over older DB record
+                        active_name = clean_name or (customer.name if customer.name and customer.name not in ["Valued Patient", "Visitor", "WhatsApp Patient"] else None) or conv.pending_customer_name
+                        if active_name and active_name not in ["Valued Patient", "Visitor", "WhatsApp Patient", "N/A"]:
+                            existing_other.name = active_name
                         customer = existing_other
                     else:
                         customer.phone = clean_phone
+                        if clean_name:
+                            customer.name = clean_name
                 conv.customer_id = customer.id
             else:
                 lookup_phone = clean_phone or conv.pending_customer_phone or "0000000000"
@@ -1177,11 +1181,16 @@ class BookingService:
                     db.session.add(customer)
                     db.session.flush()
                 else:
-                    if clean_name:
-                        customer.name = clean_name
+                    active_name = clean_name or conv.pending_customer_name
+                    if active_name and active_name not in ["Valued Patient", "Visitor", "WhatsApp Patient", "N/A"]:
+                        customer.name = active_name
                     if clean_phone:
                         customer.phone = clean_phone
                 conv.customer_id = customer.id
+
+            if customer:
+                conv.pending_customer_name = customer.name
+                conv.pending_customer_phone = customer.phone
 
             if clean_name:
                 conv.pending_customer_name = clean_name

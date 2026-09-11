@@ -1247,6 +1247,60 @@ class Agent:
                 }
             }
 
+        # Post-booking Gratitude / Courtesy wrap-up guard
+        # When an appointment is confirmed and the patient sends courtesy expressions
+        # (e.g. "Okay bht shukariaa", "thanks", "theek hai", "jazakallah"):
+        # Respond warmly without restarting the booking flow or displaying the doctor roster!
+        if conv.workflow_state == "BOOKED":
+            t_clean = re.sub(r"[^\w\s]", "", user_content.lower()).strip()
+            gratitude_tokens = [
+                "shukriya", "shukria", "shukaria", "shukariaa", "thanks", "thank you", "thx",
+                "bohat shukriya", "bohat shukria", "bht shukaria", "bht shukariaa", "bht shukria", "bht shukriya",
+                "jazakallah", "jazak allah", "theek hai", "theek hy", "thik hai", "thik hy",
+                "allah hafiz", "allahhafiz", "bye", "goodbye"
+            ]
+            is_gratitude = any(g in t_clean for g in gratitude_tokens) or (
+                any(w in t_clean.split() for w in ["ok", "okay"]) and any(w in t_clean for w in ["shukria", "shukriya", "thanks"])
+            )
+            # Make sure they are not requesting an action like reschedule, change, cancel, or new booking
+            is_action_request = any(w in t_clean for w in ["cancel", "new", "another", "badal", "change", "reschedule", "doctor", "dr", "time", "date", "slot", "detail", "status", "bata", "check"])
+            
+            if is_gratitude and not is_action_request:
+                is_urdu = any('\u0600' <= ch <= '\u06FF' for ch in user_content)
+                is_roman = any(w in t_clean for w in ["shukriya", "shukria", "shukariaa", "bohat", "bht", "theek", "thik", "allah hafiz"])
+                if is_urdu:
+                    courtesy_reply = "آپ کا بہت شکریہ! آپ کی اپائنٹمنٹ کنفرم ہے۔ اپنا خیال رکھیں، اللہ حافظ! اگر مزید کوئی رہنمائی درکار ہو تو ضرور بتائیں۔"
+                elif is_roman:
+                    courtesy_reply = "Aap ka bohat shukriya! Aap ki appointment confirmed hai. Agar mazeed koi sawal ya rahnumai darkaar ho to zaroor batayein. Apna khayal rakhein, Allah Hafiz!"
+                else:
+                    courtesy_reply = "You are very welcome! Your appointment is confirmed. Feel free to reach out if you need anything else. Have a wonderful day!"
+
+                asst_msg = Message(
+                    conversation_id=conv.id,
+                    role="assistant",
+                    content=courtesy_reply
+                )
+                conv.updated_at = datetime.now(timezone.utc)
+                db.session.add(asst_msg)
+                db.session.commit()
+
+                total_turn_ms = (time.perf_counter() - t_start) * 1000.0
+                return {
+                    "conversation_id": conv.id,
+                    "status": conv.status,
+                    "content": courtesy_reply,
+                    "executed_tools": [],
+                    "ui_action": None,
+                    "metrics": {
+                        "db_queries": getattr(_local_perf_state, "query_count", 0),
+                        "llm_call_1_ms": 0.0,
+                        "tool_time_ms": 0.0,
+                        "llm_call_2_ms": 0.0,
+                        "response_gen_ms": 0.0,
+                        "total_turn_ms": round(total_turn_ms, 2)
+                    }
+                }
+
         # 2. Intelligently extract booking parameters from user text & update state (using cached rosters)
         _resolve_workflow_input(conv, user_content)
 
@@ -1599,5 +1653,12 @@ class Agent:
 
         elif tool_name == "get_clinic_info":
             conv.awaiting_input = None
+
+        elif tool_name == "update_customer_details":
+            conv.awaiting_input = None
+            if args.get("customer_name"):
+                conv.pending_customer_name = str(args["customer_name"]).strip()
+            if args.get("customer_phone"):
+                conv.pending_customer_phone = str(args["customer_phone"]).strip()
 
         db.session.flush()
