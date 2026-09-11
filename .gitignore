@@ -21,3 +21,6 @@ instance/
 .vscode/
 .idea/
 *.swp
+
+# Binaries
+*.exe

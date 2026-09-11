@@ -488,7 +488,9 @@ class BookingService:
         appointment_date: str,
         appointment_time: str,
         notes: Optional[str] = None,
-        idempotency_key: Optional[str] = None
+        idempotency_key: Optional[str] = None,
+        conversation_id: Optional[int] = None,
+        booked_by_phone: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Atomic appointment booking transaction with:
@@ -704,7 +706,9 @@ class BookingService:
                 appointment_time=appointment_time,
                 status="CONFIRMED",
                 notes=notes,
-                idempotency_key=idempotency_key
+                idempotency_key=idempotency_key,
+                conversation_id=conversation_id,
+                booked_by_phone=booked_by_phone
             )
             db.session.add(appointment)
             db.session.flush()
@@ -793,11 +797,13 @@ class BookingService:
         business_id: int,
         appointment_id: Optional[int] = None,
         customer_phone: Optional[str] = None,
-        customer_id: Optional[int] = None
+        customer_id: Optional[int] = None,
+        conversation_id: Optional[int] = None,
+        booked_by_phone: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Look up appointment details and live statuses (confirmed, cancelled, completed)
-        from the database for a customer or appointment ID.
+        from the database for a customer, conversation, or appointment ID.
         """
         appts = []
         if appointment_id:
@@ -809,31 +815,65 @@ class BookingService:
             except (ValueError, TypeError):
                 pass
 
+        if not appts and conversation_id:
+            conv_appts = Appointment.query.filter_by(
+                business_id=business_id, conversation_id=conversation_id
+            ).order_by(Appointment.created_at.desc(), Appointment.id.desc()).all()
+            if conv_appts:
+                appts.extend(conv_appts)
+
+        # Build candidate phone variants
+        phones_to_check = set()
+        for p in [customer_phone, booked_by_phone]:
+            if p:
+                raw_p = str(p).strip()
+                if raw_p:
+                    phones_to_check.add(raw_p)
+                digits = "".join(filter(str.isdigit, raw_p))
+                if digits:
+                    phones_to_check.add(digits)
+                    if len(digits) >= 10:
+                        phones_to_check.add(digits[-10:])
+                    if len(digits) == 11 and digits.startswith("0"):
+                        phones_to_check.add("92" + digits[1:])
+                    elif len(digits) == 12 and digits.startswith("92"):
+                        phones_to_check.add("0" + digits[2:])
+
+        if not appts and phones_to_check:
+            # Query by booked_by_phone
+            for p in phones_to_check:
+                by_booker = Appointment.query.filter(
+                    Appointment.business_id == business_id,
+                    (Appointment.booked_by_phone == p) | (Appointment.booked_by_phone.like(f"%{p}%"))
+                ).order_by(Appointment.created_at.desc(), Appointment.id.desc()).all()
+                if by_booker:
+                    for a in by_booker:
+                        if a not in appts:
+                            appts.append(a)
+
+            # Query by Customer phone
+            for p in phones_to_check:
+                custs = Customer.query.filter(
+                    Customer.business_id == business_id,
+                    (Customer.phone == p) | (Customer.phone.like(f"%{p}%"))
+                ).all()
+                for c in custs:
+                    cust_appts = Appointment.query.filter_by(
+                        business_id=business_id, customer_id=c.id
+                    ).order_by(Appointment.created_at.desc(), Appointment.id.desc()).all()
+                    for a in cust_appts:
+                        if a not in appts:
+                            appts.append(a)
+
         if not appts and customer_id:
             appts = Appointment.query.filter_by(
                 business_id=business_id, customer_id=customer_id
             ).order_by(Appointment.created_at.desc(), Appointment.id.desc()).all()
 
-        if not appts and customer_phone:
-            clean_phone = "".join(filter(str.isdigit, str(customer_phone)))
-            cust = None
-            if clean_phone:
-                cust = Customer.query.filter(
-                    Customer.business_id == business_id,
-                    (
-                        (Customer.phone == customer_phone) |
-                        (Customer.phone.like(f"%{clean_phone[-10:]}%") if len(clean_phone) >= 7 else False)
-                    )
-                ).first()
-            if cust:
-                appts = Appointment.query.filter_by(
-                    business_id=business_id, customer_id=cust.id
-                ).order_by(Appointment.created_at.desc(), Appointment.id.desc()).all()
-
-        if not appts and not appointment_id and not customer_id and not customer_phone:
+        if not appts and not appointment_id and not customer_id and not customer_phone and not conversation_id and not booked_by_phone:
             return {
                 "success": False,
-                "error": "Either appointment_id, customer_phone, or customer_id is required."
+                "error": "Either appointment_id, customer_phone, conversation_id, or customer_id is required."
             }
 
         appts_data = [a.to_dict() for a in appts]

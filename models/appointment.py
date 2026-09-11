@@ -14,6 +14,8 @@ class Appointment(db.Model):
     appointment_time = db.Column(db.String(10), nullable=False)             # HH:MM
     status = db.Column(db.String(30), nullable=False, default="CONFIRMED")   # CONFIRMED, CANCELLED, COMPLETED, PENDING
     notes = db.Column(db.Text, nullable=True)
+    conversation_id = db.Column(db.Integer, db.ForeignKey("conversations.id"), nullable=True, index=True)
+    booked_by_phone = db.Column(db.String(50), nullable=True, index=True)
     idempotency_key = db.Column(db.String(100), nullable=True, unique=True, index=True)
     
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -53,6 +55,8 @@ class Appointment(db.Model):
             "appointment_time": self.appointment_time,
             "status": self.status,
             "notes": self.notes,
+            "conversation_id": self.conversation_id,
+            "booked_by_phone": self.booked_by_phone,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

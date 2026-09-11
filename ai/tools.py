@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Dict, Any, List, Callable
 from services.booking_service import BookingService
 from services.handoff_service import HandoffService
@@ -260,6 +261,12 @@ class ToolDispatcher:
                 except (ValueError, TypeError):
                     parsed_svc_id = None
 
+                booked_by = None
+                from models import db, Conversation
+                conv = db.session.get(Conversation, self.conversation_id) if self.conversation_id else None
+                if conv and conv.visitor_id and "wa_" in conv.visitor_id:
+                    booked_by = conv.visitor_id.replace("wa_", "").replace("whatsapp_", "")
+
                 return BookingService.book_appointment(
                     business_id=self.business_id,
                     customer_name=arguments.get("customer_name", ""),
@@ -269,7 +276,9 @@ class ToolDispatcher:
                     appointment_date=arguments.get("appointment_date", ""),
                     appointment_time=arguments.get("appointment_time", ""),
                     notes=arguments.get("notes"),
-                    idempotency_key=arguments.get("idempotency_key")
+                    idempotency_key=arguments.get("idempotency_key"),
+                    conversation_id=self.conversation_id,
+                    booked_by_phone=booked_by
                 )
 
             elif tool_name == "get_appointment_details":
@@ -280,17 +289,35 @@ class ToolDispatcher:
                     parsed_appt_id = None
                 phone = arguments.get("customer_phone")
                 cid = None
-                if not parsed_appt_id and not phone:
-                    from models import db, Conversation
-                    conv = db.session.get(Conversation, self.conversation_id) if self.conversation_id else None
-                    if conv:
+                booked_by = None
+                from models import db, Conversation
+                conv = db.session.get(Conversation, self.conversation_id) if self.conversation_id else None
+                if conv:
+                    if not phone:
                         phone = conv.pending_customer_phone or (conv.customer.phone if conv.customer else None)
-                        cid = conv.customer_id
+                    cid = conv.customer_id
+                    if conv.visitor_id and "wa_" in conv.visitor_id:
+                        booked_by = conv.visitor_id.replace("wa_", "").replace("whatsapp_", "")
+
+                # If no appointment_id in arguments, check recent messages for appointment id patterns (e.g. 'Id 1 thi', 'Id # 2', '#2')
+                if not parsed_appt_id and conv and conv.messages:
+                    for m in reversed(conv.messages[-4:]):
+                        if m.role == "user":
+                            match = re.search(r'\b(?:id|#|appointment|booking)\s*[:#]?\s*(\d+)\b', m.content, re.IGNORECASE)
+                            if match:
+                                try:
+                                    parsed_appt_id = int(match.group(1))
+                                    break
+                                except Exception:
+                                    pass
+
                 return BookingService.get_appointment_details(
                     business_id=self.business_id,
                     appointment_id=parsed_appt_id,
                     customer_phone=phone,
-                    customer_id=cid
+                    customer_id=cid,
+                    conversation_id=self.conversation_id,
+                    booked_by_phone=booked_by
                 )
 
             elif tool_name == "cancel_appointment":

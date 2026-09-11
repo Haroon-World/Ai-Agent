@@ -7,6 +7,7 @@ from routes.chat import chat_bp
 from routes.appointments import appointments_bp
 from routes.admin import admin_bp
 from routes.platform import platform_bp
+from routes.whatsapp import whatsapp_bp
 from seed import seed_database
 
 # Ensure stdout/stderr use UTF-8 on Windows so emoji in LLM responses
@@ -38,6 +39,7 @@ def create_app(config_class=Config):
     app.register_blueprint(appointments_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(platform_bp, url_prefix="/platform")
+    app.register_blueprint(whatsapp_bp, url_prefix="/api/whatsapp")
 
     @app.route("/")
     @app.route("/clinic/<int:clinic_id>")

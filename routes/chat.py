@@ -141,13 +141,24 @@ def init_chat():
 
 @chat_bp.route("/api/chat/history/<int:conversation_id>", methods=["GET"])
 def get_history(conversation_id):
-    visitor_id = _get_or_set_visitor_id()
-    conv = Conversation.query.filter_by(id=conversation_id, visitor_id=visitor_id).first()
+    admin_business_id = session.get("business_id")
+    is_admin = bool(session.get("user_id") and admin_business_id)
+
+    if is_admin:
+        # Logged-in admin can view any conversation belonging to their clinic
+        conv = Conversation.query.filter_by(id=conversation_id, business_id=admin_business_id).first()
+    else:
+        visitor_id = _get_or_set_visitor_id()
+        conv = Conversation.query.filter_by(id=conversation_id, visitor_id=visitor_id).first()
+
     if not conv:
         return jsonify({"success": False, "error": "Conversation not found"}), 404
 
-    # Only return user and assistant messages for customer chat display
-    visible_messages = [m.to_dict() for m in conv.messages if m.role in ["user", "assistant"]]
+    # For admin, return all messages; for regular visitors, return user & assistant
+    if is_admin:
+        visible_messages = [m.to_dict() for m in conv.messages]
+    else:
+        visible_messages = [m.to_dict() for m in conv.messages if m.role in ["user", "assistant"]]
 
     return jsonify({
         "success": True,

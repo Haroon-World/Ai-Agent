@@ -58,3 +58,11 @@ class Config:
     # Platform Owner Credentials (Separate from any clinic)
     PLATFORM_ADMIN_USERNAME = os.getenv("PLATFORM_ADMIN_USERNAME", "clinicconnectaipro")
     PLATFORM_ADMIN_PASSWORD = os.getenv("PLATFORM_ADMIN_PASSWORD", "@Clinic2026")
+
+    # Meta WhatsApp Cloud API
+    WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "1313879111808444")
+    WHATSAPP_BUSINESS_ACCOUNT_ID = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "993720013281872")
+    WHATSAPP_ACCESS_TOKEN = _clean_key(os.getenv("WHATSAPP_ACCESS_TOKEN", ""), "WHATSAPP_ACCESS_TOKEN")
+    WHATSAPP_WEBHOOK_VERIFY_TOKEN = os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "clinic_connect_secret_2026")
+    WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v19.0")
+

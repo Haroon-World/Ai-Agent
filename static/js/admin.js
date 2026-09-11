@@ -64,14 +64,15 @@ async function loadConversationDetails(convId, options = {}) {
         const stream = document.getElementById('convMessagesStream');
         stream.innerHTML = '';
 
-        data.messages.forEach(m => {
+        const visibleMsgs = data.messages.filter(m => m.role === 'user' || m.role === 'assistant');
+        visibleMsgs.forEach(m => {
             const row = document.createElement('div');
             row.className = `message-row ${m.role}`;
             row.innerHTML = `
                 <div class="message-bubble">
                     ${formatMarkdownAdmin(m.content)}
                 </div>
-                <div class="message-meta">${m.role.toUpperCase()} • ${m.created_at ? new Date(m.created_at).toLocaleTimeString() : ''}</div>
+                <div class="message-meta">${m.role === 'user' ? 'PATIENT' : 'AI RECEPTIONIST'} • ${m.created_at ? new Date(m.created_at).toLocaleTimeString() : ''}</div>
             `;
             stream.appendChild(row);
         });

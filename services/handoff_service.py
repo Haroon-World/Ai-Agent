@@ -1,5 +1,8 @@
 from typing import Dict, Any, Optional
 from models import db, Conversation, Message
+from models.whatsapp_account import ClinicWhatsAppAccount
+from services.whatsapp_service import WhatsAppService
+from config.config import Config
 
 
 class HandoffService:
@@ -113,7 +116,25 @@ class HandoffService:
         db.session.add(msg)
         db.session.commit()
 
+        # If this is a WhatsApp conversation, also deliver the message to the patient's phone
+        wa_result = None
+        if conv.channel == "whatsapp" and conv.visitor_id and conv.visitor_id.startswith("wa_"):
+            patient_phone = conv.visitor_id[3:]  # strip "wa_" prefix to get clean phone number
+            wa_account = ClinicWhatsAppAccount.query.filter_by(
+                business_id=conv.business_id,
+                is_active=True
+            ).first()
+            phone_number_id = wa_account.phone_number_id if wa_account else Config.WHATSAPP_PHONE_NUMBER_ID
+            access_token = (wa_account.access_token if wa_account else None) or Config.WHATSAPP_ACCESS_TOKEN
+            wa_result = WhatsAppService.send_text_message(
+                to_phone=patient_phone,
+                text=message_content,
+                phone_number_id=phone_number_id,
+                access_token=access_token
+            )
+
         return {
             "success": True,
-            "message": msg.to_dict()
+            "message": msg.to_dict(),
+            "whatsapp_sent": wa_result
         }
