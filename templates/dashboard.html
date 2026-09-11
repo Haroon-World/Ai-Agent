@@ -156,7 +156,13 @@ function dismissRejectionNotice(reqId) {
                     <td>#{{ appt.id }}</td>
                     <td><strong>{{ appt.appointment_date }}</strong> at {{ appt.appointment_time }}</td>
                     <td>
-                        <strong>{{ appt.customer.name if appt.customer else "N/A" }}</strong>
+                        {% if appt.conversation_id %}
+                            <a href="/admin/conversations?cid={{ appt.conversation_id }}" style="color: inherit; text-decoration: none;" title="Open patient conversation">
+                                <strong>💬 {{ appt.customer.name if appt.customer else "N/A" }}</strong>
+                            </a>
+                        {% else %}
+                            <strong>{{ appt.customer.name if appt.customer else "N/A" }}</strong>
+                        {% endif %}
                         <div class="text-muted">{{ appt.customer.phone if appt.customer else "" }}</div>
                     </td>
                     <td>{{ appt.doctor.name if appt.doctor else "Doctor" }}</td>

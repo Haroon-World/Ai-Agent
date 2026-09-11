@@ -36,7 +36,15 @@
                 <tr>
                     <td><strong>#{{ appt.id }}</strong></td>
                     <td><strong>{{ appt.appointment_date }}</strong> at {{ appt.appointment_time }}</td>
-                    <td>{{ appt.customer.name if appt.customer else "N/A" }}</td>
+                    <td>
+                        {% if appt.conversation_id %}
+                            <a href="/admin/conversations?cid={{ appt.conversation_id }}" style="color: #4f46e5; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; gap: 4px;" title="Open patient conversation">
+                                <span>💬</span> <span>{{ appt.customer.name if appt.customer else "N/A" }}</span>
+                            </a>
+                        {% else %}
+                            {{ appt.customer.name if appt.customer else "N/A" }}
+                        {% endif %}
+                    </td>
                     <td>{{ appt.customer.phone if appt.customer else "N/A" }}</td>
                     <td>{{ appt.doctor.name if appt.doctor else "N/A" }}</td>
                     <td>{{ appt.service.name if appt.service else "N/A" }}</td>

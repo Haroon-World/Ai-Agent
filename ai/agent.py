@@ -1256,13 +1256,16 @@ class Agent:
         state_context = _build_state_context(conv)
         system_prompt = f"{base_prompt}\n\n{state_context}"
 
-        # Fetch visible history
+        # Fetch visible history — rolling window of the last 15 messages so the LLM
+        # stays fast, avoids prompt drift, and maintains precise focus across continuous conversations
         history_msgs = (
             Message.query
             .filter_by(conversation_id=conv.id)
             .order_by(Message.created_at.asc())
             .all()
         )
+        if len(history_msgs) > 15:
+            history_msgs = history_msgs[-15:]
 
         formatted_messages = []
         for m in history_msgs:

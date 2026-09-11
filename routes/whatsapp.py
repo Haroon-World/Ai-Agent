@@ -141,25 +141,17 @@ def handle_webhook():
             customer.name = patient_name
             db.session.commit()
 
-        # 3. Conversation Lookup by WhatsApp Unique Visitor ID (ensures continuity across bookings)
+        # 3. Unified Conversation Lookup — Strictly ONE continuous thread per WhatsApp Phone Number
         wa_visitor_id = f"wa_{clean_phone}"
-        conv = Conversation.query.filter_by(
-            business_id=business_id,
-            visitor_id=wa_visitor_id
-        ).order_by(Conversation.updated_at.desc()).first()
+        conv = Conversation.query.filter(
+            Conversation.business_id == business_id,
+            Conversation.channel == "whatsapp",
+            (Conversation.visitor_id == wa_visitor_id) | 
+            (Conversation.pending_customer_phone == clean_phone) |
+            (Conversation.customer_id == customer.id)
+        ).order_by(Conversation.id.desc()).first()
 
-        # Fallback to customer_id if no visitor_id conversation yet
         if not conv:
-            conv = Conversation.query.filter_by(
-                business_id=business_id,
-                customer_id=customer.id,
-                channel="whatsapp"
-            ).order_by(Conversation.updated_at.desc()).first()
-            if conv and not conv.visitor_id:
-                conv.visitor_id = wa_visitor_id
-                db.session.commit()
-
-        if not conv or conv.status == "CLOSED":
             conv = Conversation(
                 business_id=business_id,
                 customer_id=customer.id,
@@ -174,12 +166,21 @@ def handle_webhook():
             db.session.add(conv)
             db.session.commit()
         else:
-            # If previous state was BOOKED and user asks a new question or wants another booking,
-            # transition state cleanly so they don't get stuck
+            # Ensure visitor_id and customer_id are pinned
+            if conv.visitor_id != wa_visitor_id:
+                conv.visitor_id = wa_visitor_id
+            if conv.customer_id != customer.id:
+                conv.customer_id = customer.id
+            if conv.status == "CLOSED":
+                conv.status = "AI"
+                conv.workflow_state = "START"
+
+            # If previous state was BOOKED and user asks a new question or wants another booking/reschedule,
+            # transition state cleanly so they don't get stuck in finished booking state
             if conv.workflow_state == "BOOKED":
                 text_l = user_text.lower()
                 is_status = any(k in text_l for k in ["booking", "appointment", "detail", "status", "bta", "bata", "check", "kya", "kab", "id", "#"])
-                is_new_booking = any(k in text_l for k in ["new", "another", "book", "rakh", "schedule", "dr", "doctor", "service"])
+                is_new_booking = any(k in text_l for k in ["new", "another", "book", "rakh", "schedule", "dr", "doctor", "service", "change", "reschedule", "make", "off", "tarikh", "date", "hi", "hello", "salam"])
                 if is_new_booking and not is_status:
                     conv.workflow_state = "START"
                     conv.intent = "BOOK_APPOINTMENT"
