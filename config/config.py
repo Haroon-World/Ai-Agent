@@ -22,6 +22,9 @@ class Config:
         
     SQLALCHEMY_DATABASE_URI = db_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "connect_args": {"timeout": 30},
+    } if db_url.startswith("sqlite") else {}
     
     @staticmethod
     def _clean_key(val: str, prefix: str = "") -> str:
