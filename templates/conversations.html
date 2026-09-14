@@ -8,6 +8,11 @@
         <h1 class="page-title">Live Conversations & Human Handoff</h1>
         <p class="page-subtitle">Monitor customer chats in real-time, inspect AI tool logs, take over conversations, and release them back to AI.</p>
     </div>
+    <div class="header-actions header-actions-group">
+        <button type="button" class="header-btn header-btn-danger" onclick="openConvCleanupModal()" title="Clean up historical chats">
+            🧹 Clean Up Data
+        </button>
+    </div>
 </div>
 
 <div class="conversations-layout">
@@ -15,40 +20,63 @@
     <div class="conv-sidebar">
         <div class="conv-sidebar-header">
             <div class="conv-sidebar-title-row">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <h3>Conversations</h3>
-                    <span class="badge badge-secondary" id="convTotalBadge">{{ conversations|length }}</span>
+                <div class="conv-title-wrap">
+                    <h3 class="conv-sidebar-title">Conversations</h3>
+                    <span class="conv-count-badge" id="convTotalBadge">{{ conversations|length }}</span>
                 </div>
-                <button type="button" class="btn btn-sm btn-danger-outline" onclick="openConvCleanupModal()" title="Clean up historical chats">
-                    🧹 Clean Up
-                </button>
+                <div class="conv-sidebar-actions">
+                    <button type="button" id="convFilterToggleBtn" class="header-btn header-btn-secondary conv-filter-toggle-btn" onclick="toggleConvFilters()" title="Click to open/close filter options">
+                        <span>🔍 Filter</span>
+                        <span id="convFilterActiveIndicator" class="conv-filter-active-dot" style="display: none;" title="Filters active"></span>
+                    </button>
+                    <button type="button" class="header-btn header-btn-danger conv-cleanup-btn" onclick="openConvCleanupModal()" title="Clean up historical chats">
+                        <span>🧹 Clean Up</span>
+                    </button>
+                </div>
             </div>
             
-            <!-- Separate Filters for Patient Name/Phone and Conversation ID -->
-            <div class="conv-search-grid">
-                <div class="conv-search-field conv-search-name-field">
-                    <span class="conv-search-icon">👤</span>
-                    <input type="text" id="convNameFilter" class="conv-search-input" placeholder="Patient Name / Phone...">
-                    <button type="button" id="convNameClearBtn" class="conv-search-clear" style="display: none;" onclick="clearConvNameFilter()" title="Clear name filter">✕</button>
+            <!-- Collapsible Filter Panel (opens when clicking "Filter") -->
+            <div id="convFilterPanel" class="conv-filter-panel" style="display: none;">
+                <!-- 1. Patient Name / Phone Search (Full-width, never cut off) -->
+                <div class="conv-filter-group">
+                    <div class="conv-search-field" style="width: 100%;">
+                        <span class="conv-search-icon">🔍</span>
+                        <input type="text" id="convNameFilter" class="conv-search-input" placeholder="Search patient name or phone..." autocomplete="off">
+                        <button type="button" id="convNameClearBtn" class="conv-search-clear" style="display: none;" onclick="clearConvNameFilter()" title="Clear patient filter">✕</button>
+                    </div>
                 </div>
-                <div class="conv-search-field conv-search-id-field">
-                    <span class="conv-search-icon">#</span>
-                    <input type="text" id="convIdFilter" class="conv-search-input" placeholder="ID...">
-                    <button type="button" id="convIdClearBtn" class="conv-search-clear" style="display: none;" onclick="clearConvIdFilter()" title="Clear ID filter">✕</button>
-                </div>
-            </div>
 
-            <!-- Filter Tabs / Pills -->
-            <div class="conv-filter-tabs">
-                <button type="button" class="conv-filter-pill active" data-filter="all" onclick="setConvFilter('all')">
-                    All <span class="conv-pill-count" id="pillAllCount">{{ conversations|length }}</span>
-                </button>
-                <button type="button" class="conv-filter-pill pill-human" data-filter="human" onclick="setConvFilter('human')">
-                    👨‍💼 Human <span class="conv-pill-count" id="pillHumanCount">0</span>
-                </button>
-                <button type="button" class="conv-filter-pill pill-ai" data-filter="ai" onclick="setConvFilter('ai')">
-                    🤖 AI <span class="conv-pill-count" id="pillAiCount">0</span>
-                </button>
+                <!-- 2. Secondary Filter Row: Conv # and Calendar Date -->
+                <div class="conv-search-grid">
+                    <div class="conv-search-field" style="flex: 1 1 45%;">
+                        <span class="conv-search-icon">#</span>
+                        <input type="text" id="convIdFilter" class="conv-search-input" placeholder="Conv #..." autocomplete="off">
+                        <button type="button" id="convIdClearBtn" class="conv-search-clear" style="display: none;" onclick="clearConvIdFilter()" title="Clear ID filter">✕</button>
+                    </div>
+                    <div class="conv-search-field" style="flex: 1 1 55%;">
+                        <input type="date" id="convDatePicker" class="conv-search-input conv-date-picker-input" title="Filter by date from calendar" autocomplete="off" onchange="applyConvFiltering()">
+                        <button type="button" id="convDateClearBtn" class="conv-search-clear" style="display: none;" onclick="clearConvDatePicker()" title="Clear date filter">✕</button>
+                    </div>
+                </div>
+
+                <!-- 3. Modern Segmented Status Control -->
+                <div class="conv-filter-tabs">
+                    <button type="button" class="conv-filter-pill active" data-filter="all" onclick="setConvFilter('all')">
+                        All <span class="conv-pill-count" id="pillAllCount">{{ conversations|length }}</span>
+                    </button>
+                    <button type="button" class="conv-filter-pill pill-human" data-filter="human" onclick="setConvFilter('human')">
+                        👨‍💼 Human <span class="conv-pill-count" id="pillHumanCount">0</span>
+                    </button>
+                    <button type="button" class="conv-filter-pill pill-ai" data-filter="ai" onclick="setConvFilter('ai')">
+                        🤖 AI <span class="conv-pill-count" id="pillAiCount">0</span>
+                    </button>
+                </div>
+
+                <!-- 4. Live Filter Counter & Reset Bar -->
+                <div class="conv-status-bar">
+                    <span id="convCounterText" class="conv-counter-text">Showing <strong>{{ conversations|length }}</strong> of {{ conversations|length }} chats</span>
+                    <button type="button" id="convResetAllBtn" class="conv-reset-btn" style="display: none;" onclick="resetConvFilter()">↺ Reset</button>
+                </div>
             </div>
         </div>
         <div class="conv-list" id="convList">
@@ -59,17 +87,33 @@
                  data-id="{{ c.id }}"
                  data-status="{{ (c.status or 'AI') | upper }}"
                  data-name="{{ (c.customer.name if c.customer else '') | lower }}"
-                 data-phone="{{ (c.customer.phone if c.customer else '') | lower }}">
+                 data-phone="{{ (c.customer.phone if c.customer else '') | lower }}"
+                 data-date="{{ c.created_at.strftime('%Y-%m-%d') if c.created_at else '' }}">
                 <div class="conv-item-top">
                     <span class="conv-customer-name">{{ c.customer.name if c.customer else "Visitor #" ~ c.id }}</span>
-                    {% if c.status == 'HUMAN' %}
-                        <span class="badge badge-warning">👨‍💼 HUMAN</span>
-                    {% else %}
-                        <span class="badge badge-success">🤖 AI</span>
-                    {% endif %}
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        {% if c.status == 'HUMAN' %}
+                            <span class="badge badge-warning">👨‍💼 HUMAN</span>
+                        {% else %}
+                            <span class="badge badge-success">🤖 AI</span>
+                        {% endif %}
+                        <div class="action-menu-wrap" onclick="event.stopPropagation()">
+                            <button type="button" class="action-menu-btn" title="Conversation Actions" onclick="toggleActionMenu(this, event)">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="19" r="2.2"/></svg>
+                            </button>
+                            <div class="action-dropdown">
+                                <button type="button" class="action-dropdown-item" onclick="copyConvLink('{{ c.id }}')">
+                                    <span>📋</span> Copy Chat Link
+                                </button>
+                                <button type="button" class="action-dropdown-item action-dropdown-danger" onclick="deleteSingleConversation('{{ c.id }}', '{{ (c.customer.name if c.customer else ('Visitor #' ~ c.id)) | replace('\'', '\\\'') }}')">
+                                    <span>🗑️</span> Delete Chat
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="conv-item-meta">
-                    <span>{{ c.messages|length }} messages</span>
+                    <span>{{ c.messages|length }} msgs{% if c.created_at %} • {{ c.created_at.strftime('%b %d') }}{% endif %}</span>
                     <span>State: <code>{{ c.workflow_state }}</code></span>
                 </div>
                 {% if c.handoff_reason %}
@@ -79,9 +123,11 @@
             {% else %}
             <div class="empty-state">No conversations yet.</div>
             {% endfor %}
-            <div id="convNoMatchNotice" class="empty-state" style="display: none; padding: 2rem 1rem; text-align: center;">
-                <p style="color: var(--text-muted); font-size: 0.88rem;">No matching conversations found.</p>
-                <button type="button" class="btn btn-sm btn-secondary" style="margin-top: 0.5rem;" onclick="resetConvFilter()">Clear Filter</button>
+            <div id="convNoMatchNotice" class="empty-state" style="display: none; padding: 2.2rem 1rem; text-align: center;">
+                <div style="font-size: 1.8rem; margin-bottom: 0.4rem;">🔍</div>
+                <h4 style="font-size: 0.95rem; font-weight: 700; color: var(--text-main); margin-bottom: 0.25rem;">No matching conversations</h4>
+                <p id="convNoMatchDetail" style="color: var(--text-muted); font-size: 0.82rem; margin-bottom: 0.75rem; line-height: 1.4;">No conversations matched your filter criteria.</p>
+                <button type="button" class="header-btn header-btn-primary" style="height: 32px; font-size: 0.8rem; margin: 0 auto;" onclick="resetConvFilter()">↺ Reset All Filters</button>
             </div>
         </div>
     </div>
@@ -103,9 +149,23 @@
                         <span id="activeConvIntent" class="tag tag-purple"></span>
                     </div>
                 </div>
-                <div class="conv-header-controls">
+                <div class="conv-header-controls" style="display: flex; align-items: center; gap: 8px;">
                     <button id="btnTakeover" class="btn btn-warning btn-sm" onclick="takeoverActiveConv()">👨‍💼 Take Over Chat</button>
                     <button id="btnRelease" class="btn btn-success btn-sm" onclick="releaseActiveConv()">🤖 Release to AI</button>
+                    <div class="action-menu-wrap">
+                        <button type="button" class="action-menu-btn" title="More Actions" onclick="toggleActionMenu(this, event)">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="12" cy="19" r="2.2"/></svg>
+                        </button>
+                        <div class="action-dropdown">
+                            <button type="button" class="action-dropdown-item" onclick="copyConvLink(currentConvId)">
+                                <span>📋</span> Copy Chat Link
+                            </button>
+                            <div class="action-dropdown-divider"></div>
+                            <button type="button" class="action-dropdown-item action-dropdown-danger" onclick="deleteActiveConversation()">
+                                <span>🗑️</span> Delete Conversation
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -268,16 +328,55 @@
         applyConvFiltering();
     }
 
+    function toggleConvFilters() {
+        const panel = document.getElementById('convFilterPanel');
+        const btn = document.getElementById('convFilterToggleBtn');
+        if (!panel) return;
+
+        const isHidden = (panel.style.display === 'none' || !panel.classList.contains('is-open'));
+        if (isHidden) {
+            panel.style.display = 'block';
+            panel.classList.add('is-open');
+            if (btn) btn.classList.add('active');
+            const nameInput = document.getElementById('convNameFilter');
+            if (nameInput) setTimeout(() => nameInput.focus(), 80);
+        } else {
+            panel.style.display = 'none';
+            panel.classList.remove('is-open');
+            if (btn) btn.classList.remove('active');
+        }
+    }
+
     function applyConvFiltering() {
         const nameVal = (document.getElementById('convNameFilter')?.value || '').trim().toLowerCase();
         const rawIdVal = (document.getElementById('convIdFilter')?.value || '').trim().toLowerCase();
         const idVal = rawIdVal.replace(/^#/, '');
+        const dateVal = (document.getElementById('convDatePicker')?.value || '').trim();
 
         const nameClearBtn = document.getElementById('convNameClearBtn');
-        if (nameClearBtn) nameClearBtn.style.display = nameVal ? 'block' : 'none';
+        if (nameClearBtn) nameClearBtn.style.display = nameVal ? 'flex' : 'none';
 
         const idClearBtn = document.getElementById('convIdClearBtn');
-        if (idClearBtn) idClearBtn.style.display = rawIdVal ? 'block' : 'none';
+        if (idClearBtn) idClearBtn.style.display = rawIdVal ? 'flex' : 'none';
+
+        const dateClearBtn = document.getElementById('convDateClearBtn');
+        if (dateClearBtn) dateClearBtn.style.display = dateVal ? 'flex' : 'none';
+
+        const isFiltered = Boolean(nameVal || idVal || dateVal || currentFilterMode !== 'all');
+        const resetBtn = document.getElementById('convResetAllBtn');
+        if (resetBtn) resetBtn.style.display = isFiltered ? 'inline-flex' : 'none';
+
+        const dot = document.getElementById('convFilterActiveIndicator');
+        if (dot) dot.style.display = isFiltered ? 'inline-block' : 'none';
+
+        const toggleBtn = document.getElementById('convFilterToggleBtn');
+        if (toggleBtn) {
+            if (isFiltered) {
+                toggleBtn.classList.add('has-filters');
+            } else {
+                toggleBtn.classList.remove('has-filters');
+            }
+        }
 
         const items = document.querySelectorAll('.conv-list-item');
         let visibleCount = 0;
@@ -287,6 +386,7 @@
             const status = (item.getAttribute('data-status') || '').trim();
             const name = (item.getAttribute('data-name') || '').trim();
             const phone = (item.getAttribute('data-phone') || '').trim();
+            const date = (item.getAttribute('data-date') || '').trim();
 
             // 1. Status match
             let matchStatus = true;
@@ -310,7 +410,13 @@
                 matchId = (id === idVal) || id.startsWith(idVal);
             }
 
-            if (matchStatus && matchName && matchId) {
+            // 4. Date match
+            let matchDate = true;
+            if (dateVal) {
+                matchDate = (date === dateVal);
+            }
+
+            if (matchStatus && matchName && matchId && matchDate) {
                 item.style.display = '';
                 visibleCount++;
             } else {
@@ -318,9 +424,28 @@
             }
         });
 
+        // Update live counter
+        const counterEl = document.getElementById('convCounterText');
+        if (counterEl) {
+            counterEl.innerHTML = `Showing <strong>${visibleCount}</strong> of ${items.length} chats`;
+        }
+
         const noMatchNotice = document.getElementById('convNoMatchNotice');
+        const noMatchDetail = document.getElementById('convNoMatchDetail');
         if (noMatchNotice) {
-            noMatchNotice.style.display = (visibleCount === 0 && items.length > 0) ? 'block' : 'none';
+            if (visibleCount === 0 && items.length > 0) {
+                noMatchNotice.style.display = 'block';
+                if (noMatchDetail) {
+                    let reasons = [];
+                    if (nameVal) reasons.push(`name/phone "${nameVal}"`);
+                    if (idVal) reasons.push(`ID "#${idVal}"`);
+                    if (dateVal) reasons.push(`date "${dateVal}"`);
+                    if (currentFilterMode !== 'all') reasons.push(`status "${currentFilterMode.toUpperCase()}"`);
+                    noMatchDetail.textContent = `No conversations match: ${reasons.join(', ')}.`;
+                }
+            } else {
+                noMatchNotice.style.display = 'none';
+            }
         }
     }
 
@@ -342,11 +467,21 @@
         applyConvFiltering();
     }
 
+    function clearConvDatePicker() {
+        const picker = document.getElementById('convDatePicker');
+        if (picker) {
+            picker.value = '';
+        }
+        applyConvFiltering();
+    }
+
     function resetConvFilter() {
         const nameInput = document.getElementById('convNameFilter');
         const idInput = document.getElementById('convIdFilter');
+        const datePicker = document.getElementById('convDatePicker');
         if (nameInput) nameInput.value = '';
         if (idInput) idInput.value = '';
+        if (datePicker) datePicker.value = '';
         setConvFilter('all');
     }
 
@@ -354,9 +489,14 @@
         updateConvCounts();
         const nameInput = document.getElementById('convNameFilter');
         const idInput = document.getElementById('convIdFilter');
+        const datePicker = document.getElementById('convDatePicker');
 
         if (nameInput) nameInput.addEventListener('input', applyConvFiltering);
         if (idInput) idInput.addEventListener('input', applyConvFiltering);
+        if (datePicker) {
+            datePicker.addEventListener('change', applyConvFiltering);
+            datePicker.addEventListener('input', applyConvFiltering);
+        }
 
         // Auto-select conversation from query param if provided
         const urlParams = new URLSearchParams(window.location.search);
@@ -501,6 +641,144 @@
                 btn.textContent = '🗑️ Permanently Delete Chats';
             }
         }
+    }
+
+    // Action Dropdown Menu Logic
+    function toggleActionMenu(btn, event) {
+        if (event) {
+            event.stopPropagation();
+            event.preventDefault();
+        }
+        const wrap = btn.closest('.action-menu-wrap');
+        if (!wrap) return;
+        const dropdown = wrap.querySelector('.action-dropdown');
+        const wasActive = wrap.classList.contains('active');
+        
+        closeAllActionMenus();
+        
+        if (!wasActive && dropdown) {
+            // Strictly downward as requested
+            dropdown.classList.remove('dropup');
+            wrap.classList.add('active');
+            const listItem = wrap.closest('.conv-list-item');
+            if (listItem) {
+                listItem.classList.add('has-active-menu');
+            }
+        }
+    }
+
+    function closeAllActionMenus() {
+        document.querySelectorAll('.action-menu-wrap.active').forEach(w => {
+            w.classList.remove('active');
+            const d = w.querySelector('.action-dropdown');
+            if (d) d.classList.remove('dropup');
+        });
+        document.querySelectorAll('.conv-list-item.has-active-menu').forEach(item => {
+            item.classList.remove('has-active-menu');
+        });
+    }
+
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.action-menu-wrap')) {
+            closeAllActionMenus();
+        }
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeAllActionMenus();
+        }
+    });
+
+    async function quickTakeoverRelease(convId, currentStatus) {
+        closeAllActionMenus();
+        const endpoint = currentStatus === 'HUMAN' ? '/api/admin/release' : '/api/admin/takeover';
+        try {
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ conversation_id: parseInt(convId) })
+            });
+            const data = await res.json();
+            if (data.success) {
+                if (typeof currentConvId !== 'undefined' && currentConvId == convId) {
+                    await loadConversationDetails(convId);
+                }
+                window.location.reload();
+            } else {
+                alert('Error: ' + (data.error || 'Action failed.'));
+            }
+        } catch (e) {
+            alert('Network error: ' + e.message);
+        }
+    }
+
+    function copyConvLink(convId) {
+        closeAllActionMenus();
+        const targetId = convId || (typeof currentConvId !== 'undefined' ? currentConvId : null);
+        if (!targetId) {
+            alert('No conversation selected.');
+            return;
+        }
+        const url = `${window.location.origin}/admin/conversations?cid=${targetId}`;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(() => {
+                alert(`Conversation link copied to clipboard!\n${url}`);
+            }).catch(() => {
+                prompt('Copy conversation link:', url);
+            });
+        } else {
+            prompt('Copy conversation link:', url);
+        }
+    }
+
+    async function deleteSingleConversation(convId, patientName) {
+        closeAllActionMenus();
+        const targetId = convId || (typeof currentConvId !== 'undefined' ? currentConvId : null);
+        if (!targetId) {
+            alert('No conversation selected to delete.');
+            return;
+        }
+        const nameDesc = patientName ? ` (${patientName})` : '';
+        if (!confirm(`Are you sure you want to permanently delete conversation #${targetId}${nameDesc}?\n\nAll messages in this chat will be deleted. Any linked appointment will remain safe (unlinked). This action cannot be undone.`)) {
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/admin/conversations/delete-single', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ conversation_id: parseInt(targetId) })
+            });
+            const data = await res.json();
+            if (data.success) {
+                const item = document.getElementById(`conv-tab-${targetId}`);
+                if (item) item.remove();
+                
+                updateConvCounts();
+                applyConvFiltering();
+
+                if (typeof currentConvId !== 'undefined' && currentConvId == targetId) {
+                    currentConvId = null;
+                    const activeView = document.getElementById('convActiveView');
+                    const emptyNotice = document.getElementById('convEmptyNotice');
+                    if (activeView) activeView.style.display = 'none';
+                    if (emptyNotice) emptyNotice.style.display = 'flex';
+                }
+            } else {
+                alert('Error: ' + (data.error || 'Failed to delete conversation.'));
+            }
+        } catch (e) {
+            alert('Network error deleting conversation: ' + e.message);
+        }
+    }
+
+    function deleteActiveConversation() {
+        if (typeof currentConvId === 'undefined' || !currentConvId) {
+            alert('Please select a conversation first.');
+            return;
+        }
+        deleteSingleConversation(currentConvId);
     }
 </script>
 {% endblock %}

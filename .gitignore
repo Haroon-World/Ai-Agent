@@ -24,3 +24,9 @@ instance/
 
 # Binaries
 *.exe
+
+# Local Tunnel & Temp
+ngrok_url.txt
+*.docx
+
+

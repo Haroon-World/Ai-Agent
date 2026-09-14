@@ -550,6 +550,68 @@ def cleanup_conversations():
         return jsonify({"success": False, "error": f"Failed to clean up conversations: {str(e)}"}), 500
 
 
+@admin_bp.route("/api/admin/appointments/delete-single", methods=["POST"])
+@login_required
+def delete_single_appointment():
+    """Delete a single specific appointment."""
+    data = request.get_json() or {}
+    appointment_id = data.get("appointment_id")
+    business_id = _current_business_id()
+
+    if not appointment_id:
+        return jsonify({"success": False, "error": "appointment_id is required"}), 400
+
+    try:
+        appt_id_int = int(appointment_id)
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "Invalid appointment_id format."}), 400
+
+    appt = Appointment.query.filter_by(id=appt_id_int, business_id=business_id).first()
+    if not appt:
+        return jsonify({"success": False, "error": "Appointment not found or unauthorized."}), 404
+
+    try:
+        db.session.delete(appt)
+        db.session.commit()
+        return jsonify({"success": True, "message": f"Appointment #{appt_id_int} permanently deleted."})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "error": f"Failed to delete appointment: {str(e)}"}), 500
+
+
+@admin_bp.route("/api/admin/conversations/delete-single", methods=["POST"])
+@login_required
+def delete_single_conversation():
+    """Delete a single specific conversation and unlink associated appointments."""
+    data = request.get_json() or {}
+    conversation_id = data.get("conversation_id")
+    business_id = _current_business_id()
+
+    if not conversation_id:
+        return jsonify({"success": False, "error": "conversation_id is required"}), 400
+
+    try:
+        conv_id_int = int(conversation_id)
+    except (ValueError, TypeError):
+        return jsonify({"success": False, "error": "Invalid conversation_id format."}), 400
+
+    conv = Conversation.query.filter_by(id=conv_id_int, business_id=business_id).first()
+    if not conv:
+        return jsonify({"success": False, "error": "Conversation not found or unauthorized."}), 404
+
+    try:
+        Appointment.query.filter_by(conversation_id=conv_id_int).update(
+            {Appointment.conversation_id: None},
+            synchronize_session=False
+        )
+        db.session.delete(conv)
+        db.session.commit()
+        return jsonify({"success": True, "message": f"Conversation #{conv_id_int} permanently deleted."})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "error": f"Failed to delete conversation: {str(e)}"}), 500
+
+
 @admin_bp.route("/admin/conversations")
 @login_required
 def conversations_view():
