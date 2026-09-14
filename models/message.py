@@ -15,6 +15,7 @@ class Message(db.Model):
     tool_call_id = db.Column(db.String(100), nullable=True)
     input_mode = db.Column(db.String(20), nullable=True, default="text") # text, voice
     interactive_data = db.Column(db.Text, nullable=True) # WhatsApp-compatible structured UI options
+    external_message_id = db.Column(db.String(255), nullable=True, index=True, unique=True) # Meta wamid for dedup
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
     def to_dict(self):

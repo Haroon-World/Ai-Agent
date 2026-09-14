@@ -1,8 +1,10 @@
-from datetime import datetime, date
+import csv
+import io
+from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import (
     Blueprint, render_template, request, redirect, url_for,
-    session, flash, jsonify, abort
+    session, flash, jsonify, abort, Response
 )
 from config.config import Config
 from models import db, Business, Appointment, Conversation, Message, Reminder, Customer, Doctor, Service, ClinicInvitation
@@ -265,6 +267,287 @@ def appointments_view():
         Appointment.appointment_date.desc(), Appointment.appointment_time.asc()
     ).all()
     return render_template("appointments.html", business=business, appointments=all_appointments)
+
+
+@admin_bp.route("/admin/appointments/export")
+@login_required
+def export_appointments():
+    """Export all clinic appointments to an Excel-friendly CSV with UTF-8 BOM."""
+    business_id = _current_business_id()
+    business = db.session.get(Business, business_id)
+    clinic_name = business.name if business else "Clinic"
+
+    appointments = Appointment.query.filter_by(business_id=business_id).order_by(
+        Appointment.appointment_date.desc(), Appointment.appointment_time.asc()
+    ).all()
+
+    output = io.StringIO()
+    output.write('\ufeff')  # UTF-8 BOM for Microsoft Excel compatibility
+    writer = csv.writer(output, dialect='excel')
+
+    writer.writerow([
+        "Appointment ID",
+        "Date",
+        "Time",
+        "Patient Name",
+        "Patient Phone",
+        "Doctor",
+        "Service",
+        "Price (PKR)",
+        "Status",
+        "Booked Via Conversation ID",
+        "Created At"
+    ])
+
+    for appt in appointments:
+        cust_name = appt.customer.name if appt.customer else "N/A"
+        cust_phone = appt.customer.phone if appt.customer else "N/A"
+        doc_name = appt.doctor.name if appt.doctor else "N/A"
+        svc_name = appt.service.name if appt.service else "N/A"
+        svc_price = f"{appt.service.price:,.0f}" if appt.service and appt.service.price is not None else "0"
+        created_str = appt.created_at.strftime("%Y-%m-%d %H:%M") if appt.created_at else "N/A"
+
+        writer.writerow([
+            f"#{appt.id}",
+            appt.appointment_date,
+            appt.appointment_time,
+            cust_name,
+            cust_phone,
+            doc_name,
+            svc_name,
+            svc_price,
+            appt.status,
+            f"#{appt.conversation_id}" if appt.conversation_id else "Direct / Admin",
+            created_str
+        ])
+
+    clean_clinic_name = "".join(c for c in clinic_name if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
+    filename = f"Appointments_{clean_clinic_name}_{datetime.now().strftime('%Y%m%d')}.csv"
+    response = Response(output.getvalue(), mimetype="text/csv; charset=utf-8")
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+def _build_appointment_cleanup_query(business_id, mode, specific_date=None, start_date=None, end_date=None, older_days=None, status_filter=None):
+    query = Appointment.query.filter_by(business_id=business_id)
+
+    if status_filter and status_filter.upper() != "ALL":
+        query = query.filter(Appointment.status == status_filter.upper())
+
+    if mode == "specific_day" and specific_date:
+        query = query.filter(Appointment.appointment_date == specific_date.strip())
+    elif mode == "date_range" and start_date and end_date:
+        query = query.filter(
+            Appointment.appointment_date >= start_date.strip(),
+            Appointment.appointment_date <= end_date.strip()
+        )
+    elif mode == "older_than" and older_days:
+        cutoff = (datetime.now() - timedelta(days=int(older_days))).strftime("%Y-%m-%d")
+        query = query.filter(Appointment.appointment_date < cutoff)
+    elif mode == "all":
+        pass
+    else:
+        return None
+
+    return query
+
+
+@admin_bp.route("/api/admin/appointments/cleanup/preview", methods=["POST"])
+@login_required
+def preview_appointments_cleanup():
+    data = request.get_json() or {}
+    business_id = _current_business_id()
+
+    mode = data.get("mode", "")
+    specific_date = data.get("specific_date")
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    older_days = data.get("older_days")
+    status_filter = data.get("status_filter", "ALL")
+
+    query = _build_appointment_cleanup_query(
+        business_id=business_id,
+        mode=mode,
+        specific_date=specific_date,
+        start_date=start_date,
+        end_date=end_date,
+        older_days=older_days,
+        status_filter=status_filter
+    )
+
+    if query is None:
+        return jsonify({"success": False, "error": "Invalid cleanup criteria specified."}), 400
+
+    count = query.count()
+    return jsonify({"success": True, "count": count})
+
+
+@admin_bp.route("/api/admin/appointments/cleanup", methods=["POST"])
+@login_required
+def cleanup_appointments():
+    data = request.get_json() or {}
+    business_id = _current_business_id()
+    password = (data.get("password") or "").strip()
+
+    # Password authentication
+    user_id = session.get("user_id")
+    user = db.session.get(User, user_id) if user_id else None
+    if not user or not user.check_password(password):
+        return jsonify({"success": False, "error": "Authentication failed: Incorrect admin password."}), 403
+
+    mode = data.get("mode", "")
+    specific_date = data.get("specific_date")
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    older_days = data.get("older_days")
+    status_filter = data.get("status_filter", "ALL")
+
+    query = _build_appointment_cleanup_query(
+        business_id=business_id,
+        mode=mode,
+        specific_date=specific_date,
+        start_date=start_date,
+        end_date=end_date,
+        older_days=older_days,
+        status_filter=status_filter
+    )
+
+    if query is None:
+        return jsonify({"success": False, "error": "Invalid cleanup criteria specified."}), 400
+
+    target_appts = query.all()
+    count = len(target_appts)
+
+    if count == 0:
+        return jsonify({"success": True, "count": 0, "message": "No matching appointments found to delete."})
+
+    try:
+        for appt in target_appts:
+            db.session.delete(appt)
+        db.session.commit()
+        return jsonify({"success": True, "count": count, "message": f"Successfully deleted {count} appointment(s)."})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "error": f"Failed to clean up appointments: {str(e)}"}), 500
+
+
+def _build_conversation_cleanup_query(business_id, mode, specific_date=None, start_date=None, end_date=None, older_days=None, status_filter=None):
+    query = Conversation.query.filter_by(business_id=business_id)
+
+    if status_filter == "ai_only":
+        query = query.filter(Conversation.status != "HUMAN")
+
+    if mode == "specific_day" and specific_date:
+        day_start = datetime.strptime(specific_date.strip(), "%Y-%m-%d")
+        day_end = day_start + timedelta(days=1)
+        query = query.filter(Conversation.created_at >= day_start, Conversation.created_at < day_end)
+    elif mode == "date_range" and start_date and end_date:
+        range_start = datetime.strptime(start_date.strip(), "%Y-%m-%d")
+        range_end = datetime.strptime(end_date.strip(), "%Y-%m-%d") + timedelta(days=1)
+        query = query.filter(Conversation.created_at >= range_start, Conversation.created_at < range_end)
+    elif mode == "older_than" and older_days:
+        cutoff = datetime.now() - timedelta(days=int(older_days))
+        query = query.filter(Conversation.created_at < cutoff)
+    elif mode == "all":
+        pass
+    else:
+        return None
+
+    return query
+
+
+@admin_bp.route("/api/admin/conversations/cleanup/preview", methods=["POST"])
+@login_required
+def preview_conversations_cleanup():
+    data = request.get_json() or {}
+    business_id = _current_business_id()
+
+    mode = data.get("mode", "")
+    specific_date = data.get("specific_date")
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    older_days = data.get("older_days")
+    status_filter = data.get("status_filter", "all")
+
+    try:
+        query = _build_conversation_cleanup_query(
+            business_id=business_id,
+            mode=mode,
+            specific_date=specific_date,
+            start_date=start_date,
+            end_date=end_date,
+            older_days=older_days,
+            status_filter=status_filter
+        )
+    except Exception as ex:
+        return jsonify({"success": False, "error": f"Invalid date format: {str(ex)}"}), 400
+
+    if query is None:
+        return jsonify({"success": False, "error": "Invalid cleanup criteria specified."}), 400
+
+    count = query.count()
+    return jsonify({"success": True, "count": count})
+
+
+@admin_bp.route("/api/admin/conversations/cleanup", methods=["POST"])
+@login_required
+def cleanup_conversations():
+    data = request.get_json() or {}
+    business_id = _current_business_id()
+    password = (data.get("password") or "").strip()
+
+    # Password authentication
+    user_id = session.get("user_id")
+    user = db.session.get(User, user_id) if user_id else None
+    if not user or not user.check_password(password):
+        return jsonify({"success": False, "error": "Authentication failed: Incorrect admin password."}), 403
+
+    mode = data.get("mode", "")
+    specific_date = data.get("specific_date")
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    older_days = data.get("older_days")
+    status_filter = data.get("status_filter", "all")
+
+    try:
+        query = _build_conversation_cleanup_query(
+            business_id=business_id,
+            mode=mode,
+            specific_date=specific_date,
+            start_date=start_date,
+            end_date=end_date,
+            older_days=older_days,
+            status_filter=status_filter
+        )
+    except Exception as ex:
+        return jsonify({"success": False, "error": f"Invalid date format: {str(ex)}"}), 400
+
+    if query is None:
+        return jsonify({"success": False, "error": "Invalid cleanup criteria specified."}), 400
+
+    target_convs = query.all()
+    count = len(target_convs)
+
+    if count == 0:
+        return jsonify({"success": True, "count": 0, "message": "No matching conversations found to delete."})
+
+    conv_ids = [c.id for c in target_convs]
+
+    try:
+        # Unlink any appointments pointing to these conversations to preserve foreign keys
+        Appointment.query.filter(Appointment.conversation_id.in_(conv_ids)).update(
+            {Appointment.conversation_id: None},
+            synchronize_session=False
+        )
+
+        for conv in target_convs:
+            db.session.delete(conv)
+
+        db.session.commit()
+        return jsonify({"success": True, "count": count, "message": f"Successfully deleted {count} conversation(s)."})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "error": f"Failed to clean up conversations: {str(e)}"}), 500
 
 
 @admin_bp.route("/admin/conversations")

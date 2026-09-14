@@ -1,7 +1,9 @@
+import hashlib
+import hmac
 import logging
 from flask import Blueprint, request, jsonify, Response, current_app
 from config.config import Config
-from models import db, Business, Conversation, Customer
+from models import db, Business, Conversation, Customer, Message
 from models.whatsapp_account import ClinicWhatsAppAccount
 from services.whatsapp_service import WhatsAppService
 from ai.agent import Agent
@@ -9,6 +11,40 @@ from ai.agent import Agent
 logger = logging.getLogger(__name__)
 
 whatsapp_bp = Blueprint("whatsapp_bp", __name__)
+
+
+# ---------------------------------------------------------------------------
+# Part A helpers
+# ---------------------------------------------------------------------------
+
+def _verify_meta_signature(raw_body: bytes) -> bool:
+    """
+    Verify the X-Hub-Signature-256 header Meta sends with every webhook POST.
+    Returns True if the signature matches (or if WHATSAPP_APP_SECRET is not
+    configured, so development environments without the secret still work —
+    remove that short-circuit before going to production).
+    """
+    app_secret = current_app.config.get("WHATSAPP_APP_SECRET", "") or Config.WHATSAPP_APP_SECRET
+    if not app_secret:
+        logger.warning(
+            "[WhatsApp Webhook] WHATSAPP_APP_SECRET is not set — "
+            "skipping signature verification. Set it in .env before production!"
+        )
+        return True  # Fail-open only in dev; set the secret in prod
+
+    signature_header = request.headers.get("X-Hub-Signature-256", "")
+    if not signature_header.startswith("sha256="):
+        logger.warning("[WhatsApp Webhook] Missing or malformed X-Hub-Signature-256 header")
+        return False
+
+    expected_sig = "sha256=" + hmac.new(
+        app_secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256
+    ).hexdigest()
+
+    # Constant-time comparison to prevent timing attacks
+    return hmac.compare_digest(expected_sig, signature_header)
 
 
 @whatsapp_bp.route("/webhook", methods=["GET"])
@@ -55,6 +91,17 @@ def handle_webhook():
     Handles user messages, routes them to the corresponding clinic AI agent,
     and returns immediate 200 OK to Meta.
     """
+    # ------------------------------------------------------------------
+    # Part A: Verify Meta's HMAC-SHA256 signature BEFORE any processing.
+    # ------------------------------------------------------------------
+    raw_body = request.get_data()
+    if not _verify_meta_signature(raw_body):
+        logger.warning(
+            "[WhatsApp Webhook] Rejected request — invalid X-Hub-Signature-256. "
+            "This was NOT from Meta (or WHATSAPP_APP_SECRET is wrong)."
+        )
+        return Response("Invalid signature", status=403)
+
     data = request.get_json(silent=True) or {}
     logger.info(f"[WhatsApp Webhook] Incoming payload: {data}")
 
@@ -71,8 +118,26 @@ def handle_webhook():
     media_id = parsed.get("media_id")
     mime_type = parsed.get("mime_type", "audio/ogg; codecs=opus")
 
+    # ------------------------------------------------------------------
+    # Part B: Extract Meta's message ID for deduplication.
+    # ------------------------------------------------------------------
+    meta_message_id = parsed.get("message_id")
+
     if not from_phone:
         return jsonify({"status": "ignored", "reason": "missing_phone"}), 200
+
+    # ------------------------------------------------------------------
+    # Part B: Check for duplicate delivery BEFORE any heavy processing.
+    # If we've already handled this exact wamid, acknowledge immediately.
+    # ------------------------------------------------------------------
+    if meta_message_id:
+        existing = Message.query.filter_by(external_message_id=meta_message_id).first()
+        if existing:
+            logger.info(
+                f"[WhatsApp Webhook] Duplicate delivery detected for message_id={meta_message_id} "
+                f"(already stored as Message.id={existing.id}). Returning 200 without reprocessing."
+            )
+            return jsonify({"status": "duplicate", "message_id": meta_message_id}), 200
 
     try:
         # 1. Multi-Tenant Clinic Resolution
@@ -85,10 +150,12 @@ def handle_webhook():
 
         if wa_account:
             business_id = wa_account.business_id
-            access_token = wa_account.access_token or Config.WHATSAPP_ACCESS_TOKEN
+            # Always prefer DB token — it can be updated without server restart.
+            # Fall back to Config (env) token only if DB has none stored.
+            access_token = wa_account.access_token or current_app.config.get("WHATSAPP_ACCESS_TOKEN")
         else:
             business_id = Config.DEFAULT_BUSINESS_ID
-            access_token = Config.WHATSAPP_ACCESS_TOKEN
+            access_token = current_app.config.get("WHATSAPP_ACCESS_TOKEN") or Config.WHATSAPP_ACCESS_TOKEN
 
         business = db.session.get(Business, business_id)
         if not business:
@@ -196,6 +263,21 @@ def handle_webhook():
         agent = Agent(business_id=business_id, llm_provider=llm_provider)
         result = agent.process_message(conversation_id=conv.id, user_content=user_text)
 
+        # ------------------------------------------------------------------
+        # Part B: Stamp the external_message_id onto the user Message that
+        # agent.process_message() just persisted, so future dedup checks work.
+        # ------------------------------------------------------------------
+        if meta_message_id:
+            user_msg = (
+                Message.query
+                .filter_by(conversation_id=conv.id, role="user")
+                .order_by(Message.id.desc())
+                .first()
+            )
+            if user_msg and not user_msg.external_message_id:
+                user_msg.external_message_id = meta_message_id
+                db.session.commit()
+
         reply_content = result.get("content") or "Thank you for reaching out. How can I assist you with your clinic appointment?"
 
         # 5. Dispatch AI response back to Patient's WhatsApp
@@ -206,7 +288,13 @@ def handle_webhook():
             access_token=access_token
         )
 
-        logger.info(f"[WhatsApp Webhook] Reply sent to {from_phone}: success={send_res.get('success')}")
+        if send_res.get("success"):
+            print(f"[WhatsApp] Reply successfully sent to {from_phone}")
+            logger.info(f"[WhatsApp Webhook] Reply sent to {from_phone}: success=True")
+        else:
+            err_msg = send_res.get("error")
+            print(f"[WhatsApp Error] Failed to send reply to {from_phone}: {err_msg}")
+            logger.error(f"[WhatsApp Webhook] Outbound send failed: {err_msg}")
 
         return jsonify({
             "status": "success",
@@ -221,11 +309,50 @@ def handle_webhook():
         return jsonify({"status": "error", "message": str(e)}), 200
 
 
+# ---------------------------------------------------------------------------
+# Part C: /test-send — requires a logged-in admin, scoped to their clinic
+# ---------------------------------------------------------------------------
+
+from functools import wraps
+from flask import session
+
+def _whatsapp_login_required(f):
+    """
+    Lightweight auth guard for WhatsApp blueprint endpoints.
+    Reuses the same session keys set by admin_bp.login.
+    Returns 401 JSON (not a redirect) since this is a JSON API endpoint.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("user_id") or not session.get("business_id"):
+            return jsonify({"success": False, "error": "Authentication required"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
 @whatsapp_bp.route("/test-send", methods=["POST"])
+@_whatsapp_login_required
 def test_send_message():
     """
     Direct endpoint for testing outbound WhatsApp messages from admin console.
+    Requires admin login. Scoped to the logged-in admin's own clinic account —
+    cannot be used to send from a different clinic's WhatsApp number.
     """
+    # Part C: Scope to the logged-in admin's business — ignore any caller-supplied account
+    business_id = session.get("business_id")
+
+    wa_account = ClinicWhatsAppAccount.query.filter_by(
+        business_id=business_id,
+        is_active=True
+    ).first()
+
+    if wa_account:
+        phone_number_id = wa_account.phone_number_id
+        access_token = wa_account.access_token or Config.WHATSAPP_ACCESS_TOKEN
+    else:
+        phone_number_id = Config.WHATSAPP_PHONE_NUMBER_ID
+        access_token = Config.WHATSAPP_ACCESS_TOKEN
+
     data = request.get_json(silent=True) or {}
     to_phone = data.get("phone") or request.form.get("phone")
     text = data.get("message") or request.form.get("message", "Hello from ClinicConnect AI Agent!")
@@ -235,8 +362,20 @@ def test_send_message():
         return jsonify({"success": False, "error": "Recipient phone number required"}), 400
 
     if template:
-        res = WhatsAppService.send_template(to_phone=to_phone, template_name=template)
+        res = WhatsAppService.send_template(
+            to_phone=to_phone,
+            template_name=template,
+            phone_number_id=phone_number_id,
+            access_token=access_token
+        )
     else:
-        res = WhatsAppService.send_text_message(to_phone=to_phone, text=text)
+        res = WhatsAppService.send_text_message(
+            to_phone=to_phone,
+            text=text,
+            phone_number_id=phone_number_id,
+            access_token=access_token
+        )
 
     return jsonify(res)
+
+

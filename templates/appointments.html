@@ -8,7 +8,9 @@
         <h1 class="page-title">Appointments Directory</h1>
         <p class="page-subtitle">Track, filter, reschedule, or cancel patient appointments.</p>
     </div>
-    <div class="header-actions" style="display: flex; gap: 8px;">
+    <div class="header-actions" style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <a href="/admin/appointments/export" class="btn btn-secondary" title="Export all appointments as Excel-compatible CSV">📥 Export to Excel</a>
+        <button type="button" class="btn btn-danger-outline" onclick="openApptCleanupModal()" title="Clean up past or cancelled appointments">🧹 Clean Up Data</button>
         <a href="/admin/slots" class="btn btn-secondary">📊 View Slot Occupancy</a>
         <a href="{% if session.get('business_id') %}/chat/{{ session.get('business_id') }}{% else %}/chat{% endif %}" target="_blank" class="btn btn-primary">➕ Book New via AI Chat</a>
     </div>
@@ -16,8 +18,67 @@
 
 <div class="section-card">
     {% if appointments %}
+    <!-- Filter Toolbar -->
+    <div class="filter-toolbar">
+        <div class="filter-search-box">
+            <span class="filter-search-icon">🔍</span>
+            <input type="text" id="apptSearchInput" class="filter-input" placeholder="Search patient name, phone, or #ID...">
+            <button type="button" id="apptSearchClearBtn" class="filter-clear-icon" style="display: none;" onclick="clearApptSearch()" title="Clear search">✕</button>
+        </div>
+        <div class="filter-controls-row">
+            <div class="filter-control-item">
+                <label for="apptDoctorFilter" class="filter-label">Doctor:</label>
+                <select id="apptDoctorFilter" class="filter-select">
+                    <option value="">All Doctors</option>
+                    {% if business and business.doctors %}
+                        {% for doc in business.doctors %}
+                            <option value="{{ doc.name }}">{{ doc.name }}</option>
+                        {% endfor %}
+                    {% endif %}
+                </select>
+            </div>
+            
+            <div class="filter-control-item">
+                <label for="apptStatusFilter" class="filter-label">Status:</label>
+                <select id="apptStatusFilter" class="filter-select">
+                    <option value="">All Statuses</option>
+                    <option value="CONFIRMED">Confirmed</option>
+                    <option value="CANCELLED">Cancelled</option>
+                    <option value="PENDING">Pending</option>
+                    <option value="COMPLETED">Completed</option>
+                </select>
+            </div>
+            
+            <div class="filter-control-item filter-calendar-control">
+                <label for="apptDatePicker" class="filter-label">📅 Calendar:</label>
+                <div class="filter-date-input-wrap">
+                    <input type="date" id="apptDatePicker" class="filter-date-input" title="Pick a specific date from calendar">
+                    <button type="button" id="apptClearDateBtn" class="filter-date-clear-icon" style="display: none;" onclick="clearApptDatePicker()" title="Clear calendar date">✕</button>
+                </div>
+            </div>
+
+            <div class="filter-control-item">
+                <label for="apptDatePreset" class="filter-label">Quick:</label>
+                <select id="apptDatePreset" class="filter-select">
+                    <option value="all">All Dates</option>
+                    <option value="today">Today</option>
+                    <option value="upcoming">Upcoming</option>
+                    <option value="past">Past</option>
+                </select>
+            </div>
+
+            <button type="button" id="apptResetBtn" class="btn btn-sm btn-secondary filter-reset-btn" style="display: none;" onclick="resetApptFilters()">
+                ✕ Reset
+            </button>
+        </div>
+    </div>
+    
+    <div class="filter-status-bar">
+        <span id="apptCounterText" class="filter-counter">Showing <strong>{{ appointments|length }}</strong> of {{ appointments|length }} appointments</span>
+    </div>
+
     <div class="table-responsive">
-        <table class="data-table">
+        <table class="data-table" id="appointmentsTable">
             <thead>
                 <tr>
                     <th>ID</th>
@@ -33,7 +94,13 @@
             </thead>
             <tbody>
                 {% for appt in appointments %}
-                <tr>
+                <tr class="appt-row"
+                    data-id="{{ appt.id }}"
+                    data-patient="{{ (appt.customer.name if appt.customer else '') | lower }}"
+                    data-phone="{{ (appt.customer.phone if appt.customer else '') | lower }}"
+                    data-doctor="{{ (appt.doctor.name if appt.doctor else '') | lower }}"
+                    data-status="{{ appt.status | upper }}"
+                    data-date="{{ appt.appointment_date }}">
                     <td><strong>#{{ appt.id }}</strong></td>
                     <td><strong>{{ appt.appointment_date }}</strong> at {{ appt.appointment_time }}</td>
                     <td>
@@ -67,6 +134,16 @@
                     </td>
                 </tr>
                 {% endfor %}
+                <tr id="apptNoMatchRow" style="display: none;">
+                    <td colspan="9" style="text-align: center; padding: 2.5rem 1rem;">
+                        <div style="color: var(--text-muted);">
+                            <div style="font-size: 2rem; margin-bottom: 0.5rem;">🔍</div>
+                            <h3 style="font-size: 1.05rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.25rem;">No matching appointments</h3>
+                            <p style="font-size: 0.85rem; margin-bottom: 1rem;">Try adjusting your search query, doctor selection, or date filter.</p>
+                            <button type="button" class="btn btn-sm btn-secondary" onclick="resetApptFilters()">Reset All Filters</button>
+                        </div>
+                    </td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -76,10 +153,276 @@
     </div>
     {% endif %}
 </div>
+
+<!-- Appointment Cleanup Modal -->
+<div id="apptCleanupModal" class="modal-overlay" style="display: none;">
+    <div class="cleanup-modal-card">
+        <div class="cleanup-modal-header">
+            <div class="cleanup-modal-title">
+                <span class="cleanup-modal-icon">🧹</span>
+                <div>
+                    <h3>Clean Up Appointments Data</h3>
+                    <p class="cleanup-modal-subtitle">Permanently delete historical, test, or cancelled appointment records.</p>
+                </div>
+            </div>
+            <button type="button" class="modal-close-btn" onclick="closeApptCleanupModal()" title="Close dialog">✕</button>
+        </div>
+
+        <div class="cleanup-modal-body">
+            <div class="cleanup-warning-box">
+                ⚠️ <strong>Permanent Action:</strong> Deleted records cannot be restored. We recommend downloading an <a href="/admin/appointments/export" style="color: inherit; font-weight: 700; text-decoration: underline;">Excel Backup</a> before continuing.
+            </div>
+
+            <!-- Google-Style Deletion Scope Selection -->
+            <div class="cleanup-form-group">
+                <label class="cleanup-section-label">1. Choose Date Criteria</label>
+                <div class="cleanup-radio-grid">
+                    <label class="cleanup-radio-label">
+                        <input type="radio" name="apptCleanupMode" value="older_than" checked onchange="onApptCleanupModeChange()">
+                        <span>Older than <strong>30 Days</strong></span>
+                    </label>
+                    <label class="cleanup-radio-label">
+                        <input type="radio" name="apptCleanupMode" value="older_than_90" onchange="onApptCleanupModeChange()">
+                        <span>Older than <strong>90 Days</strong></span>
+                    </label>
+                    <label class="cleanup-radio-label">
+                        <input type="radio" name="apptCleanupMode" value="specific_day" onchange="onApptCleanupModeChange()">
+                        <span>Specific Single Day</span>
+                    </label>
+                    <label class="cleanup-radio-label">
+                        <input type="radio" name="apptCleanupMode" value="date_range" onchange="onApptCleanupModeChange()">
+                        <span>Custom Date Range</span>
+                    </label>
+                    <label class="cleanup-radio-label text-danger-option">
+                        <input type="radio" name="apptCleanupMode" value="all" onchange="onApptCleanupModeChange()">
+                        <span>All Historical Appointments</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Dynamic Date Inputs Container -->
+            <div id="apptCleanupDayBox" class="cleanup-subbox" style="display: none;">
+                <label class="filter-label">Select Day to Delete:</label>
+                <input type="date" id="apptCleanupDayInput" class="filter-date-input" style="width: 100%;" onchange="previewApptCleanup()">
+            </div>
+
+            <div id="apptCleanupRangeBox" class="cleanup-subbox" style="display: none;">
+                <div class="cleanup-range-fields">
+                    <div>
+                        <label class="filter-label">From Date:</label>
+                        <input type="date" id="apptCleanupStartDate" class="filter-date-input" style="width: 100%;" onchange="previewApptCleanup()">
+                    </div>
+                    <div>
+                        <label class="filter-label">To Date:</label>
+                        <input type="date" id="apptCleanupEndDate" class="filter-date-input" style="width: 100%;" onchange="previewApptCleanup()">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Status Filter -->
+            <div class="cleanup-form-group">
+                <label class="cleanup-section-label">2. Status Filter</label>
+                <select id="apptCleanupStatusFilter" class="filter-select" style="width: 100%;" onchange="previewApptCleanup()">
+                    <option value="ALL">All Statuses (Cancelled, Confirmed, Pending)</option>
+                    <option value="CANCELLED">Only Cancelled Appointments</option>
+                    <option value="COMPLETED">Only Completed Appointments</option>
+                </select>
+            </div>
+
+            <!-- Live Record Count Preview -->
+            <div class="cleanup-preview-card">
+                <div id="apptCleanupPreviewText" style="font-weight: 600; font-size: 0.9rem;">Checking records...</div>
+                <button type="button" class="btn btn-sm btn-outline" onclick="previewApptCleanup()">↻ Check Count</button>
+            </div>
+
+            <!-- Admin Password Confirmation Field -->
+            <div class="cleanup-form-group" style="margin-top: 1rem;">
+                <label class="cleanup-section-label" for="apptCleanupPassword">
+                    3. Security Confirmation (Enter Admin Password) <span style="color: var(--danger);">*</span>
+                </label>
+                <div class="password-field-wrapper">
+                    <input type="password" id="apptCleanupPassword" class="filter-input" placeholder="Enter your admin login password to confirm" required autocomplete="current-password">
+                </div>
+                <small class="text-muted" style="font-size: 0.78rem;">Required to prevent accidental deletion by staff.</small>
+            </div>
+        </div>
+
+        <div class="cleanup-modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="closeApptCleanupModal()">Cancel</button>
+            <button type="button" id="btnExecuteApptCleanup" class="btn btn-danger" onclick="executeApptCleanup()">
+                🗑️ Permanently Delete Records
+            </button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+// Filter logic for Appointments
+function getTodayDateString() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function filterAppointments() {
+    const searchVal = (document.getElementById('apptSearchInput')?.value || '').trim().toLowerCase();
+    const doctorVal = (document.getElementById('apptDoctorFilter')?.value || '').trim().toLowerCase();
+    const statusVal = (document.getElementById('apptStatusFilter')?.value || '').trim().toUpperCase();
+    const calendarDateVal = (document.getElementById('apptDatePicker')?.value || '').trim();
+    const presetVal = document.getElementById('apptDatePreset')?.value || 'all';
+    
+    const clearIcon = document.getElementById('apptSearchClearBtn');
+    if (clearIcon) clearIcon.style.display = searchVal ? 'block' : 'none';
+
+    const dateClear = document.getElementById('apptClearDateBtn');
+    if (dateClear) dateClear.style.display = calendarDateVal ? 'block' : 'none';
+
+    const hasActiveFilters = searchVal !== '' || doctorVal !== '' || statusVal !== '' || calendarDateVal !== '' || presetVal !== 'all';
+    const resetBtn = document.getElementById('apptResetBtn');
+    if (resetBtn) resetBtn.style.display = hasActiveFilters ? 'inline-flex' : 'none';
+
+    const todayStr = getTodayDateString();
+    const rows = document.querySelectorAll('.appt-row');
+    let visibleCount = 0;
+
+    rows.forEach(row => {
+        const rowId = row.getAttribute('data-id') || '';
+        const rowPatient = row.getAttribute('data-patient') || '';
+        const rowPhone = row.getAttribute('data-phone') || '';
+        const rowDoctor = row.getAttribute('data-doctor') || '';
+        const rowStatus = row.getAttribute('data-status') || '';
+        const rowDate = (row.getAttribute('data-date') || '').trim();
+
+        // 1. Search text match (patient name, phone, id, or #id)
+        let matchSearch = true;
+        if (searchVal) {
+            matchSearch = rowPatient.includes(searchVal) ||
+                          rowPhone.includes(searchVal) ||
+                          rowId.includes(searchVal) ||
+                          (`#${rowId}`).includes(searchVal);
+        }
+
+        // 2. Doctor match
+        let matchDoctor = true;
+        if (doctorVal) {
+            matchDoctor = rowDoctor.includes(doctorVal);
+        }
+
+        // 3. Status match
+        let matchStatus = true;
+        if (statusVal) {
+            matchStatus = rowStatus === statusVal;
+        }
+
+        // 4. Date match:
+        // Priority: If specific calendar date is selected, match exact date.
+        // Otherwise, use preset (today, upcoming, past, all).
+        let matchDate = true;
+        if (calendarDateVal) {
+            matchDate = (rowDate === calendarDateVal);
+        } else if (presetVal === 'today') {
+            matchDate = (rowDate === todayStr);
+        } else if (presetVal === 'upcoming') {
+            matchDate = (rowDate >= todayStr);
+        } else if (presetVal === 'past') {
+            matchDate = (rowDate < todayStr);
+        }
+
+        if (matchSearch && matchDoctor && matchStatus && matchDate) {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    // Update counter
+    const counterText = document.getElementById('apptCounterText');
+    if (counterText) {
+        counterText.innerHTML = `Showing <strong>${visibleCount}</strong> of ${rows.length} appointments`;
+    }
+
+    // Toggle No Match Row
+    const noMatchRow = document.getElementById('apptNoMatchRow');
+    if (noMatchRow) {
+        noMatchRow.style.display = (visibleCount === 0 && rows.length > 0) ? '' : 'none';
+    }
+}
+
+function clearApptDatePicker() {
+    const picker = document.getElementById('apptDatePicker');
+    if (picker) picker.value = '';
+    filterAppointments();
+}
+
+function clearApptSearch() {
+    const input = document.getElementById('apptSearchInput');
+    if (input) {
+        input.value = '';
+        input.focus();
+    }
+    filterAppointments();
+}
+
+function resetApptFilters() {
+    const searchInput = document.getElementById('apptSearchInput');
+    const doctorFilter = document.getElementById('apptDoctorFilter');
+    const statusFilter = document.getElementById('apptStatusFilter');
+    const datePicker = document.getElementById('apptDatePicker');
+    const datePreset = document.getElementById('apptDatePreset');
+
+    if (searchInput) searchInput.value = '';
+    if (doctorFilter) doctorFilter.value = '';
+    if (statusFilter) statusFilter.value = '';
+    if (datePicker) datePicker.value = '';
+    if (datePreset) datePreset.value = 'all';
+
+    filterAppointments();
+}
+
+// Bind event listeners
+document.addEventListener('DOMContentLoaded', () => {
+    const searchInput = document.getElementById('apptSearchInput');
+    const doctorFilter = document.getElementById('apptDoctorFilter');
+    const statusFilter = document.getElementById('apptStatusFilter');
+    const datePicker = document.getElementById('apptDatePicker');
+    const datePreset = document.getElementById('apptDatePreset');
+
+    if (searchInput) searchInput.addEventListener('input', filterAppointments);
+    if (doctorFilter) doctorFilter.addEventListener('change', filterAppointments);
+    if (statusFilter) statusFilter.addEventListener('change', filterAppointments);
+
+    if (datePicker) {
+        datePicker.addEventListener('change', () => {
+            if (datePicker.value && datePreset) {
+                const todayStr = getTodayDateString();
+                if (datePicker.value === todayStr) {
+                    datePreset.value = 'today';
+                } else {
+                    datePreset.value = 'all';
+                }
+            }
+            filterAppointments();
+        });
+    }
+
+    if (datePreset) {
+        datePreset.addEventListener('change', () => {
+            const todayStr = getTodayDateString();
+            if (datePreset.value === 'today') {
+                if (datePicker) datePicker.value = todayStr;
+            } else {
+                if (datePicker) datePicker.value = '';
+            }
+            filterAppointments();
+        });
+    }
+});
+
 async function cancelAppointment(appointmentId) {
     if (!confirm(`Are you sure you want to cancel appointment #${appointmentId}?`)) return;
     try {
@@ -104,6 +447,136 @@ async function cancelAppointment(appointmentId) {
         }
     } catch (e) {
         alert('Network error: ' + e.message);
+    }
+// Appointment Data Cleanup Modal Logic
+function openApptCleanupModal() {
+    const modal = document.getElementById('apptCleanupModal');
+    if (modal) {
+        modal.style.display = 'flex';
+        const todayStr = getTodayDateString();
+        const dayInput = document.getElementById('apptCleanupDayInput');
+        const startInput = document.getElementById('apptCleanupStartDate');
+        const endInput = document.getElementById('apptCleanupEndDate');
+        if (dayInput && !dayInput.value) dayInput.value = todayStr;
+        if (startInput && !startInput.value) startInput.value = todayStr;
+        if (endInput && !endInput.value) endInput.value = todayStr;
+        
+        onApptCleanupModeChange();
+        previewApptCleanup();
+    }
+}
+
+function closeApptCleanupModal() {
+    const modal = document.getElementById('apptCleanupModal');
+    if (modal) modal.style.display = 'none';
+    const pwd = document.getElementById('apptCleanupPassword');
+    if (pwd) pwd.value = '';
+}
+
+function onApptCleanupModeChange() {
+    const mode = document.querySelector('input[name="apptCleanupMode"]:checked')?.value || 'older_than';
+    const dayBox = document.getElementById('apptCleanupDayBox');
+    const rangeBox = document.getElementById('apptCleanupRangeBox');
+
+    if (dayBox) dayBox.style.display = (mode === 'specific_day') ? 'block' : 'none';
+    if (rangeBox) rangeBox.style.display = (mode === 'date_range') ? 'block' : 'none';
+
+    previewApptCleanup();
+}
+
+function getApptCleanupPayload() {
+    const rawMode = document.querySelector('input[name="apptCleanupMode"]:checked')?.value || 'older_than';
+    const statusFilter = document.getElementById('apptCleanupStatusFilter')?.value || 'ALL';
+    
+    let mode = rawMode;
+    let olderDays = null;
+    if (rawMode === 'older_than') {
+        mode = 'older_than';
+        olderDays = 30;
+    } else if (rawMode === 'older_than_90') {
+        mode = 'older_than';
+        olderDays = 90;
+    }
+
+    return {
+        mode: mode,
+        older_days: olderDays,
+        specific_date: document.getElementById('apptCleanupDayInput')?.value || null,
+        start_date: document.getElementById('apptCleanupStartDate')?.value || null,
+        end_date: document.getElementById('apptCleanupEndDate')?.value || null,
+        status_filter: statusFilter
+    };
+}
+
+async function previewApptCleanup() {
+    const previewEl = document.getElementById('apptCleanupPreviewText');
+    if (previewEl) previewEl.textContent = 'Counting records...';
+
+    const payload = getApptCleanupPayload();
+    try {
+        const res = await fetch('/api/admin/appointments/cleanup/preview', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+            if (previewEl) {
+                previewEl.innerHTML = `<strong>${data.count}</strong> appointment(s) match this criteria.`;
+                previewEl.style.color = data.count > 0 ? 'var(--danger)' : 'var(--text-muted)';
+            }
+        } else {
+            if (previewEl) previewEl.textContent = 'Preview error: ' + (data.error || 'Failed');
+        }
+    } catch (e) {
+        if (previewEl) previewEl.textContent = 'Network error fetching count';
+    }
+}
+
+async function executeApptCleanup() {
+    const pwdInput = document.getElementById('apptCleanupPassword');
+    const password = (pwdInput?.value || '').trim();
+
+    if (!password) {
+        alert('Please enter your admin password to confirm deletion.');
+        pwdInput?.focus();
+        return;
+    }
+
+    const payload = getApptCleanupPayload();
+    payload.password = password;
+
+    const confirmMsg = "Are you ABSOLUTELY sure you want to delete these records?\n\nThis will permanently wipe matching appointments and their reminders from the database. This action CANNOT be undone!";
+    if (!confirm(confirmMsg)) return;
+
+    const btn = document.getElementById('btnExecuteApptCleanup');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Deleting...';
+    }
+
+    try {
+        const res = await fetch('/api/admin/appointments/cleanup', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            alert(data.message || 'Appointments cleaned up successfully.');
+            closeApptCleanupModal();
+            window.location.reload();
+        } else {
+            alert('Error: ' + (data.error || 'Cleanup failed.'));
+        }
+    } catch (e) {
+        alert('Network error: ' + e.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '🗑️ Permanently Delete Records';
+        }
     }
 }
 </script>
