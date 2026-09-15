@@ -418,92 +418,46 @@
                 <table class="clinic-table">
                     <thead>
                         <tr>
-                            <th>ID</th>
-                            <th>Clinic Profile</th>
-                            <th>Subscription Status &amp; Controls</th>
-                            <th>Capacity</th>
-                            <th>Admin Account</th>
-                            <th>Access &amp; Portal</th>
+                            <th style="width: 45%;">Clinic Name</th>
+                            <th style="width: 25%;">Status</th>
+                            <th style="width: 15%;">Access Portal</th>
+                            <th style="width: 15%; text-align: right;">Action</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for item in clinics %}
-                        <tr>
-                            <td><span class="pill">#{{ item.business.id }}</span></td>
+                        <tr style="transition: background 0.15s ease;" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
                             <td>
-                                <div class="clinic-name">{{ item.business.name }}</div>
-                                <div class="clinic-meta">{{ item.business.business_type | replace('_', ' ') | title }} • {{ item.business.phone }}</div>
-                                <div class="clinic-meta" style="color: #6b7280;">📍 {{ item.business.address }}</div>
-                            </td>
-                            <td>
-                                <div>
-                                    {% if item.business.subscription_status == 'cancelled' %}
-                                        <span class="pill" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: 700;">⛔ CANCELLED</span>
-                                    {% elif item.subscription.color == 'danger' %}
-                                        <span class="pill" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-weight: 700;">⛔ EXPIRED</span>
-                                    {% elif item.subscription.color == 'success' %}
-                                        <span class="pill" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-weight: 700;">🟢 ACTIVE ({{ item.subscription.days }}d)</span>
-                                    {% else %}
-                                        <span class="pill" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); font-weight: 700;">🎁 1-MO TRIAL ({{ item.subscription.days }}d)</span>
-                                    {% endif %}
-                                </div>
-                                <div class="clinic-meta" style="margin-top: 4px;">
-                                    <strong>{{ item.business.active_plan_name or '1-Month Free Trial' }}</strong>
-                                </div>
-                                <div class="clinic-meta" style="font-size: 0.78rem;">
-                                    Expiry: <strong>{{ item.subscription.expires_at }}</strong>
-                                </div>
-
-                                <!-- Subscription Controls -->
-                                <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
-                                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-                                        <form method="POST" action="/platform/clinic/{{ item.business.id }}/subscription/extend" style="display: inline-block;">
-                                            <input type="hidden" name="days" value="30">
-                                            <button type="submit" class="pill" style="background: #1e293b; color: #a5b4fc; border: 1px solid #4338ca; cursor: pointer;" title="Add 30 days to subscription">➕ +30 Days</button>
-                                        </form>
-                                        
-                                        <button onclick="openDateRangeModal('{{ item.business.id }}', '{{ item.business.name }}')" class="pill" style="background: #1e293b; color: #cbd5e1; border: 1px solid #475569; cursor: pointer;">
-                                            📅 Date Range
-                                        </button>
+                                <a href="/platform/clinic/{{ item.business.id }}" style="text-decoration: none; display: block;">
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <span class="pill" style="background: #1e293b; color: #94a3b8; font-size: 0.72rem; padding: 2px 6px;">#{{ item.business.id }}</span>
+                                        <span class="clinic-name" style="font-size: 1.02rem; color: #f8fafc; font-weight: 700; transition: color 0.15s;">{{ item.business.name }}</span>
                                     </div>
-
-                                    {% if item.business.subscription_status != 'cancelled' %}
-                                    <form method="POST" action="/platform/clinic/{{ item.business.id }}/subscription/cancel" onsubmit="return confirm('Cancel subscription for {{ item.business.name }}? This will immediately lock portal access.');">
-                                        <button type="submit" class="pill" style="background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); cursor: pointer; width: 100%;">
-                                            ⛔ Cancel Subscription
-                                        </button>
-                                    </form>
-                                    {% else %}
-                                    <form method="POST" action="/platform/clinic/{{ item.business.id }}/subscription/reactivate">
-                                        <input type="hidden" name="days" value="30">
-                                        <button type="submit" class="pill" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); cursor: pointer; width: 100%;">
-                                            🟢 Reactivate (+30 Days)
-                                        </button>
-                                    </form>
-                                    {% endif %}
-                                </div>
+                                    <div class="clinic-meta" style="margin-top: 4px; color: #94a3b8; font-size: 0.8rem;">
+                                        {{ item.business.business_type | replace('_', ' ') | title }} • 📞 {{ item.business.phone }}
+                                    </div>
+                                </a>
                             </td>
                             <td>
-                                <div>👨‍⚕️ {{ item.doctors_count }} Doctors</div>
-                                <div class="clinic-meta">🩺 {{ item.services_count }} Services</div>
-                                <div class="clinic-meta">📅 {{ item.appointments_count }} Bookings</div>
+                                {% if item.business.subscription_status == 'cancelled' %}
+                                    <span class="pill" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: 700;">⛔ INACTIVE (Cancelled)</span>
+                                {% elif item.subscription.color == 'danger' %}
+                                    <span class="pill" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-weight: 700;">⛔ INACTIVE (Expired)</span>
+                                {% elif item.subscription.color == 'success' %}
+                                    <span class="pill" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-weight: 700;">🟢 ACTIVE ({{ item.subscription.days }}d)</span>
+                                {% else %}
+                                    <span class="pill" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); font-weight: 700;">🎁 1-MO TRIAL ({{ item.subscription.days }}d)</span>
+                                {% endif %}
                             </td>
                             <td>
-                                <div><span class="pill">👤 {{ item.admin_username }}</span></div>
-                                <div class="clinic-meta" style="margin-top: 4px; color: #94a3b8; font-size: 0.78rem;">
-                                    ✉️ {{ item.admin_email or 'No email' }}
-                                </div>
-                                <div style="margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap;">
-                                    <button onclick="promptResetPassword('{{ item.business.id }}', '{{ item.admin_username }}')" class="pill" style="background: #1e293b; color: #fbbf24; border: 1px solid #78350f; cursor: pointer;">🔑 Reset Pass</button>
-                                    <button onclick="promptUpdateEmail('{{ item.business.id }}', '{{ item.business.name }}', '{{ item.admin_email or '' }}')" class="pill" style="background: #1e293b; color: #93c5fd; border: 1px solid #1e3a8a; cursor: pointer;">✉️ Edit Email</button>
-                                </div>
+                                <a href="/admin/login" target="_blank" class="pill" style="color: #6ee7b7; text-decoration: none; font-weight: 600; border-color: rgba(16, 185, 129, 0.3); display: inline-flex; align-items: center; gap: 4px;">
+                                    🔐 Client Login ↗
+                                </a>
                             </td>
-                            <td>
-                                <div style="display: flex; flex-direction: column; gap: 6px;">
-                                    <a href="/admin/login" target="_blank" class="pill" style="color: #6ee7b7; text-decoration: none; font-weight: 600; border-color: rgba(16, 185, 129, 0.3); text-align: center;">
-                                        🔐 Client Login ↗
-                                    </a>
-                                </div>
+                            <td style="text-align: right;">
+                                <a href="/platform/clinic/{{ item.business.id }}" class="pill" style="background: #1e293b; color: #a5b4fc; border: 1px solid #4338ca; text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
+                                    Manage Clinic →
+                                </a>
                             </td>
                         </tr>
                         {% endfor %}

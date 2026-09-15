@@ -1095,6 +1095,13 @@ class MockAdapter(BaseLLMAdapter):
         doc_id = conv_state.get("selected_doctor_id")
         svc_id = conv_state.get("selected_service_id")
 
+        last_user_text = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                last_user_text = m.get("content", "").strip()
+                break
+        lang = detect_language(last_user_text, messages)
+
         # Check if previous turn was a tool response
         last_msg = messages[-1]
         if last_msg.get("role") == "tool":
@@ -1107,15 +1114,15 @@ class MockAdapter(BaseLLMAdapter):
             # Synthesize response from tool result
             if "results" in tool_data and "available_slots" in str(tool_data):
                 # Inspect last user message prior to tool call for time filters (e.g. "after 12")
-                last_user_text = ""
+                last_user_filter_text = ""
                 for m in reversed(messages[:-1]):
                     if m.get("role") == "user":
-                        last_user_text = m.get("content", "").lower().strip()
+                        last_user_filter_text = m.get("content", "").lower().strip()
                         break
 
-                user_time_token = _extract_time_str(last_user_text)
-                is_after_query = "after" in last_user_text and user_time_token
-                is_before_query = "before" in last_user_text and user_time_token
+                user_time_token = _extract_time_str(last_user_filter_text)
+                is_after_query = "after" in last_user_filter_text and user_time_token
+                is_before_query = "before" in last_user_filter_text and user_time_token
 
                 # Format friendly date title: "Monday, August 24, 2026"
                 date_val = tool_data.get("date", "")
@@ -1236,7 +1243,21 @@ class MockAdapter(BaseLLMAdapter):
                     wk_str = ", ".join(wk_days) if isinstance(wk_days, list) else str(wk_days)
                     start_str = _fmt_time_ampm(d.get("start_time")) if d.get("start_time") else None
                     end_str = _fmt_time_ampm(d.get("end_time")) if d.get("end_time") else None
-                    hours_str = f", Hours: {start_str} – {end_str}" if (start_str and end_str) else ""
+                    s2_st = _fmt_time_ampm(d.get("shift_2_start_time")) if d.get("shift_2_start_time") else None
+                    s2_et = _fmt_time_ampm(d.get("shift_2_end_time")) if d.get("shift_2_end_time") else None
+                    if not (s2_st and s2_et) and d.get("weekly_schedule"):
+                        multi_sched = next((s for s in d["weekly_schedule"] if s.get("shift_2_start_time") and s.get("shift_2_end_time")), None)
+                        if multi_sched:
+                            start_str = _fmt_time_ampm(multi_sched.get("start_time"))
+                            end_str = _fmt_time_ampm(multi_sched.get("end_time"))
+                            s2_st = _fmt_time_ampm(multi_sched.get("shift_2_start_time"))
+                            s2_et = _fmt_time_ampm(multi_sched.get("shift_2_end_time"))
+                    if start_str and end_str and s2_st and s2_et:
+                        hours_str = f", Hours: {start_str} – {end_str} (Morning) & {s2_st} – {s2_et} (Evening)"
+                    elif start_str and end_str:
+                        hours_str = f", Hours: {start_str} – {end_str}"
+                    else:
+                        hours_str = ""
                     lunch_str = f" | Lunch: {_fmt_time_ampm(d['break_start_time'])}–{_fmt_time_ampm(d['break_end_time'])}" if (d.get("break_start_time") and d.get("break_end_time")) else ""
                     doc_items.append(f"• **{d['name']}** - {d.get('specialization', 'Specialist')} (Working Days: {wk_str}{hours_str}{lunch_str})")
                 body = "\n\n".join(doc_items)
@@ -1722,12 +1743,21 @@ class MockAdapter(BaseLLMAdapter):
                 sched_lines = _format_doctor_schedule_lines(target_d_entry, target_day=_target_wd)
                 sched_body = "\n".join(sched_lines)
 
+                has_multi_shift = any(
+                    s.get("shift_2_start_time") and s.get("shift_2_end_time")
+                    for s in target_d_entry.get("weekly_schedule", [])
+                    if (_target_wd is None or s.get("day_of_week") == _target_wd)
+                ) or bool(target_d_entry.get("shift_2_start_time") and target_d_entry.get("shift_2_end_time"))
+
                 if _target_wd:
                     if lang == "urdu":
-                        return {"content": f"{t_name} کا {_target_wd} کا شیڈول:\n\n{sched_body}\n\nآپ کس تاریخ یا وقت کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟", "tool_calls": []}
+                        prompt_q = "آپ کونسی شفٹ یا وقت کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟" if has_multi_shift else "آپ کس تاریخ یا وقت کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟"
+                        return {"content": f"{t_name} کا {_target_wd} کا شیڈول:\n\n{sched_body}\n\n{prompt_q}", "tool_calls": []}
                     elif lang == "roman_urdu":
-                        return {"content": f"{t_name} ka {_target_wd} ka schedule:\n\n{sched_body}\n\nAap kis date ya time ke liye appointment book karwana chahein ge?", "tool_calls": []}
-                    return {"content": f"Here is {t_name}'s schedule for {_target_wd}:\n\n{sched_body}\n\nWhich date or time would you like to book your appointment for?", "tool_calls": []}
+                        prompt_q = "Aap konsi shift ya time ke liye appointment book karwana chahein ge?" if has_multi_shift else "Aap kis date ya time ke liye appointment book karwana chahein ge?"
+                        return {"content": f"{t_name} ka {_target_wd} ka schedule:\n\n{sched_body}\n\n{prompt_q}", "tool_calls": []}
+                    prompt_q = "Which shift or time works best for you?" if has_multi_shift else "Which date or time would you like to book your appointment for?"
+                    return {"content": f"Here is {t_name}'s schedule for {_target_wd}:\n\n{sched_body}\n\n{prompt_q}", "tool_calls": []}
                 else:
                     if lang == "urdu":
                         return {"content": f"{t_name} کا ہفتہ وار شیڈول:\n\n{sched_body}\n\nآپ کس تاریخ کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟", "tool_calls": []}
@@ -2325,19 +2355,28 @@ class MockAdapter(BaseLLMAdapter):
                 sched_lines = _format_doctor_schedule_lines(target_d_entry, target_day=target_weekday)
                 sched_body = "\n".join(sched_lines)
 
+                has_multi_shift = any(
+                    s.get("shift_2_start_time") and s.get("shift_2_end_time")
+                    for s in target_d_entry.get("weekly_schedule", [])
+                    if (target_weekday is None or s.get("day_of_week") == target_weekday)
+                ) or bool(target_d_entry.get("shift_2_start_time") and target_d_entry.get("shift_2_end_time"))
+
                 if target_weekday:
                     if lang == "urdu":
+                        prompt_q = "آپ کونسی شفٹ یا وقت کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟" if has_multi_shift else "آپ کس تاریخ یا وقت کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟"
                         return {
-                            "content": f"{t_name} کا {target_weekday} کا شیڈول درج ذیل ہے:\n\n{sched_body}\n\nآپ کس تاریخ یا وقت کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟",
+                            "content": f"{t_name} کا {target_weekday} کا شیڈول درج ذیل ہے:\n\n{sched_body}\n\n{prompt_q}",
                             "tool_calls": []
                         }
                     elif lang == "roman_urdu":
+                        prompt_q = "Aap konsi shift ya time ke liye appointment book karwana chahein ge?" if has_multi_shift else "Aap kis date ya time ke liye appointment book karwana chahein ge?"
                         return {
-                            "content": f"{t_name} ka {target_weekday} ka schedule:\n\n{sched_body}\n\nAap kis date ya time ke liye appointment book karwana chahein ge?",
+                            "content": f"{t_name} ka {target_weekday} ka schedule:\n\n{sched_body}\n\n{prompt_q}",
                             "tool_calls": []
                         }
+                    prompt_q = "Which shift or time works best for you?" if has_multi_shift else "Which date or time would you like to book your appointment for?"
                     return {
-                        "content": f"Here is {t_name}'s schedule for {target_weekday}:\n\n{sched_body}\n\nWhich date or time would you like to book your appointment for?",
+                        "content": f"Here is {t_name}'s schedule for {target_weekday}:\n\n{sched_body}\n\n{prompt_q}",
                         "tool_calls": []
                     }
                 else:

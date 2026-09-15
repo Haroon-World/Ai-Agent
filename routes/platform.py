@@ -4,7 +4,10 @@ from flask import (
     Blueprint, render_template, request, redirect, url_for,
     session, flash, jsonify, abort
 )
-from models import db, Business, Doctor, Service, Appointment, User, SubscriptionRequest, ClinicInvitation
+from models import (
+    db, Business, Doctor, Service, Appointment, User,
+    SubscriptionRequest, ClinicInvitation, ClinicWhatsAppAccount
+)
 from config.config import Config
 from services.subscription_service import SubscriptionService
 
@@ -172,6 +175,31 @@ def manage_clinic(clinic_id):
     """Direct link to clinic client login; strictly prohibits credential bypass."""
     flash("Please sign in with the clinic administrator credentials to access the clinic portal.", "info")
     return redirect(url_for("admin_bp.login"))
+
+
+@platform_bp.route("/clinic/<int:clinic_id>", methods=["GET"])
+@platform_admin_required
+def clinic_detail_view(clinic_id):
+    """Dedicated management console for a single clinic tenant."""
+    clinic = db.session.get(Business, clinic_id)
+    if not clinic:
+        flash(f"Clinic #{clinic_id} was not found.", "danger")
+        return redirect(url_for("platform_bp.dashboard"))
+
+    admin_user = User.query.filter_by(business_id=clinic.id, is_platform_admin=False).first()
+    pending_requests = SubscriptionRequest.query.filter_by(business_id=clinic.id, status="pending").order_by(SubscriptionRequest.created_at.desc()).all()
+
+    return render_template(
+        "platform/clinic_detail.html",
+        clinic=clinic,
+        admin_user=admin_user,
+        doctors=clinic.doctors,
+        services=clinic.services,
+        appointments=clinic.appointments,
+        subscription=clinic.subscription_badge,
+        pending_requests=pending_requests
+    )
+
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +401,13 @@ def onboard_clinic_view():
 # Platform Clinic Subscription & Credential Management
 # ---------------------------------------------------------------------------
 
+def _get_redirect_target(clinic_id):
+    target = request.form.get("next") or request.referrer
+    if target and ("/platform/clinic/" in target or "/platform/dashboard" in target or "/platform" in target):
+        return redirect(target)
+    return redirect(url_for("platform_bp.clinic_detail_view", clinic_id=clinic_id))
+
+
 @platform_bp.route("/clinic/<int:clinic_id>/subscription/extend", methods=["POST"])
 @platform_admin_required
 def extend_clinic_subscription(clinic_id):
@@ -388,7 +423,7 @@ def extend_clinic_subscription(clinic_id):
     else:
         flash(f"Failed to extend subscription: {res.get('error')}", "danger")
 
-    return redirect(url_for("platform_bp.dashboard"))
+    return _get_redirect_target(clinic_id)
 
 
 @platform_bp.route("/subscription-request/<int:request_id>/approve", methods=["POST"])
@@ -438,7 +473,7 @@ def cancel_clinic_subscription(clinic_id):
         flash(f"Subscription for Clinic #{clinic_id} has been cancelled. Portal access is now locked.", "warning")
     else:
         flash(f"Failed to cancel subscription: {res.get('error')}", "danger")
-    return redirect(url_for("platform_bp.dashboard"))
+    return _get_redirect_target(clinic_id)
 
 
 @platform_bp.route("/clinic/<int:clinic_id>/subscription/reactivate", methods=["POST"])
@@ -454,7 +489,7 @@ def reactivate_clinic_subscription(clinic_id):
         flash(f"Clinic #{clinic_id} subscription reactivated with {days} days of access.", "success")
     else:
         flash(f"Failed to reactivate subscription: {res.get('error')}", "danger")
-    return redirect(url_for("platform_bp.dashboard"))
+    return _get_redirect_target(clinic_id)
 
 
 @platform_bp.route("/clinic/<int:clinic_id>/subscription/set-dates", methods=["POST"])
@@ -466,14 +501,14 @@ def set_clinic_subscription_dates(clinic_id):
 
     if not start_str or not end_str:
         flash("Both start date and end date are required.", "danger")
-        return redirect(url_for("platform_bp.dashboard"))
+        return _get_redirect_target(clinic_id)
 
     try:
         start_dt = datetime.strptime(start_str, "%Y-%m-%d")
         end_dt = datetime.strptime(end_str, "%Y-%m-%d")
     except ValueError:
         flash("Invalid date format. Please use YYYY-MM-DD.", "danger")
-        return redirect(url_for("platform_bp.dashboard"))
+        return _get_redirect_target(clinic_id)
 
     res = SubscriptionService.set_date_range(clinic_id, start_date=start_dt, end_date=end_dt)
     if res.get("success"):
@@ -481,7 +516,7 @@ def set_clinic_subscription_dates(clinic_id):
     else:
         flash(f"Failed to set subscription dates: {res.get('error')}", "danger")
 
-    return redirect(url_for("platform_bp.dashboard"))
+    return _get_redirect_target(clinic_id)
 
 
 @platform_bp.route("/clinic/<int:clinic_id>/reset-password", methods=["POST"])
@@ -491,19 +526,19 @@ def reset_clinic_password(clinic_id):
     new_password = (request.form.get("new_password") or "").strip()
     if len(new_password) < 6:
         flash("Password must be at least 6 characters.", "danger")
-        return redirect(url_for("platform_bp.dashboard"))
+        return _get_redirect_target(clinic_id)
 
     admin_user = User.query.filter_by(business_id=clinic_id, is_platform_admin=False).first()
     if not admin_user:
         flash("No clinic admin found for this clinic.", "danger")
-        return redirect(url_for("platform_bp.dashboard"))
+        return _get_redirect_target(clinic_id)
 
     admin_user.set_password(new_password)
     admin_user.clear_reset_token()
     db.session.commit()
 
     flash(f"Password for clinic admin '{admin_user.username}' (Clinic #{clinic_id}) updated successfully.", "success")
-    return redirect(url_for("platform_bp.dashboard"))
+    return _get_redirect_target(clinic_id)
 
 
 @platform_bp.route("/clinic/<int:clinic_id>/update-email", methods=["POST"])
@@ -513,7 +548,7 @@ def update_clinic_email(clinic_id):
     new_email = (request.form.get("new_email") or "").strip().lower()
     if not new_email or "@" not in new_email:
         flash("Please provide a valid email address.", "danger")
-        return redirect(url_for("platform_bp.dashboard"))
+        return _get_redirect_target(clinic_id)
 
     clinic = db.session.get(Business, clinic_id)
     if not clinic:
@@ -524,7 +559,7 @@ def update_clinic_email(clinic_id):
     existing_user = User.query.filter(db.func.lower(User.email) == new_email).first()
     if existing_user and admin_user and existing_user.id != admin_user.id:
         flash(f"Email '{new_email}' is already in use by another clinic account.", "danger")
-        return redirect(url_for("platform_bp.dashboard"))
+        return _get_redirect_target(clinic_id)
 
     clinic.email = new_email
     if admin_user:
@@ -532,4 +567,63 @@ def update_clinic_email(clinic_id):
     db.session.commit()
 
     flash(f"Email for '{clinic.name}' (Clinic #{clinic_id}) successfully updated to '{new_email}'.", "success")
-    return redirect(url_for("platform_bp.dashboard"))
+    return _get_redirect_target(clinic_id)
+
+
+@platform_bp.route("/clinic/<int:clinic_id>/delete", methods=["POST"])
+@platform_admin_required
+def delete_clinic_action(clinic_id):
+    """
+    Permanently delete a clinic tenant and all its associated data.
+    Strictly verifies the authenticated platform admin password before execution.
+    """
+    admin_password = (request.form.get("admin_password") or "").strip()
+    if not admin_password:
+        flash("Platform admin password is required to authorize clinic deletion.", "danger")
+        return redirect(url_for("platform_bp.clinic_detail_view", clinic_id=clinic_id))
+
+    # Retrieve active platform admin user
+    p_id = session.get("platform_admin_id") or session.get("user_id")
+    platform_admin = db.session.get(User, p_id) if p_id else None
+    if not platform_admin or not platform_admin.is_platform_admin:
+        p_user = session.get("platform_admin_user") or session.get("admin_user")
+        if p_user:
+            platform_admin = User.query.filter_by(username=p_user, is_platform_admin=True).first()
+
+    if not platform_admin or not platform_admin.check_password(admin_password):
+        flash("Authentication failed: Incorrect platform admin password. Clinic was not deleted.", "danger")
+        return redirect(url_for("platform_bp.clinic_detail_view", clinic_id=clinic_id))
+
+    clinic = db.session.get(Business, clinic_id)
+    if not clinic:
+        flash(f"Clinic #{clinic_id} not found.", "danger")
+        return redirect(url_for("platform_bp.dashboard"))
+
+    clinic_name = clinic.name
+
+    try:
+        # 1. Unlink appointments from conversations
+        for appt in clinic.appointments:
+            appt.conversation_id = None
+        db.session.flush()
+
+        # 3. Delete WhatsApp account if exists
+        ClinicWhatsAppAccount.query.filter_by(business_id=clinic.id).delete()
+
+        # 4. Delete clinic invitations
+        ClinicInvitation.query.filter_by(business_id=clinic.id).delete()
+
+        # 5. Delete clinic staff/admin user accounts
+        User.query.filter_by(business_id=clinic.id, is_platform_admin=False).delete()
+
+        # 6. Delete the business itself (cascades doctors, services, customers, appointments, reminders, conversations, subscription requests)
+        db.session.delete(clinic)
+        db.session.commit()
+
+        flash(f"Clinic '{clinic_name}' (ID #{clinic_id}) and all associated records have been permanently deleted.", "success")
+        return redirect(url_for("platform_bp.dashboard"))
+    except Exception as e:
+        db.session.rollback()
+        flash(f"An error occurred while deleting clinic #{clinic_id}: {str(e)}", "danger")
+        return redirect(url_for("platform_bp.clinic_detail_view", clinic_id=clinic_id))
+

@@ -417,7 +417,7 @@ def _build_state_context(conv: Conversation) -> str:
     elif lang == "roman_urdu":
         lines.append("LANGUAGE MANDATE: The customer is communicating in Roman Urdu / Roman English (e.g. 'mera naam ahmed hai', 'dr sara k sath appointment fix kr do', 'kal 11:30 baje', 'theek hai confirm krdo'). You MUST reply in natural, polite Roman Urdu / Roman English (e.g. 'Ji bilkul! Main Dr. Sara Malik ke sath aap ki appointment book kar deta hoon. Barah-e-karam apni pasand ki date batayein...'). Do NOT reply in English or Urdu script.")
     else:
-        lines.append("LANGUAGE MANDATE: The customer is communicating in English. Reply in clear, polite English.")
+        lines.append("LANGUAGE MANDATE: The customer is communicating in English. Reply in clear, polite English. You MUST NEVER switch to Roman Urdu, Urdu, or Hindi unless the customer explicitly sends a message written in Roman Urdu or Urdu script. Never output Roman Urdu words to an English-speaking user.")
 
     return "\n".join(lines)
 
@@ -1269,11 +1269,11 @@ class Agent:
                 is_urdu = any('\u0600' <= ch <= '\u06FF' for ch in user_content)
                 is_roman = any(w in t_clean for w in ["shukriya", "shukria", "shukariaa", "bohat", "bht", "theek", "thik", "allah hafiz"])
                 if is_urdu:
-                    courtesy_reply = "آپ کا بہت شکریہ! آپ کی اپائنٹمنٹ کنفرم ہے۔ اپنا خیال رکھیں، اللہ حافظ! اگر مزید کوئی رہنمائی درکار ہو تو ضرور بتائیں۔"
+                    courtesy_reply = "آپ کا بہت شکریہ! آپ کی اپائنٹمنٹ پہلے ہی کنفرم ہے۔ اپنا خیال رکھیں، اللہ حافظ! اگر مزید کوئی رہنمائی درکار ہو تو ضرور بتائیں۔"
                 elif is_roman:
-                    courtesy_reply = "Aap ka bohat shukriya! Aap ki appointment confirmed hai. Agar mazeed koi sawal ya rahnumai darkaar ho to zaroor batayein. Apna khayal rakhein, Allah Hafiz!"
+                    courtesy_reply = "Aap ka bohat shukriya! Aap ki appointment already confirmed hai. Agar mazeed koi sawal ya rahnumai darkaar ho to zaroor batayein. Apna khayal rakhein, Allah Hafiz!"
                 else:
-                    courtesy_reply = "You are very welcome! Your appointment is confirmed. Feel free to reach out if you need anything else. Have a wonderful day!"
+                    courtesy_reply = "You are very welcome! Your appointment is already confirmed. Feel free to reach out if you need anything else. Have a wonderful day!"
 
                 asst_msg = Message(
                     conversation_id=conv.id,
@@ -1351,6 +1351,35 @@ class Agent:
         )
         llm_call_1_ms = (time.perf_counter() - t_llm1) * 1000.0
 
+        # Confirmation Auto-Trigger Safeguard:
+        # If the user explicitly confirmed ("Confirm Appointment", "Confirm Booking", etc.) and all booking
+        # details are already in conversation state, ensure book_appointment is executed even if the LLM omitted the tool call.
+        is_confirm_reply = any(k in user_content.lower() for k in [
+            "confirm appointment", "confirm booking", "confirm", "book it", "please book", "go ahead",
+            "yes, confirm", "yes confirm", "haan confirm", "theek hai confirm"
+        ]) or (conv.awaiting_input == "confirmation" and any(k in user_content.lower() for k in ["yes", "yeah", "sure", "ok", "okay", "haan", "theek"]))
+
+        existing_tool_names = [t.get("name") for t in (response.get("tool_calls") or [])]
+        if is_confirm_reply and conv.workflow_state != "BOOKED" and "book_appointment" not in existing_tool_names:
+            has_name = bool(conv.pending_customer_name or (conv.customer and conv.customer.name))
+            has_phone = bool(conv.pending_customer_phone or (conv.customer and conv.customer.phone))
+            if conv.selected_doctor_id and conv.selected_service_id and conv.requested_date and conv.requested_time and has_name and has_phone:
+                if not response.get("tool_calls"):
+                    response["tool_calls"] = []
+                response["tool_calls"].append({
+                    "name": "book_appointment",
+                    "arguments": {
+                        "doctor_id": conv.selected_doctor_id,
+                        "service_id": conv.selected_service_id,
+                        "appointment_date": conv.requested_date,
+                        "appointment_time": conv.requested_time,
+                        "customer_name": conv.pending_customer_name or (conv.customer.name if conv.customer else "Valued Patient"),
+                        "customer_phone": conv.pending_customer_phone or (conv.customer.phone if conv.customer else ""),
+                        "notes": "Booked via patient confirmation"
+                    },
+                    "id": f"call_confirm_{conv.id}"
+                })
+
         # Tool execution & deterministic response generation (Bypasses second LLM call!)
         if response.get("tool_calls"):
             t_tool = time.perf_counter()
@@ -1361,8 +1390,35 @@ class Agent:
                 tool_args = tc.get("arguments", {})
                 tool_call_id = tc.get("id", f"call_{iteration}")
 
-                if tool_name == "book_appointment" and not tool_args.get("idempotency_key"):
-                    tool_args["idempotency_key"] = f"conv-{conv.id}-attempt-{uuid.uuid4().hex[:8]}"
+                if tool_name == "book_appointment":
+                    if not tool_args.get("idempotency_key"):
+                        tool_args["idempotency_key"] = f"conv-{conv.id}-attempt-{uuid.uuid4().hex[:8]}"
+
+                    # Robust fallback to conversation state and argument aliases
+                    if not tool_args.get("customer_phone"):
+                        tool_args["customer_phone"] = (
+                            tool_args.get("phone")
+                            or tool_args.get("phone_number")
+                            or tool_args.get("patient_phone")
+                            or tool_args.get("contact_number")
+                            or conv.pending_customer_phone
+                            or (conv.customer.phone if conv.customer else None)
+                        )
+                    if not tool_args.get("customer_name"):
+                        tool_args["customer_name"] = (
+                            tool_args.get("patient_name")
+                            or tool_args.get("name")
+                            or conv.pending_customer_name
+                            or (conv.customer.name if conv.customer else None)
+                        )
+                    if not tool_args.get("doctor_id") and conv.selected_doctor_id:
+                        tool_args["doctor_id"] = conv.selected_doctor_id
+                    if not tool_args.get("service_id") and conv.selected_service_id:
+                        tool_args["service_id"] = conv.selected_service_id
+                    if not tool_args.get("appointment_date"):
+                        tool_args["appointment_date"] = tool_args.get("date") or conv.requested_date
+                    if not tool_args.get("appointment_time"):
+                        tool_args["appointment_time"] = tool_args.get("time") or conv.requested_time
 
                 executed_tools.append({"name": tool_name, "args": tool_args})
                 self._update_conversation_state(conv, tool_name, tool_args)

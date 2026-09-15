@@ -250,8 +250,11 @@ class ToolDispatcher:
                 )
 
             elif tool_name == "book_appointment":
-                doc_id_raw = arguments.get("doctor_id")
-                svc_id_raw = arguments.get("service_id")
+                from models import db, Conversation
+                conv = db.session.get(Conversation, self.conversation_id) if self.conversation_id else None
+
+                doc_id_raw = arguments.get("doctor_id") or (conv.selected_doctor_id if conv else None)
+                svc_id_raw = arguments.get("service_id") or (conv.selected_service_id if conv else None)
                 try:
                     parsed_doc_id = int(doc_id_raw) if doc_id_raw is not None else None
                 except (ValueError, TypeError):
@@ -262,19 +265,51 @@ class ToolDispatcher:
                     parsed_svc_id = None
 
                 booked_by = None
-                from models import db, Conversation
-                conv = db.session.get(Conversation, self.conversation_id) if self.conversation_id else None
                 if conv and conv.visitor_id and "wa_" in conv.visitor_id:
                     booked_by = conv.visitor_id.replace("wa_", "").replace("whatsapp_", "")
 
+                cust_phone = (
+                    arguments.get("customer_phone")
+                    or arguments.get("phone")
+                    or arguments.get("phone_number")
+                    or arguments.get("patient_phone")
+                    or arguments.get("contact_number")
+                    or (conv.pending_customer_phone if conv else None)
+                    or (conv.customer.phone if (conv and conv.customer) else None)
+                    or (booked_by if (booked_by and len(booked_by) >= 7) else "")
+                    or ""
+                )
+
+                cust_name = (
+                    arguments.get("customer_name")
+                    or arguments.get("patient_name")
+                    or arguments.get("name")
+                    or (conv.pending_customer_name if conv else None)
+                    or (conv.customer.name if (conv and conv.customer) else None)
+                    or ""
+                )
+
+                appt_date = (
+                    arguments.get("appointment_date")
+                    or arguments.get("date")
+                    or (conv.requested_date if conv else "")
+                    or ""
+                )
+                appt_time = (
+                    arguments.get("appointment_time")
+                    or arguments.get("time")
+                    or (conv.requested_time if conv else "")
+                    or ""
+                )
+
                 return BookingService.book_appointment(
                     business_id=self.business_id,
-                    customer_name=arguments.get("customer_name", ""),
-                    customer_phone=arguments.get("customer_phone", ""),
+                    customer_name=str(cust_name).strip(),
+                    customer_phone=str(cust_phone).strip(),
                     doctor_id=parsed_doc_id,
                     service_id=parsed_svc_id,
-                    appointment_date=arguments.get("appointment_date", ""),
-                    appointment_time=arguments.get("appointment_time", ""),
+                    appointment_date=str(appt_date).strip(),
+                    appointment_time=str(appt_time).strip(),
                     notes=arguments.get("notes"),
                     idempotency_key=arguments.get("idempotency_key"),
                     conversation_id=self.conversation_id,

@@ -115,18 +115,35 @@ def _parse_time_str(t_str: Any, default: Tuple[int, int] = (9, 0)) -> Tuple[int,
         return default
 
 
-def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, business_id: int) -> Tuple[List[str], str]:
-    """Calculate available time slots for a doctor on target_date. Returns (slots, unavailability_message)."""
+def _get_slots_for_doctor_on_date(doc: Any, target_date: Any, duration: int = 30, business_id: Optional[int] = None) -> Tuple[List[str], str]:
+    """Calculate available time slots for a doctor on target_date across Shift 1 and Shift 2. Returns (slots, unavailability_message)."""
+    if isinstance(doc, int):
+        doc = db.session.get(Doctor, doc)
+    if not doc:
+        return [], "Doctor not found."
+
     if hasattr(doc, "is_active") and not doc.is_active:
         return [], f"{doc.name} is currently not active."
+
+    if isinstance(target_date, str):
+        try:
+            target_date = datetime.strptime(target_date.strip(), "%Y-%m-%d").date()
+        except Exception:
+            return [], f"Invalid date format: {target_date}."
+
+    if business_id is None:
+        business_id = getattr(doc, "business_id", 1)
+
+    if not duration or duration <= 0:
+        duration = getattr(doc, "slot_interval", None) or 30
 
     day_name = target_date.strftime("%A")
     date_str = target_date.strftime("%Y-%m-%d")
 
     sched = DoctorSchedule.query.filter_by(doctor_id=doc.id, day_of_week=day_name).first()
     is_day_available = sched.is_available if sched else (day_name in [d.strip() for d in (doc.working_days or "").split(",")])
-    start_time_str = sched.start_time if sched else (doc.start_time or "09:00")
-    end_time_str = sched.end_time if sched else (doc.end_time or "17:00")
+    start_time_str = sched.start_time if (sched and sched.start_time) else (doc.start_time or "09:00")
+    end_time_str = sched.end_time if (sched and sched.end_time) else (doc.end_time or "17:00")
 
     if not is_day_available:
         return [], f"{doc.name} is closed / not practicing on {day_name}s."
@@ -177,22 +194,123 @@ def _get_slots_for_doctor_on_date(doc: Doctor, target_date: Any, duration: int, 
 
     step_interval = getattr(doc, "slot_interval", None) or 30
 
-    slots = []
-    curr = datetime.combine(target_date, time(start_h, start_m))
-    end_time_dt = datetime.combine(target_date, time(end_h, end_m))
+    slots: List[str] = []
 
-    while curr + timedelta(minutes=duration) <= end_time_dt:
-        slot_str = curr.strftime("%H:%M")
-        s_min = curr.hour * 60 + curr.minute
-        e_min = s_min + duration
+    # Shift 1 slot generation
+    s1_start_min = start_h * 60 + start_m
+    s1_end_min = end_h * 60 + end_m
+    if s1_start_min < s1_end_min:
+        curr1 = datetime.combine(target_date, time(start_h, start_m))
+        end1_dt = datetime.combine(target_date, time(end_h, end_m))
+        while curr1 + timedelta(minutes=duration) <= end1_dt:
+            slot_str = curr1.strftime("%H:%M")
+            s_min = curr1.hour * 60 + curr1.minute
+            e_min = s_min + duration
 
-        overlaps = any(s_min < blk_end and e_min > blk_start for blk_start, blk_end in blocked_ranges)
-        if not overlaps:
-            slots.append(slot_str)
+            overlaps = any(s_min < blk_end and e_min > blk_start for blk_start, blk_end in blocked_ranges)
+            if not overlaps:
+                slots.append(slot_str)
 
-        curr += timedelta(minutes=step_interval)
+            curr1 += timedelta(minutes=step_interval)
 
-    return slots, ""
+    # Shift 2 slot generation
+    s2_start_raw = (sched.shift_2_start_time if sched and sched.shift_2_start_time else None) or getattr(doc, "shift_2_start_time", None)
+    s2_end_raw = (sched.shift_2_end_time if sched and sched.shift_2_end_time else None) or getattr(doc, "shift_2_end_time", None)
+
+    if s2_start_raw and s2_end_raw:
+        try:
+            s2_sh, s2_sm = _parse_time_str(s2_start_raw)
+            s2_eh, s2_em = _parse_time_str(s2_end_raw)
+            s2_start_min = s2_sh * 60 + s2_sm
+            s2_end_min = s2_eh * 60 + s2_em
+            if s2_start_min < s2_end_min:
+                curr2 = datetime.combine(target_date, time(s2_sh, s2_sm))
+                end2_dt = datetime.combine(target_date, time(s2_eh, s2_em))
+                while curr2 + timedelta(minutes=duration) <= end2_dt:
+                    slot_str = curr2.strftime("%H:%M")
+                    s_min = curr2.hour * 60 + curr2.minute
+                    e_min = s_min + duration
+
+                    overlaps = any(s_min < blk_end and e_min > blk_start for blk_start, blk_end in blocked_ranges)
+                    if not overlaps:
+                        slots.append(slot_str)
+
+                    curr2 += timedelta(minutes=step_interval)
+        except Exception:
+            pass
+
+    unique_slots = sorted(list(dict.fromkeys(slots)), key=lambda s: _parse_time_str(s))
+    return unique_slots, ""
+
+
+def get_available_slots(doc: Any, target_date: Any, duration: int = 30, business_id: Optional[int] = None) -> Tuple[List[str], str]:
+    """Calculate available time slots for a doctor on target_date across Shift 1 and Shift 2.
+    Returns (slots, unavailability_message)."""
+    return _get_slots_for_doctor_on_date(doc, target_date, duration, business_id)
+
+
+def validate_slot(
+    doctor: Any,
+    target_date: Any,
+    slot_time: str,
+    duration: int = 30,
+    business_id: Optional[int] = None
+) -> Tuple[bool, Optional[str]]:
+    """Validate if slot_time is within clinic working hours (Shift 1 or Shift 2).
+    Returns (is_valid, error_message)."""
+    if isinstance(doctor, int):
+        doctor = db.session.get(Doctor, doctor)
+    if not doctor:
+        return False, "Doctor not found."
+
+    if isinstance(target_date, str):
+        try:
+            target_date = datetime.strptime(target_date.strip(), "%Y-%m-%d").date()
+        except Exception:
+            return False, f"Invalid date format: {target_date}."
+
+    day_name = target_date.strftime("%A")
+    sched = DoctorSchedule.query.filter_by(doctor_id=doctor.id, day_of_week=day_name).first()
+    is_day_available = sched.is_available if sched else (day_name in [d.strip() for d in (doctor.working_days or "").split(",")])
+    if not is_day_available:
+        return False, f"Dr. {doctor.name} is closed / not practicing on {day_name}s."
+
+    req_h, req_m = _parse_time_str(slot_time, default=(-1, -1))
+    if req_h < 0 or req_m < 0:
+        return False, "Invalid time format. Use HH:MM."
+
+    req_start_m = req_h * 60 + req_m
+    req_end_m = req_start_m + duration
+
+    start_time_str = sched.start_time if (sched and sched.start_time) else (doctor.start_time or "09:00")
+    end_time_str = sched.end_time if (sched and sched.end_time) else (doctor.end_time or "17:00")
+    start_h, start_m = _parse_time_str(start_time_str, default=(9, 0))
+    end_h, end_m = _parse_time_str(end_time_str, default=(17, 0))
+    s1_start_m = start_h * 60 + start_m
+    s1_end_m = end_h * 60 + end_m
+    in_shift_1 = (s1_start_m <= req_start_m and req_end_m <= s1_end_m) if s1_start_m < s1_end_m else False
+
+    s2_start_str = (sched.shift_2_start_time if sched and sched.shift_2_start_time else None) or getattr(doctor, "shift_2_start_time", None)
+    s2_end_str = (sched.shift_2_end_time if sched and sched.shift_2_end_time else None) or getattr(doctor, "shift_2_end_time", None)
+    in_shift_2 = False
+    if s2_start_str and s2_end_str:
+        try:
+            s2_sh, s2_sm = _parse_time_str(s2_start_str)
+            s2_eh, s2_em = _parse_time_str(s2_end_str)
+            s2_start_m = s2_sh * 60 + s2_sm
+            s2_end_m = s2_eh * 60 + s2_em
+            if s2_start_m < s2_end_m:
+                in_shift_2 = (s2_start_m <= req_start_m and req_end_m <= s2_end_m)
+        except Exception:
+            pass
+
+    if not (in_shift_1 or in_shift_2):
+        hours_desc = f"{start_time_str}–{end_time_str}"
+        if s2_start_str and s2_end_str:
+            hours_desc += f" and {s2_start_str}–{s2_end_str}"
+        return False, f"Requested slot {slot_time} ({duration} mins) is outside Dr. {doctor.name}'s working hours ({hours_desc}) on {day_name}s."
+
+    return True, None
 
 
 _NON_PERSON_NAME_PATTERNS = re.compile(
@@ -221,6 +339,22 @@ def _is_valid_human_name(name_str: str) -> bool:
 
 
 class BookingService:
+    @staticmethod
+    def get_available_slots(doc: Any, target_date: Any, duration: int = 30, business_id: Optional[int] = None) -> Tuple[List[str], str]:
+        """Calculate available time slots for a doctor on target_date across Shift 1 and Shift 2."""
+        return _get_slots_for_doctor_on_date(doc, target_date, duration, business_id)
+
+    @staticmethod
+    def validate_slot(
+        doctor: Any,
+        target_date: Any,
+        slot_time: str,
+        duration: int = 30,
+        business_id: Optional[int] = None
+    ) -> Tuple[bool, Optional[str]]:
+        """Validate if slot_time is within clinic working hours (Shift 1 or Shift 2)."""
+        return validate_slot(doctor, target_date, slot_time, duration, business_id)
+
     @staticmethod
     def get_clinic_info(business_id: int) -> Dict[str, Any]:
         """Fetch clinic details, opening hours, policies and contact info."""
@@ -500,12 +634,29 @@ class BookingService:
         - DB-level unique constraint as final safety net
         - Automatic reminder scheduling
         """
-        missing_fields = []
+        conv = None
+        if conversation_id:
+            from models import Conversation
+            conv = db.session.get(Conversation, conversation_id)
+
         name_str = str(customer_name).strip() if customer_name else ""
+        if (not name_str or not _is_valid_human_name(name_str)) and conv:
+            fallback_name = conv.pending_customer_name or (conv.customer.name if conv.customer else None)
+            if fallback_name and _is_valid_human_name(fallback_name):
+                name_str = fallback_name.strip()
+                customer_name = name_str
+
+        missing_fields = []
         if not name_str or not _is_valid_human_name(name_str):
             missing_fields.append("customer_name")
 
         phone_str = str(customer_phone).strip() if customer_phone else ""
+        if (not phone_str or phone_str.replace("0", "").replace("+", "").replace("-", "").replace(" ", "") == "") and conv:
+            fallback_phone = conv.pending_customer_phone or (conv.customer.phone if conv.customer else None)
+            if fallback_phone:
+                phone_str = fallback_phone.strip()
+                customer_phone = phone_str
+
         biz = db.session.get(Business, business_id)
         biz_phone = biz.phone.strip() if (biz and biz.phone) else ""
         clean_p = phone_str.replace(" ", "").replace("-", "")
@@ -513,12 +664,23 @@ class BookingService:
         if not phone_str or phone_str.replace("0", "").replace("+", "").replace("-", "").replace(" ", "") == "" or (clean_bp and clean_p == clean_bp):
             missing_fields.append("customer_phone")
 
+        if not doctor_id and conv and conv.selected_doctor_id:
+            doctor_id = conv.selected_doctor_id
         if not doctor_id:
             missing_fields.append("doctor_id")
+
+        if not service_id and conv and conv.selected_service_id:
+            service_id = conv.selected_service_id
         if not service_id:
             missing_fields.append("service_id")
+
+        if (not appointment_date or not str(appointment_date).strip()) and conv and conv.requested_date:
+            appointment_date = conv.requested_date
         if not appointment_date or not str(appointment_date).strip():
             missing_fields.append("appointment_date")
+
+        if (not appointment_time or not str(appointment_time).strip()) and conv and conv.requested_time:
+            appointment_time = conv.requested_time
         if not appointment_time or not str(appointment_time).strip():
             missing_fields.append("appointment_time")
 
@@ -613,12 +775,31 @@ class BookingService:
         start_m = start_h * 60 + start_m
         end_m = end_h * 60 + end_m
 
-        if not (start_m <= req_start_m and req_end_m <= end_m):
+        in_shift_1 = (start_m <= req_start_m and req_end_m <= end_m) if start_m < end_m else False
+
+        s2_start_str = (sched.shift_2_start_time if sched and sched.shift_2_start_time else None) or getattr(doctor, "shift_2_start_time", None)
+        s2_end_str = (sched.shift_2_end_time if sched and sched.shift_2_end_time else None) or getattr(doctor, "shift_2_end_time", None)
+        in_shift_2 = False
+        if s2_start_str and s2_end_str:
+            try:
+                s2_sh, s2_sm = _parse_time_str(s2_start_str)
+                s2_eh, s2_em = _parse_time_str(s2_end_str)
+                s2_start_m = s2_sh * 60 + s2_sm
+                s2_end_m = s2_eh * 60 + s2_em
+                if s2_start_m < s2_end_m:
+                    in_shift_2 = (s2_start_m <= req_start_m and req_end_m <= s2_end_m)
+            except Exception:
+                pass
+
+        if not (in_shift_1 or in_shift_2):
+            hours_desc = f"{start_time_str}–{end_time_str}"
+            if s2_start_str and s2_end_str:
+                hours_desc += f" and {s2_start_str}–{s2_end_str}"
             return {
                 "success": False,
                 "error": (
                     f"Requested slot {appointment_time} ({service.duration} mins) is outside Dr. {doctor.name}'s "
-                    f"working hours ({start_time_str}–{end_time_str}) on {day_name}s."
+                    f"working hours ({hours_desc}) on {day_name}s."
                 )
             }
 
@@ -758,6 +939,10 @@ class BookingService:
             sched.is_available = bool(item.get("is_available", True))
             sched.start_time = item.get("start_time", "09:00")
             sched.end_time = item.get("end_time", "17:00")
+            s2_start = item.get("shift_2_start_time")
+            s2_end = item.get("shift_2_end_time")
+            sched.shift_2_start_time = s2_start.strip() if isinstance(s2_start, str) and s2_start.strip() else (s2_start if s2_start else None)
+            sched.shift_2_end_time = s2_end.strip() if isinstance(s2_end, str) and s2_end.strip() else (s2_end if s2_end else None)
         db.session.commit()
         RequestCache.clear()
         return True
@@ -987,16 +1172,40 @@ class BookingService:
         # Working hours check
         doc_start = doc_sched.start_time if doc_sched and doc_sched.start_time else target_doctor.start_time or "09:00"
         doc_end = doc_sched.end_time if doc_sched and doc_sched.end_time else target_doctor.end_time or "17:00"
+        s2_start = (doc_sched.shift_2_start_time if doc_sched and doc_sched.shift_2_start_time else None) or getattr(target_doctor, "shift_2_start_time", None)
+        s2_end = (doc_sched.shift_2_end_time if doc_sched and doc_sched.shift_2_end_time else None) or getattr(target_doctor, "shift_2_end_time", None)
+
+        in_shift_1 = False
         try:
             sh, sm = _parse_time_str(doc_start)
             eh, em = _parse_time_str(doc_end)
-            if new_start_m < (sh * 60 + sm) or new_end_m > (eh * 60 + em):
-                return {
-                    "success": False,
-                    "error": f"The requested time {new_time} is outside {doc_label}'s working hours ({doc_start} - {doc_end})."
-                }
+            s1_sm = sh * 60 + sm
+            s1_em = eh * 60 + em
+            if s1_sm < s1_em:
+                in_shift_1 = (s1_sm <= new_start_m and new_end_m <= s1_em)
         except Exception:
             pass
+
+        in_shift_2 = False
+        if s2_start and s2_end:
+            try:
+                s2_sh, s2_sm = _parse_time_str(s2_start)
+                s2_eh, s2_em = _parse_time_str(s2_end)
+                s2_start_m = s2_sh * 60 + s2_sm
+                s2_end_m = s2_eh * 60 + s2_em
+                if s2_start_m < s2_end_m:
+                    in_shift_2 = (s2_start_m <= new_start_m and new_end_m <= s2_end_m)
+            except Exception:
+                pass
+
+        if not (in_shift_1 or in_shift_2):
+            hours_desc = f"{doc_start} - {doc_end}"
+            if s2_start and s2_end:
+                hours_desc += f" and {s2_start} - {s2_end}"
+            return {
+                "success": False,
+                "error": f"The requested time {new_time} is outside {doc_label}'s working hours ({hours_desc})."
+            }
 
         # Break time check
         if target_doctor.break_start_time and target_doctor.break_end_time:

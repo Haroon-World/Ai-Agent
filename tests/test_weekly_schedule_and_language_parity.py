@@ -6,6 +6,12 @@ from config.config import Config
 from seed import seed_database
 from services.booking_service import BookingService, _get_business_tz, RequestCache
 from ai.agent import Agent
+from ai.response_generator import (
+    DISTINCT_ROMAN_URDU_WORDS,
+    detect_language,
+    _format_doctor_schedule_lines,
+)
+from ai.prompts import build_system_prompt
 
 
 
@@ -162,6 +168,54 @@ class TestWeeklyScheduleAndLanguageParity(unittest.TestCase):
             finally:
                 wed_sched.is_available = orig_avail
                 db.session.commit()
+
+    def test_case_9_checkup_does_not_trigger_roman_urdu(self):
+        self.assertNotIn("checkup", DISTINCT_ROMAN_URDU_WORDS)
+        self.assertEqual(detect_language("I need a checkup"), "english")
+        self.assertEqual(detect_language("General Checkup"), "english")
+        self.assertEqual(detect_language("Checkup please"), "english")
+
+        conv = Conversation(business_id=1, status="AI", workflow_state="START")
+        db.session.add(conv)
+        db.session.commit()
+
+        res = self.agent.process_message(conv.id, "I need a checkup with Dr. Sara")
+        content = res["content"]
+        self.assertNotIn("Ji ", content)
+        self.assertNotIn("karein", content.lower())
+        self.assertNotIn("shukriya", content.lower())
+        self.assertNotIn("theek", content.lower())
+
+    def test_case_10_multi_shift_doctor_schedule_presentation(self):
+        multi_shift_doc = {
+            "name": "Dr. Multi Shift",
+            "weekly_schedule": [
+                {
+                    "day_of_week": "Monday",
+                    "is_available": True,
+                    "start_time": "08:00",
+                    "end_time": "10:00",
+                    "shift_2_start_time": "17:00",
+                    "shift_2_end_time": "21:00"
+                },
+                {
+                    "day_of_week": "Tuesday",
+                    "is_available": True,
+                    "start_time": "09:00",
+                    "end_time": "17:00"
+                }
+            ]
+        }
+        lines = _format_doctor_schedule_lines(multi_shift_doc, target_day="Monday")
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0], "• Monday: 08:00 AM – 10:00 AM (Morning) & 05:00 PM – 09:00 PM (Evening)")
+
+    def test_case_11_system_prompt_mandates_and_multi_shift(self):
+        prompt = build_system_prompt(1)
+        self.assertIn("STRICT LANGUAGE LOCK MANDATE", prompt)
+        self.assertIn("STRICT PROHIBITION: The AI MUST NEVER switch to Roman Urdu", prompt)
+        self.assertIn("MULTI-SHIFT WORKING HOURS", prompt)
+        self.assertNotIn("• Dr. Bilal Tariq", prompt)
 
 if __name__ == "__main__":
     unittest.main()

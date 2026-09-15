@@ -11,6 +11,8 @@ class Doctor(db.Model):
     working_days = db.Column(db.String(255), nullable=False, default="Monday,Tuesday,Wednesday,Thursday,Friday,Saturday")
     start_time = db.Column(db.String(10), nullable=False, default="09:00")
     end_time = db.Column(db.String(10), nullable=False, default="17:00")
+    shift_2_start_time = db.Column(db.String(10), nullable=True)
+    shift_2_end_time = db.Column(db.String(10), nullable=True)
     slot_interval = db.Column(db.Integer, nullable=False, default=30)  # Slot interval in minutes (e.g. 15, 30, 45, 60)
     break_start_time = db.Column(db.String(10), nullable=True)         # Lunch/break start (e.g. "13:00")
     break_end_time = db.Column(db.String(10), nullable=True)           # Lunch/break end (e.g. "14:00")
@@ -34,10 +36,14 @@ class Doctor(db.Model):
             # weekly_schedule instead.
             flat_start_time = None
             flat_end_time = None
+            flat_shift_2_start_time = None
+            flat_shift_2_end_time = None
         else:
             working_days_list = [d.strip() for d in (self.working_days or "").split(",") if d.strip()]
             flat_start_time = self.start_time
             flat_end_time = self.end_time
+            flat_shift_2_start_time = self.shift_2_start_time
+            flat_shift_2_end_time = self.shift_2_end_time
         return {
             "id": self.id,
             "business_id": self.business_id,
@@ -46,6 +52,8 @@ class Doctor(db.Model):
             "working_days": working_days_list,
             "start_time": flat_start_time,
             "end_time": flat_end_time,
+            "shift_2_start_time": flat_shift_2_start_time,
+            "shift_2_end_time": flat_shift_2_end_time,
             "slot_interval": self.slot_interval or 30,
             "break_start_time": self.break_start_time,
             "break_end_time": self.break_end_time,

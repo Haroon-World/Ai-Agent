@@ -23,10 +23,53 @@ DISTINCT_ROMAN_URDU_WORDS = {
     "kahan", "wahan", "kyun", "kyu", "kese", "kaise", "kia", "kya", "achha", "accha", "sahi", "bilkul",
     "zarur", "zaroor", "shukriya", "meharbani", "mehrbani",
     # Dental / Medical & Booking in Roman
-    "dant", "daant", "dard", "masla", "keera", "masoorhe", "masura", "takleef", "checkup"
+    "dant", "daant", "dard", "masla", "keera", "masoorhe", "masura", "takleef"
 }
 
 ROMAN_URDU_PARTICLES = {"k", "ke", "ki", "ka", "ko", "ky", "se", "sy", "pe", "par", "mein", "mai", "ha", "hn", "hy", "ap"}
+
+COMMON_ENGLISH_WORDS = {
+    # Pronouns & determiners
+    "i", "me", "my", "myself", "we", "our", "ours", "us", "you", "your", "yours",
+    "he", "him", "his", "she", "her", "hers", "it", "its", "they", "them", "their", "theirs",
+    "this", "that", "these", "those", "the", "a", "an", "all", "any", "both", "each", "every",
+    "some", "such", "no", "nor", "not", "only", "own", "same", "other", "another",
+    # Question words
+    "what", "which", "who", "whom", "whose", "when", "where", "why", "how",
+    # Verbs & auxiliaries
+    "am", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "having", "do", "does", "did", "doing",
+    "can", "could", "shall", "should", "will", "would", "may", "might", "must",
+    "want", "wants", "wanted", "need", "needs", "needed", "like", "likes", "liked",
+    "book", "booking", "booked", "schedule", "scheduling", "scheduled",
+    "see", "seeing", "saw", "seen", "visit", "visiting", "visited",
+    "check", "checking", "checked", "confirm", "confirming", "confirmed",
+    "cancel", "canceling", "cancelled", "reschedule", "rescheduling", "rescheduled",
+    "know", "tell", "show", "help", "please", "thank", "thanks", "welcome",
+    "look", "find", "give", "take", "call", "change", "update", "fix",
+    # Prepositions & conjunctions
+    "for", "to", "in", "on", "at", "by", "with", "about", "against", "between", "into",
+    "through", "during", "before", "after", "above", "below", "from", "up", "down", "out",
+    "off", "over", "under", "again", "further", "then", "once", "and", "but", "if", "or",
+    "because", "as", "until", "while", "of",
+    # Healthcare & clinic vocabulary
+    "appointment", "appointments", "doctor", "doctors", "dr", "dentist", "dentists",
+    "checkup", "checkups", "consultation", "consultations", "consult", "patient", "patients", "clinic", "hospital",
+    "teeth", "tooth", "toothache", "pain", "dental", "scaling", "cleaning", "whitening",
+    "extraction", "filling", "root", "canal", "braces", "orthodontics", "implant", "implants",
+    "service", "services", "treatment", "treatments", "procedure", "procedures",
+    "fee", "fees", "cost", "costs", "price", "prices", "charges", "rate", "rates",
+    "time", "times", "timing", "timings", "hour", "hours", "slot", "slots",
+    "available", "availability", "open", "closed", "shift", "shifts", "morning", "evening", "afternoon",
+    "day", "days", "date", "dates", "week", "weeks", "weekly",
+    "today", "tomorrow", "yesterday", "tonight",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "first", "second", "next", "last", "new", "old", "good", "great", "best",
+    "hi", "hello", "hey", "dear", "sir", "madam",
+    "name", "phone", "number", "contact", "address", "location", "details", "info", "information",
+    "status", "id", "card", "insurance", "discount", "offer", "package",
+    "general", "routine", "emergency", "urgent", "problem", "issue", "trouble"
+}
 
 def detect_language(text: str, history_messages: Optional[List[Dict[str, Any]]] = None) -> str:
     if not text:
@@ -41,6 +84,12 @@ def detect_language(text: str, history_messages: Optional[List[Dict[str, Any]]] 
 
     if len(tokens.intersection(ROMAN_URDU_PARTICLES)) >= 2:
         return "roman_urdu"
+
+    # English safeguard: if the message contains standard English words and no distinct Roman Urdu words or Urdu script
+    english_tokens = tokens.intersection(COMMON_ENGLISH_WORDS)
+    neutral_only = {"yes", "ok", "okay", "no", "confirm", "cancel"}
+    if english_tokens and not tokens.issubset(neutral_only):
+        return "english"
 
     is_neutral = bool(re.match(r'^\s*(?:\d{4}-\d{2}-\d{2}|\d{1,2}[:.]\d{2}(?:\s*(?:am|pm))?|\d+|\+?\d+|yes|ok|okay|no|confirm|cancel|[a-zA-Z\s]{1,15})\s*$', text, re.IGNORECASE))
     if is_neutral and history_messages:
@@ -746,22 +795,37 @@ def _format_doctor_schedule_lines(doc: Dict[str, Any], target_day: Optional[str]
         for day in days_to_show:
             s_entry = sched_map.get(day)
             if s_entry and s_entry.get("is_available"):
-                st = _fmt_time_ampm(s_entry.get("start_time", "09:00"))
-                et = _fmt_time_ampm(s_entry.get("end_time", "17:00"))
-                lines.append(f"• {day}: {st} – {et}")
+                st = _fmt_time_ampm(s_entry.get("shift_1_start_time") or s_entry.get("start_time", "09:00"))
+                et = _fmt_time_ampm(s_entry.get("shift_1_end_time") or s_entry.get("end_time", "17:00"))
+                s2_st = s_entry.get("shift_2_start_time")
+                s2_et = s_entry.get("shift_2_end_time")
+                if s2_st and s2_et:
+                    st2 = _fmt_time_ampm(s2_st)
+                    et2 = _fmt_time_ampm(s2_et)
+                    lines.append(f"• {day}: {st} – {et} (Morning) & {st2} – {et2} (Evening)")
+                else:
+                    lines.append(f"• {day}: {st} – {et}")
             else:
                 lines.append(f"• {day}: Closed")
         return lines
 
     working_days = [d.strip() for d in (doc.get("working_days") or "").split(",") if d.strip()]
-    st = _fmt_time_ampm(doc.get("start_time", "09:00"))
-    et = _fmt_time_ampm(doc.get("end_time", "17:00"))
+    st = _fmt_time_ampm(doc.get("shift_1_start_time") or doc.get("start_time", "09:00"))
+    et = _fmt_time_ampm(doc.get("shift_1_end_time") or doc.get("end_time", "17:00"))
+    s2_st = doc.get("shift_2_start_time")
+    s2_et = doc.get("shift_2_end_time")
+    if s2_st and s2_et:
+        st2 = _fmt_time_ampm(s2_st)
+        et2 = _fmt_time_ampm(s2_et)
+        shift_str = f"{st} – {et} (Morning) & {st2} – {et2} (Evening)"
+    else:
+        shift_str = f"{st} – {et}"
 
     lines = []
     days_to_show = [target_day] if target_day else WEEKDAY_ORDER
     for day in days_to_show:
         if day in working_days:
-            lines.append(f"• {day}: {st} – {et}")
+            lines.append(f"• {day}: {shift_str}")
         else:
             lines.append(f"• {day}: Closed")
     return lines
@@ -828,21 +892,27 @@ def _format_doctors(
         sched_lines = _format_doctor_schedule_lines(target_doc, target_day=target_day)
         sched_body = "\n".join(sched_lines)
 
+        has_multi_shift = any(
+            s.get("shift_2_start_time") and s.get("shift_2_end_time")
+            for s in target_doc.get("weekly_schedule", [])
+            if (target_day is None or s.get("day_of_week") == target_day)
+        ) or bool(target_doc.get("shift_2_start_time") and target_doc.get("shift_2_end_time"))
+
         if lang == "urdu":
             header = f"{target_doc['name']} کا {target_day + ' کا ' if target_day else 'ہفتہ وار '}شیڈول:"
-            footer = "آپ کس تاریخ کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟"
+            footer = "آپ کونسی شفٹ یا وقت کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟" if (target_day and has_multi_shift) else "آپ کس تاریخ کے لیے اپائنٹمنٹ بک کروانا چاہیں گے؟"
             return f"{header}\n\n{sched_body}\n\n{footer}"
         elif lang == "roman_urdu":
             if target_day:
                 header = f"{target_doc['name']} ka {target_day} ka schedule:"
-                footer = "Aap kis date ya time ke liye appointment book karwana chahein ge?"
+                footer = "Aap konsi shift ya time ke liye appointment book karwana chahein ge?" if has_multi_shift else "Aap kis date ya time ke liye appointment book karwana chahein ge?"
             else:
                 header = f"Bilkul! {target_doc['name']} ka weekly schedule:"
                 footer = "Aap kis date ya din ke liye appointment book karwana chahein ge?"
             return f"{header}\n\n{sched_body}\n\n{footer}"
         else:
             header = f"{target_doc['name']}'s {'schedule for ' + target_day if target_day else 'Weekly Schedule'}:"
-            footer = "Which date or time would you prefer for your appointment?"
+            footer = "Which shift or time works best for you?" if (target_day and has_multi_shift) else "Which date or time would you prefer for your appointment?"
             return f"{header}\n\n{sched_body}\n\n{footer}"
 
     lines = []
@@ -852,7 +922,21 @@ def _format_doctors(
             wk_days = ", ".join(wk_days)
         st = _fmt_time_ampm(d.get("start_time")) if d.get("start_time") else None
         et = _fmt_time_ampm(d.get("end_time")) if d.get("end_time") else None
-        hours_part = f", Hours: {st} – {et}" if (st and et) else ""
+        s2_st = _fmt_time_ampm(d.get("shift_2_start_time")) if d.get("shift_2_start_time") else None
+        s2_et = _fmt_time_ampm(d.get("shift_2_end_time")) if d.get("shift_2_end_time") else None
+        if not (s2_st and s2_et) and d.get("weekly_schedule"):
+            multi_sched = next((s for s in d["weekly_schedule"] if s.get("shift_2_start_time") and s.get("shift_2_end_time")), None)
+            if multi_sched:
+                st = _fmt_time_ampm(multi_sched.get("start_time"))
+                et = _fmt_time_ampm(multi_sched.get("end_time"))
+                s2_st = _fmt_time_ampm(multi_sched.get("shift_2_start_time"))
+                s2_et = _fmt_time_ampm(multi_sched.get("shift_2_end_time"))
+        if st and et and s2_st and s2_et:
+            hours_part = f", Hours: {st} – {et} (Morning) & {s2_st} – {s2_et} (Evening)"
+        elif st and et:
+            hours_part = f", Hours: {st} – {et}"
+        else:
+            hours_part = ""
         lines.append(f"• **{d['name']}** - {d.get('specialization', 'Specialist')} (Working Days: {wk_days}{hours_part})")
 
     docs_body = "\n\n".join(lines)

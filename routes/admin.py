@@ -747,6 +747,8 @@ def add_doctor():
     specialization = request.form.get("specialization", "").strip()
     start_time_global = request.form.get("start_time", "09:00").strip()
     end_time_global = request.form.get("end_time", "17:00").strip()
+    shift_2_start_global = request.form.get("shift_2_start_time", "").strip() or None
+    shift_2_end_global = request.form.get("shift_2_end_time", "").strip() or None
     working_days_form = request.form.getlist("working_days")
 
     try:
@@ -762,6 +764,13 @@ def add_doctor():
 
     if start_time_global and end_time_global and start_time_global >= end_time_global:
         flash("Global end time must be after start time.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+
+    if shift_2_start_global and shift_2_end_global and shift_2_start_global >= shift_2_end_global:
+        flash("Shift 2 start time must be before end time.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+    if (shift_2_start_global and not shift_2_end_global) or (shift_2_end_global and not shift_2_start_global):
+        flash("Both Shift 2 start and end times must be provided.", "danger")
         return redirect(url_for("admin_bp.doctors_view"))
 
     if name and specialization:
@@ -790,6 +799,23 @@ def add_doctor():
                 db.session.rollback()
                 return redirect(url_for("admin_bp.doctors_view"))
 
+            s2_time = request.form.get(f"shift_2_start_time_{day}", "").strip() or None
+            e2_time = request.form.get(f"shift_2_end_time_{day}", "").strip() or None
+
+            # Fallback to global shift 2 if not explicitly provided per-day but global was configured
+            if not s2_time and not e2_time and f"shift_2_start_time_{day}" not in request.form:
+                s2_time = shift_2_start_global
+                e2_time = shift_2_end_global
+
+            if s2_time and e2_time and s2_time >= e2_time:
+                flash(f"Shift 2 end time for {day} must be after start time.", "danger")
+                db.session.rollback()
+                return redirect(url_for("admin_bp.doctors_view"))
+            if (s2_time and not e2_time) or (e2_time and not s2_time):
+                flash(f"Both Shift 2 start and end times must be provided for {day}.", "danger")
+                db.session.rollback()
+                return redirect(url_for("admin_bp.doctors_view"))
+
             if is_avail:
                 active_days.append(day)
 
@@ -800,12 +826,16 @@ def add_doctor():
                 start_time=s_time,
                 end_time=e_time
             )
+            sched.shift_2_start_time = s2_time if (s2_time and e2_time) else None
+            sched.shift_2_end_time = e2_time if (s2_time and e2_time) else None
             db.session.add(sched)
 
         if active_days:
             doctor.working_days = ",".join(active_days)
 
         db.session.commit()
+        from services.booking_service import RequestCache
+        RequestCache.clear()
         flash(f"Doctor '{name}' added successfully with weekly schedule.", "success")
     else:
         flash("Name and specialization are required.", "danger")
@@ -839,6 +869,16 @@ def edit_doctor(doctor_id):
         flash("Global end time must be after start time.", "danger")
         return redirect(url_for("admin_bp.doctors_view"))
 
+    shift_2_start_global = request.form.get("shift_2_start_time", "").strip() or None
+    shift_2_end_global = request.form.get("shift_2_end_time", "").strip() or None
+
+    if shift_2_start_global and shift_2_end_global and shift_2_start_global >= shift_2_end_global:
+        flash("Shift 2 start time must be before end time.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+    if (shift_2_start_global and not shift_2_end_global) or (shift_2_end_global and not shift_2_start_global):
+        flash("Both Shift 2 start and end times must be provided.", "danger")
+        return redirect(url_for("admin_bp.doctors_view"))
+
     try:
         doctor.slot_interval = int(request.form.get("slot_interval", doctor.slot_interval or 30))
     except Exception:
@@ -859,6 +899,21 @@ def edit_doctor(doctor_id):
             flash(f"End time for {day} must be after start time.", "danger")
             return redirect(url_for("admin_bp.doctors_view"))
 
+        s2_time = request.form.get(f"shift_2_start_time_{day}", "").strip() or None
+        e2_time = request.form.get(f"shift_2_end_time_{day}", "").strip() or None
+
+        # Fallback to global shift 2 if not explicitly provided per-day but global was configured
+        if not s2_time and not e2_time and f"shift_2_start_time_{day}" not in request.form:
+            s2_time = shift_2_start_global
+            e2_time = shift_2_end_global
+
+        if s2_time and e2_time and s2_time >= e2_time:
+            flash(f"Shift 2 end time for {day} must be after start time.", "danger")
+            return redirect(url_for("admin_bp.doctors_view"))
+        if (s2_time and not e2_time) or (e2_time and not s2_time):
+            flash(f"Both Shift 2 start and end times must be provided for {day}.", "danger")
+            return redirect(url_for("admin_bp.doctors_view"))
+
         if is_avail:
             active_days.append(day)
 
@@ -870,6 +925,8 @@ def edit_doctor(doctor_id):
         sched.is_available = is_avail
         sched.start_time = s_time
         sched.end_time = e_time
+        sched.shift_2_start_time = s2_time if (s2_time and e2_time) else None
+        sched.shift_2_end_time = e2_time if (s2_time and e2_time) else None
 
     doctor.working_days = ",".join(active_days)
 

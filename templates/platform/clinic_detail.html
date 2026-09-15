@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ clinic.name }} — Clinic Management — ClinicConnectAI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #090d16;
+            --card-bg: #111827;
+            --border: #1f2937;
+            --accent: #6366f1;
+            --accent-hover: #4f46e5;
+            --text-main: #f9fafb;
+            --text-muted: #9ca3af;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            min-height: 100vh;
+        }
+        .navbar {
+            background: #0d1322;
+            border-bottom: 1px solid var(--border);
+            padding: 16px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .nav-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: #ffffff;
+            font-weight: 800;
+            font-size: 1.15rem;
+        }
+        .brand-badge {
+            background: rgba(99, 102, 241, 0.2);
+            color: #818cf8;
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-weight: 700;
+            border: 1px solid rgba(99, 102, 241, 0.3);
+        }
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .btn-nav-back {
+            background: #1f2937;
+            border: 1px solid #374151;
+            color: #e5e7eb;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-nav-back:hover {
+            background: #374151;
+            color: #ffffff;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 32px 24px 64px 24px;
+        }
+        .flash-alert {
+            padding: 14px 18px;
+            border-radius: 10px;
+            font-size: 0.92rem;
+            margin-bottom: 24px;
+            font-weight: 500;
+        }
+        .flash-success { background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; }
+        .flash-danger { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; }
+        .flash-warning { background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.4); color: #fbbf24; }
+        .flash-info { background: rgba(99, 102, 241, 0.15); border: 1px solid rgba(99, 102, 241, 0.4); color: #a5b4fc; }
+
+        /* Clinic Header Banner */
+        .clinic-hero {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 28px;
+            margin-bottom: 28px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .hero-info {
+            flex: 1;
+            min-width: 280px;
+        }
+        .hero-title-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+        .hero-title {
+            font-size: 1.75rem;
+            font-weight: 800;
+            color: #ffffff;
+            letter-spacing: -0.01em;
+        }
+        .hero-meta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-top: 14px;
+            font-size: 0.88rem;
+            color: var(--text-muted);
+        }
+        .hero-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .hero-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        /* Pill Badges */
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            border: 1px solid var(--border);
+            background: #111827;
+        }
+
+        /* 2-Column Section Grid */
+        .sections-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 28px;
+        }
+        @media (max-width: 960px) {
+            .sections-grid { grid-template-columns: 1fr; }
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 24px;
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 18px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Capacity Metric Cards */
+        .capacity-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+        .capacity-item {
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 10px;
+            padding: 14px;
+            text-align: center;
+        }
+        .capacity-count {
+            font-size: 1.6rem;
+            font-weight: 800;
+            color: #ffffff;
+            margin-bottom: 4px;
+        }
+        .capacity-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        /* Button & Form Controls */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            text-decoration: none;
+            border: none;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: #ffffff;
+        }
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+        .btn-secondary {
+            background: #1e293b;
+            color: #cbd5e1;
+            border: 1px solid #334155;
+        }
+        .btn-secondary:hover {
+            background: #334155;
+            color: #ffffff;
+        }
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.4);
+        }
+        .btn-danger:hover {
+            background: #ef4444;
+            color: #ffffff;
+        }
+        .btn-success {
+            background: rgba(16, 185, 129, 0.15);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.4);
+        }
+        .btn-success:hover {
+            background: #10b981;
+            color: #ffffff;
+        }
+
+        /* Danger Zone Card */
+        .danger-card {
+            background: rgba(239, 68, 68, 0.04);
+            border: 1px solid rgba(239, 68, 68, 0.25);
+            border-radius: 14px;
+            padding: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        /* Modal Backdrop & Container */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(3px);
+        }
+        .modal-box {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 14px;
+            padding: 26px;
+            width: 90%;
+            max-width: 460px;
+            color: #f1f5f9;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+        }
+        .modal-title {
+            margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 1.2rem;
+            color: #ffffff;
+            font-weight: 700;
+        }
+        .modal-subtitle {
+            font-size: 0.86rem;
+            color: #94a3b8;
+            margin-bottom: 20px;
+            line-height: 1.45;
+        }
+        .form-label {
+            display: block;
+            font-size: 0.82rem;
+            color: #cbd5e1;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .form-input {
+            width: 100%;
+            padding: 10px 12px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            color: #f8fafc;
+            font-size: 0.9rem;
+            margin-bottom: 16px;
+        }
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+        }
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        /* Detail List */
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #1a2234;
+            font-size: 0.88rem;
+        }
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        .detail-label {
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        .detail-val {
+            color: #ffffff;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Platform Admin Navigation Bar -->
+    <header class="navbar">
+        <div style="display: flex; align-items: center; gap: 16px;">
+            <a href="/platform/dashboard" class="nav-brand">
+                <span>ClinicConnect<span style="color: var(--accent);">AI</span></span>
+                <span class="brand-badge">SaaS Master Console</span>
+            </a>
+        </div>
+        <div class="nav-actions">
+            <a href="/platform/dashboard" class="btn-nav-back">
+                ← Back to Clinics Directory
+            </a>
+            <a href="/platform/logout" class="btn btn-secondary" style="font-size: 0.8rem; padding: 6px 12px;">Sign Out</a>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-alert flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Clinic Hero Banner -->
+        <div class="clinic-hero">
+            <div class="hero-info">
+                <div class="hero-title-row">
+                    <span class="pill" style="background: #1e293b; color: #94a3b8; font-size: 0.85rem;">#{{ clinic.id }}</span>
+                    <h1 class="hero-title">{{ clinic.name }}</h1>
+                    {% if clinic.subscription_status == 'cancelled' %}
+                        <span class="pill" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); font-weight: 700;">⛔ CANCELLED</span>
+                    {% elif subscription.color == 'danger' %}
+                        <span class="pill" style="background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); font-weight: 700;">⛔ EXPIRED</span>
+                    {% elif subscription.color == 'success' %}
+                        <span class="pill" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-weight: 700;">🟢 ACTIVE ({{ subscription.days }}d)</span>
+                    {% else %}
+                        <span class="pill" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); font-weight: 700;">🎁 1-MO TRIAL ({{ subscription.days }}d)</span>
+                    {% endif %}
+                </div>
+
+                <div class="hero-meta-grid">
+                    <div class="hero-meta-item">
+                        <span>🏥</span>
+                        <span>{{ clinic.business_type | replace('_', ' ') | title }}</span>
+                    </div>
+                    <div class="hero-meta-item">
+                        <span>📞</span>
+                        <span>{{ clinic.phone }}</span>
+                    </div>
+                    <div class="hero-meta-item">
+                        <span>📍</span>
+                        <span>{{ clinic.address }}</span>
+                    </div>
+                    <div class="hero-meta-item">
+                        <span>🌐</span>
+                        <span>Timezone: {{ clinic.timezone }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hero-actions">
+                <a href="/admin/login" target="_blank" class="btn btn-primary" style="background: #059669; border: 1px solid #10b981;">
+                    🔐 Client Login Portal ↗
+                </a>
+            </div>
+        </div>
+
+        <!-- 2-Column Dashboard Sections -->
+        <div class="sections-grid">
+            <!-- Section 1: Subscription Status & Controls -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span>💳</span>
+                        <span>Subscription Status &amp; Controls</span>
+                    </div>
+                    <span class="pill" style="background: #0f172a; color: #a5b4fc;">{{ clinic.active_plan_name or '1-Month Free Trial' }}</span>
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <div class="detail-row">
+                        <span class="detail-label">Status:</span>
+                        <span class="detail-val">
+                            {% if clinic.subscription_status == 'cancelled' %}
+                                <span style="color: #f87171;">Cancelled</span>
+                            {% elif subscription.color == 'danger' %}
+                                <span style="color: #f87171;">Expired</span>
+                            {% elif subscription.color == 'success' %}
+                                <span style="color: #34d399;">Active</span>
+                            {% else %}
+                                <span style="color: #fbbf24;">1-Month Free Trial</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Days Remaining:</span>
+                        <span class="detail-val">{{ subscription.days }} Days</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Current Expiry Date:</span>
+                        <span class="detail-val" style="font-family: 'JetBrains Mono', monospace;">{{ subscription.expires_at }}</span>
+                    </div>
+                </div>
+
+                <!-- Action Controls -->
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <form method="POST" action="/platform/clinic/{{ clinic.id }}/subscription/extend" style="flex: 1; min-width: 130px;">
+                            <input type="hidden" name="days" value="30">
+                            <input type="hidden" name="next" value="/platform/clinic/{{ clinic.id }}">
+                            <button type="submit" class="btn btn-secondary" style="width: 100%; border-color: #4338ca; color: #a5b4fc;">
+                                ➕ +30 Days
+                            </button>
+                        </form>
+                        <button type="button" onclick="openDateRangeModal()" class="btn btn-secondary" style="flex: 1; min-width: 130px;">
+                            📅 Set Date Range
+                        </button>
+                    </div>
+
+                    {% if clinic.subscription_status != 'cancelled' %}
+                    <form method="POST" action="/platform/clinic/{{ clinic.id }}/subscription/cancel" onsubmit="return confirm('Cancel subscription for {{ clinic.name }}? This will immediately lock portal access.');">
+                        <input type="hidden" name="next" value="/platform/clinic/{{ clinic.id }}">
+                        <button type="submit" class="btn btn-danger" style="width: 100%;">
+                            ⛔ Cancel Subscription
+                        </button>
+                    </form>
+                    {% else %}
+                    <form method="POST" action="/platform/clinic/{{ clinic.id }}/subscription/reactivate">
+                        <input type="hidden" name="days" value="30">
+                        <input type="hidden" name="next" value="/platform/clinic/{{ clinic.id }}">
+                        <button type="submit" class="btn btn-success" style="width: 100%;">
+                            🟢 Reactivate (+30 Days)
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Section 2: Admin Account & Credentials -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span>👤</span>
+                        <span>Admin Account</span>
+                    </div>
+                    <span class="pill" style="background: #0f172a; color: #94a3b8;">Credentials</span>
+                </div>
+
+                <div style="margin-bottom: 22px;">
+                    <div class="detail-row">
+                        <span class="detail-label">Username:</span>
+                        <span class="detail-val" style="font-family: 'JetBrains Mono', monospace; background: #0f172a; padding: 3px 8px; border-radius: 4px; border: 1px solid #1e293b;">
+                            {{ admin_user.username if admin_user else 'None' }}
+                        </span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Registered Email:</span>
+                        <span class="detail-val">
+                            {{ admin_user.email if (admin_user and admin_user.email) else (clinic.email or 'Not configured') }}
+                        </span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Portal Login Status:</span>
+                        <span class="detail-val">
+                            {% if clinic.is_subscription_valid %}
+                                <span style="color: #34d399;">Unlocked &amp; Ready</span>
+                            {% else %}
+                                <span style="color: #f87171;">Locked (Subscription Required)</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Admin Controls -->
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button type="button" onclick="openResetPasswordModal()" class="btn btn-secondary" style="flex: 1; border-color: #78350f; color: #fbbf24;">
+                        🔑 Reset Password
+                    </button>
+                    <button type="button" onclick="openEditEmailModal()" class="btn btn-secondary" style="flex: 1; border-color: #1e3a8a; color: #93c5fd;">
+                        ✉️ Edit Email
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 3: Capacity & Operational Overview -->
+        <div class="card" style="margin-bottom: 28px;">
+            <div class="card-header">
+                <div class="card-title">
+                    <span>📊</span>
+                    <span>Clinic Capacity &amp; Resource Records</span>
+                </div>
+            </div>
+
+            <div class="capacity-grid">
+                <div class="capacity-item">
+                    <div class="capacity-count">👨‍⚕️ {{ doctors|length }}</div>
+                    <div class="capacity-label">Registered Doctors</div>
+                </div>
+                <div class="capacity-item">
+                    <div class="capacity-count">🩺 {{ services|length }}</div>
+                    <div class="capacity-label">Services Offered</div>
+                </div>
+                <div class="capacity-item">
+                    <div class="capacity-count">📅 {{ appointments|length }}</div>
+                    <div class="capacity-label">Total Appointments</div>
+                </div>
+            </div>
+
+            <!-- Doctor & Service List Previews -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 16px;">
+                <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 16px;">
+                    <h4 style="font-size: 0.92rem; color: #cbd5e1; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+                        👨‍⚕️ Doctors List ({{ doctors|length }})
+                    </h4>
+                    {% if doctors %}
+                        <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+                            {% for doc in doctors %}
+                                <li style="font-size: 0.84rem; color: #94a3b8; display: flex; justify-content: space-between; border-bottom: 1px solid #1e293b; padding-bottom: 4px;">
+                                    <strong style="color: #f1f5f9;">Dr. {{ doc.name }}</strong>
+                                    <span>{{ doc.specialization or 'General Practitioner' }}</span>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <div style="font-size: 0.84rem; color: #64748b;">No doctors added yet.</div>
+                    {% endif %}
+                </div>
+
+                <div style="background: #0f172a; border: 1px solid #1e293b; border-radius: 10px; padding: 16px;">
+                    <h4 style="font-size: 0.92rem; color: #cbd5e1; margin-bottom: 12px; display: flex; align-items: center; gap: 6px;">
+                        🩺 Services List ({{ services|length }})
+                    </h4>
+                    {% if services %}
+                        <ul style="list-style: none; display: flex; flex-direction: column; gap: 8px;">
+                            {% for svc in services %}
+                                <li style="font-size: 0.84rem; color: #94a3b8; display: flex; justify-content: space-between; border-bottom: 1px solid #1e293b; padding-bottom: 4px;">
+                                    <strong style="color: #f1f5f9;">{{ svc.name }}</strong>
+                                    <span>Rs. {{ svc.price }} • {{ svc.duration }}m</span>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <div style="font-size: 0.84rem; color: #64748b;">No services added yet.</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 4: Danger Zone (Delete Clinic) -->
+        <div class="danger-card">
+            <div>
+                <h3 style="font-size: 1.05rem; font-weight: 700; color: #f87171; margin-bottom: 4px; display: flex; align-items: center; gap: 8px;">
+                    <span>⚠️</span>
+                    <span>Danger Zone: Permanent Clinic Deletion</span>
+                </h3>
+                <p style="font-size: 0.84rem; color: #94a3b8; max-width: 680px; line-height: 1.45;">
+                    Permanently delete this clinic along with all associated doctors, services, appointments, conversations, and staff accounts. 
+                    This operation is irreversible and strictly requires your <strong>Platform Admin Password</strong> to authorize.
+                </p>
+            </div>
+            <button type="button" onclick="openDeleteClinicModal()" class="btn btn-danger" style="padding: 10px 20px; font-weight: 700;">
+                🗑️ Delete Clinic Permanently
+            </button>
+        </div>
+    </main>
+
+    <!-- Modal 1: Date Range Selection -->
+    <div id="dateRangeModal" class="modal-overlay">
+        <div class="modal-box">
+            <h3 class="modal-title">Set Subscription Date Range</h3>
+            <p class="modal-subtitle">Configure explicit calendar start and end dates for {{ clinic.name }}.</p>
+            <form method="POST" action="/platform/clinic/{{ clinic.id }}/subscription/set-dates">
+                <input type="hidden" name="next" value="/platform/clinic/{{ clinic.id }}">
+                <label class="form-label">Start Date *</label>
+                <input type="date" name="start_date" required class="form-input">
+                <label class="form-label">End Date (Expiry) *</label>
+                <input type="date" name="end_date" required class="form-input">
+                <div class="modal-actions">
+                    <button type="button" onclick="closeModal('dateRangeModal')" class="btn btn-secondary">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Date Range</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal 2: Reset Admin Password -->
+    <div id="resetPasswordModal" class="modal-overlay">
+        <div class="modal-box">
+            <h3 class="modal-title">Reset Clinic Admin Password</h3>
+            <p class="modal-subtitle">Issue a new access password for administrator <strong>{{ admin_user.username if admin_user else 'admin' }}</strong>.</p>
+            <form method="POST" action="/platform/clinic/{{ clinic.id }}/reset-password">
+                <input type="hidden" name="next" value="/platform/clinic/{{ clinic.id }}">
+                <label class="form-label">New Password (minimum 6 characters) *</label>
+                <input type="password" name="new_password" minlength="6" required placeholder="Enter secure password..." class="form-input">
+                <div class="modal-actions">
+                    <button type="button" onclick="closeModal('resetPasswordModal')" class="btn btn-secondary">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Update Password</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal 3: Edit Admin Email -->
+    <div id="editEmailModal" class="modal-overlay">
+        <div class="modal-box">
+            <h3 class="modal-title">Edit Registered Clinic Email</h3>
+            <p class="modal-subtitle">Update contact and credential recovery email for {{ clinic.name }}.</p>
+            <form method="POST" action="/platform/clinic/{{ clinic.id }}/update-email">
+                <input type="hidden" name="next" value="/platform/clinic/{{ clinic.id }}">
+                <label class="form-label">New Email Address *</label>
+                <input type="email" name="new_email" required value="{{ admin_user.email if (admin_user and admin_user.email) else (clinic.email or '') }}" class="form-input">
+                <div class="modal-actions">
+                    <button type="button" onclick="closeModal('editEmailModal')" class="btn btn-secondary">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Email</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal 4: Delete Clinic Security Confirmation (Demands Admin Password) -->
+    <div id="deleteClinicModal" class="modal-overlay">
+        <div class="modal-box" style="border-color: rgba(239, 68, 68, 0.4);">
+            <h3 class="modal-title" style="color: #f87171;">⚠️ Confirm Permanent Clinic Deletion</h3>
+            <p class="modal-subtitle" style="color: #cbd5e1;">
+                You are about to permanently delete <strong>{{ clinic.name }}</strong> (ID #{{ clinic.id }}) and all related database records. 
+                <br><br>
+                To confirm this sensitive operation, please enter your <strong>Platform Admin Password</strong>:
+            </p>
+            <form method="POST" action="/platform/clinic/{{ clinic.id }}/delete">
+                <label class="form-label" style="color: #f87171;">Your Platform Admin Password *</label>
+                <input type="password" name="admin_password" required placeholder="Enter platform admin password to confirm..." class="form-input" style="border-color: rgba(239, 68, 68, 0.5);">
+                <div class="modal-actions">
+                    <button type="button" onclick="closeModal('deleteClinicModal')" class="btn btn-secondary">Cancel</button>
+                    <button type="submit" class="btn btn-danger" style="font-weight: 700;">Permanently Delete Clinic</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function openModal(id) {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'flex';
+        }
+
+        function closeModal(id) {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        }
+
+        function openDateRangeModal() { openModal('dateRangeModal'); }
+        function openResetPasswordModal() { openModal('resetPasswordModal'); }
+        function openEditEmailModal() { openModal('editEmailModal'); }
+        function openDeleteClinicModal() { openModal('deleteClinicModal'); }
+
+        // Close modal when clicking outside box
+        window.addEventListener('click', function(e) {
+            if (e.target.classList && e.target.classList.contains('modal-overlay')) {
+                e.target.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
